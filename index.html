@@ -1214,9 +1214,12 @@ async function connectSupabase(anonKey) {
     if (setupEl) setupEl.style.display = 'none';
     const loaded = await loadFromSupabase();
     if (!loaded) await saveToSupabase();
+    _dataReady = true;
     renderAlbums(); renderTracks(); updateNavBadges();
     setSaveIndicator('saved');
     toast('🟢 Supabase connecté');
+    // Sync last.fm automatique en arrière-plan (silencieuse si déjà à jour)
+    setTimeout(() => autoSyncLastfm(), 2000);
     return true;
   } catch(e) {
     if (errEl) errEl.textContent = 'Erreur : ' + (e.message || String(e));
@@ -1357,8 +1360,15 @@ async function loadFromSupabase() {
     }));
 
     // meta
-    const { data: meta } = await window._sb.from('meta').select('value').eq('key', 'next_id').single();
-    if (meta) nextId = parseInt(meta.value) || nextId;
+    const { data: metaRows } = await window._sb.from('meta').select('key,value');
+    if (metaRows) {
+      const metaMap = Object.fromEntries(metaRows.map(r => [r.key, r.value]));
+      if (metaMap.next_id) nextId = parseInt(metaMap.next_id) || nextId;
+      if (metaMap.lastfm_sync_ts && !localStorage.getItem(LASTFM_SYNC_KEY)) {
+        // Restaurer le timestamp de dernière sync last.fm depuis Supabase
+        localStorage.setItem(LASTFM_SYNC_KEY, metaMap.lastfm_sync_ts);
+      }
+    }
     nextId = Math.max(nextId, ...albums.map(a => a.id || 0), ...tracks.map(t => t.id || 0)) + 1;
 
     setSaveIndicator('saved');
@@ -1386,7 +1396,15 @@ async function loadLastfmFromSupabase() {
     }
     lastfmData = all.map(d => ({ artist: d.artist, album: d.album, plays: d.plays }));
     invalidateCache();
-    updateNavBadges();
+    // Mettre à jour les plays sur les albums existants sans recalculer tous les badges
+    lastfmData.forEach(d => {
+      const key = normalizeKey(d.artist, d.album);
+      const a = albums.find(x => normalizeKey(x.artist, x.album) === key);
+      if (a) a.plays = d.plays;
+    });
+    // Mettre à jour les badges une seule fois, en différé
+    _dataReady = true;
+    setTimeout(() => updateNavBadges(), 200);
   } catch(e) { loadLastfmFromLocalStorage(); }
 }
 
@@ -1783,18 +1801,22 @@ function deleteTrack(id) {
 }
 
 // ===================== CACHE =====================
-// Les calculs de badges (computeMissing, RYM, disco) sont coûteux avec de gros datasets.
-// On les met en cache et on ne les recalcule que quand les données changent.
 let _cache = {};
 
 function invalidateCache() {
   _cache = {};
 }
 
+function getOwnedKeysSet() {
+  if (_cache.ownedKeys) return _cache.ownedKeys;
+  _cache.ownedKeys = new Set(albums.map(a => normalizeKey(a.artist, a.album)));
+  return _cache.ownedKeys;
+}
+
 function computeMissing() {
   if (_cache.missing) return _cache.missing;
   if (!lastfmData.length) return (_cache.missing = []);
-  const owned = new Set(albums.map(a => normalizeKey(a.artist, a.album)));
+  const owned = getOwnedKeysSet();
   _cache.missing = lastfmData
     .filter(d => d.artist && d.album && !owned.has(normalizeKey(d.artist, d.album)))
     .sort((a, b) => b.plays - a.plays);
@@ -1802,19 +1824,23 @@ function computeMissing() {
 }
 
 let _navBadgeTimer = null;
+let _dataReady = false; // flag : données chargées depuis Supabase/localStorage
+
 function updateNavBadges() {
-  // Debounce : on attend 80ms avant de recalculer pour éviter les appels en rafale
   clearTimeout(_navBadgeTimer);
   _navBadgeTimer = setTimeout(() => {
-    document.getElementById('nav-albums-count').textContent = albums.filter(a => !a.stock).length;
+    document.getElementById('nav-albums-count').textContent = albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length;
     document.getElementById('nav-tracks-count').textContent = tracks.length;
-    document.getElementById('nav-missing-count').textContent = computeMissing().length;
     const stockBadge = document.getElementById('nav-stock-count');
     if (stockBadge) stockBadge.textContent = stockItems.length;
-    const rymBadge = document.getElementById('nav-rym-count');
-    if (rymBadge && rymData.length) rymBadge.textContent = computeRYMMissing().length;
-    const discoBadge = document.getElementById('nav-disco-warn');
-    if (discoBadge) discoBadge.textContent = getCDsWithoutBackup().length;
+    // Calculs coûteux uniquement si données chargées
+    if (_dataReady) {
+      document.getElementById('nav-missing-count').textContent = computeMissing().length;
+      const rymBadge = document.getElementById('nav-rym-count');
+      if (rymBadge && rymData.length) rymBadge.textContent = computeRYMMissing().length;
+      const discoBadge = document.getElementById('nav-disco-warn');
+      if (discoBadge) discoBadge.textContent = getCDsWithoutBackup().length;
+    }
   }, 80);
 }
 
@@ -2274,6 +2300,103 @@ const LASTFM_PAGE_SIZE = 200;
 const LASTFM_BASE = 'https://ws.audioscrobbler.com/2.0/';
 const LASTFM_SYNC_KEY = 'lastfm_last_sync';
 
+// Sync automatique last.fm au démarrage — silencieuse, incrémentale uniquement
+async function autoSyncLastfm() {
+  if (!_lastfmApiKey || !_lastfmUser) return;
+  const lastSyncRaw = localStorage.getItem(LASTFM_SYNC_KEY);
+  if (!lastSyncRaw) return; // pas de sync complète préalable — ne pas lancer
+  const lastSyncTs = parseInt(lastSyncRaw);
+
+  try {
+    const infoUrl = `${LASTFM_BASE}?method=user.getinfo&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json`;
+    const infoRes = await fetch(infoUrl);
+    const infoData = await infoRes.json();
+    if (infoData.error) return;
+
+    // Reconstruire les counts depuis lastfmData chargé
+    _lastfmCounts = {};
+    lastfmData.forEach(d => { _lastfmCounts[normalizeKey(d.artist, d.album)] = { artist: d.artist, album: d.album, plays: d.plays }; });
+
+    // Lancer la sync incrémentale silencieuse
+    await fetchLastfmIncrementalSilent(lastSyncTs);
+  } catch(e) {
+    console.log('Auto-sync last.fm ignorée :', e.message);
+  }
+}
+
+async function fetchLastfmIncrementalSilent(fromTs) {
+  let page = 1;
+  let totalNewScrobbles = 0;
+  let latestTs = fromTs;
+  let done = false;
+
+  while (!done) {
+    try {
+      const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&limit=${LASTFM_PAGE_SIZE}&page=${page}&from=${fromTs + 1}&extended=0`;
+      const res = await fetch(url);
+      if (res.status === 429) { await new Promise(r => setTimeout(r, 15000)); continue; }
+      const data = await res.json();
+      if (data.error === 11 || data.error === 16) { await new Promise(r => setTimeout(r, 10000)); continue; }
+      if (data.error) return;
+
+      const tracks = data.recenttracks?.track || [];
+      const totalPages = parseInt(data.recenttracks?.['@attr']?.totalPages || 1);
+      const total = parseInt(data.recenttracks?.['@attr']?.total || 0);
+
+      tracks.forEach(t => {
+        if (t['@attr']?.nowplaying) return;
+        const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+        const album = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
+        const ts = parseInt(t.date?.uts || 0);
+        if (ts > latestTs) latestTs = ts;
+        if (!artist || !album) return;
+        const k = normalizeKey(artist, album);
+        if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0 };
+        _lastfmCounts[k].plays++;
+        totalNewScrobbles++;
+      });
+
+      if (page >= totalPages || tracks.length === 0) { done = true; }
+      else { page++; await new Promise(r => setTimeout(r, 220)); }
+    } catch(e) {
+      await new Promise(r => setTimeout(r, 3000));
+      break;
+    }
+  }
+
+  if (totalNewScrobbles === 0) return; // rien de nouveau, pas besoin de sauvegarder
+
+  // Mettre à jour lastfmData
+  lastfmData = Object.values(_lastfmCounts);
+  lastfmData.forEach(d => {
+    const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
+    if (a) a.plays = d.plays;
+  });
+
+  if (latestTs > fromTs) {
+    localStorage.setItem(LASTFM_SYNC_KEY, String(latestTs));
+    updateLastSyncLabel();
+    if (window._sb) {
+      window._sb.from('meta').upsert({ key: 'lastfm_sync_ts', value: String(latestTs) }, { onConflict: 'key' }).then(() => {});
+    }
+  }
+
+  invalidateCache();
+
+  // Sauvegarder uniquement les entrées modifiées dans Supabase
+  if (window._sb) {
+    const updatedRows = lastfmData.map(d => ({ artist: d.artist, album: d.album, plays: d.plays }));
+    try {
+      await sbUpsert('lastfm_data', updatedRows, 'artist,album');
+    } catch(e) { console.error('Erreur sauvegarde lastfm Supabase:', e); }
+  }
+
+  renderAlbums();
+  updateNavBadges();
+  toast(`last.fm : +${totalNewScrobbles.toLocaleString('fr-FR')} nouveaux scrobbles`);
+}
+
+
 async function connectLastfm() {
   const status = document.getElementById('status-lastfm');
   const apiKey = document.getElementById('lastfm-apikey').value.trim();
@@ -2418,9 +2541,11 @@ async function fetchLastfmIncremental(fromTs) {
   if (latestTs > fromTs) {
     localStorage.setItem(LASTFM_SYNC_KEY, String(latestTs));
     updateLastSyncLabel();
+    // Persister le timestamp dans Supabase pour les autres appareils
+    if (window._sb) {
+      window._sb.from('meta').upsert({ key: 'lastfm_sync_ts', value: String(latestTs) }, { onConflict: 'key' }).then(() => {});
+    }
   }
-
-  const newAlbums = totalNewScrobbles;
   progress.style.display = 'none';
 
   if (totalNewScrobbles === 0) {
@@ -2596,8 +2721,12 @@ async function fetchLastfmPage(page) {
     btnMore.style.display = 'inline-flex';
   } else {
     clearLastfmCheckpoint();
-    localStorage.setItem(LASTFM_SYNC_KEY, String(Math.floor(Date.now() / 1000)));
+    const syncTs = String(Math.floor(Date.now() / 1000));
+    localStorage.setItem(LASTFM_SYNC_KEY, syncTs);
     updateLastSyncLabel();
+    if (window._sb) {
+      window._sb.from('meta').upsert({ key: 'lastfm_sync_ts', value: syncTs }, { onConflict: 'key' }).then(() => {});
+    }
     status.textContent = `✓ Complet — ${lastfmData.length} albums distincts chargés`;
     status.className = 'status ok';
     bar.style.width = '100%';
@@ -3611,6 +3740,7 @@ async function initApp() {
     loadDemo();
     saveToStorage();
   }
+  _dataReady = true;
   // Restaurer config last.fm et reconnecter automatiquement
   const lfmCfg = localStorage.getItem('lastfm_cfg');
   if (lfmCfg) {
