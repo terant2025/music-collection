@@ -1,0 +1,3367 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terant Music Collection</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<style>
+:root {
+  --bg: #0e0e0f;
+  --bg2: #161618;
+  --bg3: #1e1e21;
+  --bg4: #252529;
+  --border: #2e2e34;
+  --border2: #3a3a42;
+  --text: #e8e8ec;
+  --text2: #9090a0;
+  --text3: #5a5a6a;
+  --accent: #c8f064;
+  --accent2: #a8d048;
+  --accent-dim: rgba(200,240,100,0.12);
+  --accent-dim2: rgba(200,240,100,0.06);
+  --red: #ff6b6b;
+  --red-dim: rgba(255,107,107,0.12);
+  --amber: #ffc060;
+  --amber-dim: rgba(255,192,96,0.12);
+  --blue: #60b8ff;
+  --blue-dim: rgba(96,184,255,0.12);
+  --purple: #b08cff;
+  --purple-dim: rgba(176,140,255,0.12);
+  --radius: 6px;
+  --radius-lg: 10px;
+  --mono: 'DM Mono', monospace;
+  --sans: 'DM Sans', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* LAYOUT */
+.app { display: flex; height: 100vh; overflow: hidden; }
+
+/* SIDEBAR */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+}
+.sidebar-logo {
+  padding: 0 20px 24px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.sidebar-logo h1 {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.sidebar-logo span {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--mono);
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  cursor: pointer;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 400;
+  transition: all 0.15s;
+  border-left: 2px solid transparent;
+  user-select: none;
+}
+.nav-item:hover { color: var(--text); background: var(--bg3); }
+.nav-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim2); }
+.nav-icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+.nav-badge {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  background: var(--bg4);
+  color: var(--text3);
+  padding: 1px 6px;
+  border-radius: 20px;
+  min-width: 20px;
+  text-align: center;
+}
+.nav-badge.warn { background: var(--red-dim); color: var(--red); }
+.nav-section {
+  padding: 16px 20px 6px;
+  font-size: 9px;
+  font-family: var(--mono);
+  color: var(--text3);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 16px 20px 0;
+  border-top: 1px solid var(--border);
+}
+.storage-bar-wrap { margin-bottom: 12px; }
+.storage-label { font-size: 11px; color: var(--text3); margin-bottom: 6px; display: flex; justify-content: space-between; }
+.storage-bar { height: 3px; background: var(--bg4); border-radius: 2px; }
+.storage-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; }
+
+/* MAIN */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* TOPBAR */
+.topbar {
+  height: 52px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 12px;
+  flex-shrink: 0;
+  background: var(--bg2);
+}
+.topbar-title { font-size: 14px; font-weight: 500; color: var(--text); }
+.topbar-sep { color: var(--text3); font-size: 12px; }
+.spacer { flex: 1; }
+.search-wrap { position: relative; }
+.search-wrap input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 6px 12px 6px 32px;
+  border-radius: var(--radius);
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.search-wrap input:focus { border-color: var(--border2); }
+.search-wrap input::placeholder { color: var(--text3); }
+.search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text3); font-size: 13px; pointer-events: none; }
+
+/* CONTENT */
+.content { flex: 1; overflow-y: auto; padding: 24px; }
+.content::-webkit-scrollbar { width: 6px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* SECTION */
+.section { display: none; }
+.section.active { display: block; }
+
+/* STATS */
+.stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+.stat-val { font-family: var(--mono); font-size: 26px; font-weight: 500; color: var(--text); line-height: 1; margin-bottom: 4px; }
+.stat-val.accent { color: var(--accent); }
+.stat-label { font-size: 11px; color: var(--text3); }
+
+/* TOOLBAR */
+.toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.toolbar-right { margin-left: auto; display: flex; gap: 8px; }
+
+/* CONTROLS */
+select, input[type="text"] {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  outline: none;
+  cursor: pointer;
+}
+select:focus, input[type="text"]:focus { border-color: var(--border2); }
+
+/* BUTTONS */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-family: var(--sans);
+  font-size: 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg4); border-color: var(--border2); }
+.btn-accent { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 500; }
+.btn-accent:hover { background: var(--accent2); border-color: var(--accent2); }
+.btn-danger { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+.btn-danger:hover { background: rgba(255,107,107,0.2); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-icon { padding: 6px; width: 32px; height: 32px; justify-content: center; font-size: 14px; }
+
+/* TABLE */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+}
+thead th.sortable { cursor: pointer; }
+thead th.sortable:hover { color: var(--text2); }
+thead th.sort-asc::after { content: ' ↑'; color: var(--accent); }
+thead th.sort-desc::after { content: ' ↓'; color: var(--accent); }
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+tbody tr:hover { background: var(--bg3); }
+tbody tr:last-child { border-bottom: none; }
+td { padding: 10px 12px; vertical-align: middle; }
+td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
+
+/* BADGES */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-family: var(--mono);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.badge-cd { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(96,184,255,0.2); }
+.badge-flac { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(200,240,100,0.2); }
+.badge-mp3 { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(176,140,255,0.2); }
+.badge-digital { background: var(--amber-dim); color: var(--amber); border: 1px solid rgba(255,192,96,0.2); }
+.badge-missing { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,107,107,0.2); }
+.badge-stock { background: rgba(255,255,255,0.06); color: var(--text2); border: 1px solid var(--border2); }
+.badges-cell { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* STARS */
+.stars { display: inline-flex; gap: 1px; }
+.star { font-size: 14px; cursor: pointer; color: var(--border2); transition: color 0.1s; background: none; border: none; padding: 0; line-height: 1; }
+.star.on { color: var(--amber); }
+.star:hover { color: var(--amber); }
+
+/* ARTIST CELL */
+.artist-cell { display: flex; align-items: center; gap: 10px; }
+.artist-avatar {
+  width: 32px; height: 32px; border-radius: 6px;
+  background: var(--bg4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+.artist-info .name { font-size: 13px; font-weight: 500; color: var(--text); }
+.artist-info .sub { font-size: 11px; color: var(--text3); }
+
+/* PLAYS */
+.plays-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.plays-bar { flex: 1; height: 3px; background: var(--bg4); border-radius: 2px; min-width: 40px; }
+.plays-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.plays-num { font-family: var(--mono); font-size: 11px; color: var(--text3); min-width: 28px; text-align: right; }
+
+/* MISSING SECTION */
+.missing-grid { display: flex; flex-direction: column; gap: 8px; }
+.missing-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  transition: border-color 0.15s;
+}
+.missing-card:hover { border-color: var(--border2); }
+.missing-icon { font-size: 24px; flex-shrink: 0; }
+.missing-info { flex: 1; }
+.missing-info .title { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+.missing-info .sub { font-size: 12px; color: var(--text2); }
+.missing-info .plays { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-top: 4px; }
+
+/* IMPORT SECTION */
+.import-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
+.import-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+.import-card h3 { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.import-card p { font-size: 12px; color: var(--text2); margin-bottom: 16px; line-height: 1.6; }
+.import-card .status { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-top: 10px; min-height: 16px; }
+.import-card .status.ok { color: var(--accent); }
+.import-card .status.err { color: var(--red); }
+.source-logo { font-size: 28px; margin-bottom: 12px; }
+.format-hint {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.8;
+  margin-bottom: 16px;
+}
+.format-hint strong { color: var(--accent); }
+
+/* MODAL */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: 480px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal h2 { font-size: 16px; font-weight: 500; margin-bottom: 20px; }
+.form-row { margin-bottom: 14px; }
+.form-row label { display: block; font-size: 11px; color: var(--text3); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.form-row input, .form-row select, .form-row textarea {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  outline: none;
+}
+.form-row input:focus, .form-row select:focus { border-color: var(--accent); }
+.form-row textarea { resize: vertical; min-height: 60px; }
+.form-check-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.form-check { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+.form-check input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.modal-stars { display: flex; gap: 2px; }
+.modal-star { font-size: 22px; cursor: pointer; color: var(--border2); transition: color 0.1s; background: none; border: none; }
+.modal-star.on { color: var(--amber); }
+
+/* TOAST */
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  font-size: 13px;
+  z-index: 2000;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: all 0.2s;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; transform: none; }
+.toast.success { border-color: var(--accent); color: var(--accent); }
+.toast.error { border-color: var(--red); color: var(--red); }
+
+/* EMPTY */
+.empty { text-align: center; padding: 60px; color: var(--text3); font-size: 13px; }
+.empty-icon { font-size: 36px; margin-bottom: 12px; }
+
+/* HIDDEN FILE INPUT */
+input[type="file"] { display: none; }
+
+/* SCROLLBAR in modal */
+.modal::-webkit-scrollbar { width: 4px; }
+.modal::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* TOOLTIP */
+[title] { position: relative; }
+
+/* PAGINATOR */
+.paginator { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.page-info { font-size: 12px; color: var(--text3); font-family: var(--mono); }
+
+/* HIGHLIGHT row added */
+@keyframes rowPop { from { background: var(--accent-dim); } to { background: transparent; } }
+.row-new { animation: rowPop 1.5s ease forwards; }
+
+/* SAVE INDICATOR */
+.save-indicator {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-family: var(--mono);
+  color: var(--text3); margin-top: 10px;
+  transition: color 0.3s;
+}
+.save-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text3); flex-shrink: 0;
+  transition: background 0.3s;
+}
+.save-indicator.saving .save-dot { background: var(--amber); }
+.save-indicator.saving { color: var(--amber); }
+.save-indicator.saved .save-dot { background: var(--accent); }
+.save-indicator.saved { color: var(--accent); }
+.save-indicator.error .save-dot { background: var(--red); }
+.save-indicator.error { color: var(--red); }
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.save-indicator.saving .save-dot { animation: pulse 1s infinite; }
+
+/* FIREBASE CONFIG SCREEN */
+#firebase-setup {
+  position: fixed; inset: 0; background: var(--bg);
+  z-index: 5000; display: flex; align-items: center; justify-content: center;
+}
+.setup-box {
+  width: 560px; max-width: 95vw;
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius-lg); padding: 36px;
+}
+.setup-box h2 { font-size: 18px; font-weight: 500; margin-bottom: 6px; }
+.setup-box .lead { font-size: 13px; color: var(--text2); margin-bottom: 28px; line-height: 1.7; }
+.setup-steps {
+  background: var(--bg3); border-radius: var(--radius);
+  padding: 16px 18px; margin-bottom: 24px;
+  font-size: 12px; color: var(--text2); line-height: 2;
+  border-left: 2px solid var(--accent);
+}
+.setup-steps strong { color: var(--accent); font-family: var(--mono); }
+.setup-field { margin-bottom: 14px; }
+.setup-field label { display: block; font-size: 11px; font-family: var(--mono); color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.setup-field input { width: 100%; background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 8px 12px; border-radius: var(--radius); outline: none; }
+.setup-field input:focus { border-color: var(--accent); }
+.setup-field input::placeholder { color: var(--text3); }
+.setup-error { font-size: 12px; color: var(--red); margin-top: 10px; min-height: 18px; }
+.setup-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+.setup-skip { font-size: 12px; color: var(--text3); cursor: pointer; background: none; border: none; text-decoration: underline; }
+.setup-skip:hover { color: var(--text2); }
+</style>
+</head>
+<body>
+
+<!-- FIREBASE SETUP SCREEN -->
+<div id="firebase-setup" style="display:none">
+  <div class="setup-box">
+    <h2>🔥 Connexion Firebase</h2>
+    <p class="lead">Pour synchroniser votre collection sur tous vos appareils, connectez un projet Firebase Firestore. C'est gratuit et prend 5 minutes.</p>
+    <div class="setup-steps">
+      <strong>1.</strong> Allez sur <strong>console.firebase.google.com</strong><br>
+      <strong>2.</strong> Créez un projet → Firestore Database → mode Production<br>
+      <strong>3.</strong> Paramètres du projet → Vos applications → Web → Enregistrer<br>
+      <strong>4.</strong> Copiez les valeurs de <strong>firebaseConfig</strong> ci-dessous<br>
+      <strong>5.</strong> Dans Firestore → Règles, collez : <strong>allow read, write: if true;</strong>
+    </div>
+    <div class="setup-field"><label>API Key</label><input id="cfg-apiKey" placeholder="AIzaSy…"></div>
+    <div class="setup-field"><label>Auth Domain</label><input id="cfg-authDomain" placeholder="mon-projet.firebaseapp.com"></div>
+    <div class="setup-field"><label>Project ID</label><input id="cfg-projectId" placeholder="mon-projet-12345"></div>
+    <div class="setup-field"><label>App ID</label><input id="cfg-appId" placeholder="1:123456789:web:abc…"></div>
+    <div class="setup-error" id="setup-error"></div>
+    <div class="setup-footer">
+      <button class="setup-skip" onclick="skipFirebase()">Utiliser sans Firebase (local uniquement)</button>
+      <button class="btn btn-accent" onclick="connectFirebase()">Connecter →</button>
+    </div>
+  </div>
+</div>
+
+<div class="app">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <h1>Discothèque</h1>
+    <span>v2.0</span>
+  </div>
+
+  <div class="nav-section">Collection</div>
+  <div class="nav-item active" onclick="nav('albums')">
+    <span class="nav-icon">💿</span> Albums
+    <span class="nav-badge" id="nav-albums-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('discographie')">
+    <span class="nav-icon">📀</span> Discographie
+    <span class="nav-badge warn" id="nav-disco-warn">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('tracks')">
+    <span class="nav-icon">🎵</span> Morceaux isolés
+    <span class="nav-badge" id="nav-tracks-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('stock')">
+    <span class="nav-icon">📦</span> Stock
+    <span class="nav-badge" id="nav-stock-count">0</span>
+  </div>
+
+  <div class="nav-section">last.fm</div>
+  <div class="nav-item" onclick="nav('missing')">
+    <span class="nav-icon">🔍</span> Manquants
+    <span class="nav-badge warn" id="nav-missing-count">0</span>
+  </div>
+
+  <div class="nav-section">RateYourMusic</div>
+  <div class="nav-item" onclick="nav('rym')">
+    <span class="nav-icon">⭐</span> RYM
+    <span class="nav-badge warn" id="nav-rym-count">0</span>
+  </div>
+
+  <div class="nav-section">Outils</div>
+  <div class="nav-item" onclick="nav('import')">
+    <span class="nav-icon">📥</span> Import / Export
+  </div>
+
+  <div class="sidebar-bottom">
+    <div class="storage-bar-wrap">
+      <div class="storage-label">
+        <span>Collection</span>
+        <span id="storage-pct">0 albums</span>
+      </div>
+      <div class="storage-bar"><div class="storage-fill" id="storage-bar" style="width:0%"></div></div>
+    </div>
+    <div class="save-indicator" id="save-indicator">
+      <div class="save-dot"></div>
+      <span id="save-label">Aucune sauvegarde</span>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <span class="topbar-title" id="topbar-title">Albums</span>
+    <span class="topbar-sep">›</span>
+    <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
+    <div class="spacer"></div>
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="global-search" placeholder="Rechercher…" oninput="onSearch()">
+    </div>
+    <button class="btn btn-accent" onclick="openAlbumModal()">＋ Album</button>
+  </div>
+
+  <div class="content">
+
+    <!-- ==================== ALBUMS ==================== -->
+    <div class="section active" id="sec-albums">
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-val accent" id="s-total">0</div><div class="stat-label">Albums total</div></div>
+        <div class="stat-card"><div class="stat-val" id="s-cd">0</div><div class="stat-label">CD physiques</div></div>
+        <div class="stat-card"><div class="stat-val" id="s-num">0</div><div class="stat-label">Numériques</div></div>
+        <div class="stat-card"><div class="stat-val" id="s-avg">–</div><div class="stat-label">Note moyenne</div></div>
+        <div class="stat-card"><div class="stat-val" id="s-plays">0</div><div class="stat-label">Écoutes last.fm</div></div>
+      </div>
+
+      <div class="toolbar">
+        <select id="filter-artist" onchange="renderAlbums()">
+          <option value="">Tous artistes</option>
+        </select>
+        <select id="filter-support" onchange="renderAlbums()">
+          <option value="">Tous supports</option>
+          <option value="cd">CD</option>
+          <option value="flac">FLAC</option>
+          <option value="mp3">MP3</option>
+          <option value="digital">Numérique</option>
+          <option value="stock">📦 Stock</option>
+        </select>
+        <select id="filter-genre" onchange="renderAlbums()">
+          <option value="">Tous genres</option>
+        </select>
+        <select id="filter-note" onchange="renderAlbums()">
+          <option value="">Toutes notes</option>
+          <option value="5">★★★★★ seulement</option>
+          <option value="4">★★★★ et plus</option>
+          <option value="3">★★★ et plus</option>
+          <option value="0">Non notés</option>
+        </select>
+        <select id="sort-col" onchange="renderAlbums()">
+          <option value="artist">Tri : Artiste</option>
+          <option value="album">Tri : Album</option>
+          <option value="year">Tri : Année</option>
+          <option value="note">Tri : Note</option>
+          <option value="plays">Tri : Écoutes</option>
+        </select>
+        <div class="toolbar-right">
+          <button class="btn btn-sm" onclick="exportCSV()">↓ Export CSV</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Artiste / Album</th>
+              <th>Année</th>
+              <th>Genre</th>
+              <th>Supports</th>
+              <th>Note</th>
+              <th>Écoutes</th>
+              <th style="width:80px"></th>
+            </tr>
+          </thead>
+          <tbody id="album-tbody"></tbody>
+        </table>
+      </div>
+      <div class="paginator">
+        <button class="btn btn-sm" onclick="prevPage()">← Préc</button>
+        <span class="page-info" id="page-info"></span>
+        <button class="btn btn-sm" onclick="nextPage()">Suiv →</button>
+      </div>
+    </div>
+
+    <!-- ==================== TRACKS ==================== -->
+    <div class="section" id="sec-tracks">
+      <div class="toolbar">
+        <select id="filter-track-artist" onchange="renderTracks()">
+          <option value="">Tous artistes</option>
+        </select>
+        <select id="filter-track-format" onchange="renderTracks()">
+          <option value="">Tous formats</option>
+          <option value="flac">FLAC</option>
+          <option value="mp3">MP3</option>
+          <option value="aac">AAC</option>
+          <option value="autre">Autre</option>
+        </select>
+        <select id="filter-track-note" onchange="renderTracks()">
+          <option value="">Toutes notes</option>
+          <option value="5">★★★★★ seulement</option>
+          <option value="4">★★★★ et plus</option>
+          <option value="3">★★★ et plus</option>
+          <option value="0">Non notés</option>
+        </select>
+        <div class="toolbar-right">
+          <button class="btn btn-accent" onclick="openTrackModal()">＋ Morceau</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Titre</th>
+              <th>Artiste</th>
+              <th>Album source</th>
+              <th>Format</th>
+              <th>Durée</th>
+              <th>Note</th>
+              <th style="width:60px"></th>
+            </tr>
+          </thead>
+          <tbody id="tracks-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ==================== DISCOGRAPHIE ==================== -->
+    <div class="section" id="sec-discographie">
+
+      <!-- Stats row -->
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat-card"><div class="stat-val accent" id="disco-total">0</div><div class="stat-label">CDs Discogs</div></div>
+        <div class="stat-card"><div class="stat-val" id="disco-saved">0</div><div class="stat-label">Sauvegardés numériquement</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--red)" id="disco-missing-num">0</div><div class="stat-label">Sans sauvegarde numérique</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--amber)" id="disco-missing-cd">0</div><div class="stat-label">Numériques sans CD Discogs</div></div>
+      </div>
+
+      <div class="toolbar">
+        <select id="disco-filter" onchange="renderDiscographie()">
+          <option value="all">Tous les CDs</option>
+          <option value="missing">⚠️ Sans sauvegarde numérique</option>
+          <option value="ok">✅ Sauvegardés</option>
+          <option value="no-cd">🔵 Numériques sans CD</option>
+        </select>
+        <select id="disco-sort" onchange="renderDiscographie()">
+          <option value="artist">Tri : Artiste</option>
+          <option value="album">Tri : Album</option>
+          <option value="year">Tri : Année</option>
+        </select>
+        <button class="btn btn-sm" onclick="nav('albums');document.getElementById('modal-album').classList.add('open');openAlbumModal()">＋ Ajouter CD</button>
+      </div>
+
+      <!-- Association modal trigger info -->
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">
+        💡 Cliquez sur <strong style="color:var(--text2)">Associer</strong> pour lier manuellement un CD Discogs à son équivalent numérique MusicBee si la détection automatique ne les a pas rapprochés.
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Artiste / Album</th>
+              <th>Année</th>
+              <th>Statut</th>
+              <th>Supports liés</th>
+              <th>Note</th>
+              <th style="width:100px"></th>
+            </tr>
+          </thead>
+          <tbody id="disco-tbody"></tbody>
+        </table>
+      </div>
+      <div class="paginator">
+        <button class="btn btn-sm" onclick="prevDiscoPage()">← Préc</button>
+        <span class="page-info" id="disco-page-info"></span>
+        <button class="btn btn-sm" onclick="nextDiscoPage()">Suiv →</button>
+      </div>
+    </div>
+
+    <!-- MODAL ASSOCIATION -->
+    <div class="modal-overlay" id="modal-assoc">
+      <div class="modal" style="width:560px">
+        <h2>🔗 Associer deux entrées</h2>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Sélectionnez l'entrée numérique à fusionner avec ce CD Discogs. Les deux entrées seront regroupées en une fiche unique.</p>
+        <div id="assoc-cd-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:13px"></div>
+        <div class="form-row">
+          <label>Rechercher l'entrée numérique</label>
+          <input type="text" id="assoc-search" placeholder="Artiste ou album…" oninput="renderAssocList()">
+        </div>
+        <div id="assoc-list" style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px"></div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closeAssocModal()">Annuler</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== STOCK ==================== -->
+    <div class="section" id="sec-stock">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Albums en attente d'écoute — dossier <span style="font-family:var(--mono);color:var(--text3)">F:\music\!_00_stock\</span>. Non comptabilisés dans la collection ni dans Discogs.</p>
+      <div class="toolbar">
+        <select id="filter-stock-artist" onchange="renderStock()">
+          <option value="">Tous artistes</option>
+        </select>
+        <select id="filter-stock-genre" onchange="renderStock()">
+          <option value="">Tous genres</option>
+        </select>
+        <div class="toolbar-right">
+          <button class="btn btn-accent" onclick="openStockModal()">＋ Ajouter au stock</button>
+          <button class="btn btn-sm" onclick="exportStockCSV()">↓ Export</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Artiste / Album</th>
+              <th>Année</th>
+              <th>Genre</th>
+              <th>Format</th>
+              <th>Note</th>
+              <th style="width:120px"></th>
+            </tr>
+          </thead>
+          <tbody id="stock-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="section" id="sec-missing">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Albums et artistes présents dans votre historique last.fm absents de votre collection (CD ou fichiers numériques).</p>
+      <div class="missing-grid" id="missing-grid"></div>
+    </div>
+
+    <!-- ==================== RYM ==================== -->
+    <div class="section" id="sec-rym">
+
+      <!-- Import card -->
+      <div class="import-card" style="margin-bottom:20px">
+        <div class="source-logo">⭐</div>
+        <h3>RateYourMusic — Import CSV</h3>
+        <p>Sur RYM : votre profil → <strong>Collection → Export your data</strong>. Téléchargez le fichier <strong>ratings.csv</strong> et chargez-le ici.</p>
+        <div class="format-hint">
+          <strong>Colonnes utilisées :</strong><br>
+          RYM Rating, Title, First Name, Last Name,<br>
+          Release_Date, Genres (colonnes export natif RYM)
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-accent" onclick="document.getElementById('file-rym').click()">📂 Charger ratings.csv RYM</button>
+          <input type="file" id="file-rym" accept=".csv" onchange="importRYM(this)">
+          <select id="rym-threshold" style="font-size:13px">
+            <option value="3.5">Note RYM ≥ 3.5</option>
+            <option value="3">Note RYM ≥ 3.0</option>
+            <option value="4">Note RYM ≥ 4.0</option>
+            <option value="4.5">Note RYM ≥ 4.5</option>
+          </select>
+        </div>
+        <div class="status" id="status-rym"></div>
+      </div>
+
+      <!-- Two columns -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+        <!-- Notés sur RYM mais absents de la collection -->
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="font-size:13px;font-weight:500;color:var(--text)">Notés sur RYM — absents de la collection</div>
+            <span class="nav-badge warn" id="rym-missing-count">0</span>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Albums avec note RYM ≥ seuil non présents en CD ou fichier numérique.</p>
+          <div id="rym-missing-list"></div>
+        </div>
+
+        <!-- Dans Discogs mais absents de RYM -->
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="font-size:13px;font-weight:500;color:var(--text)">Dans votre collection — non notés sur RYM</div>
+            <span class="nav-badge" id="rym-unrated-count">0</span>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Albums de votre collection CD ou numérique absents de vos ratings RYM.</p>
+          <div id="rym-unrated-list"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ==================== IMPORT ==================== -->
+    <div class="section" id="sec-import">
+      <div class="import-grid">
+
+        <!-- DISCOGS -->
+        <div class="import-card">
+          <div class="source-logo">🔴</div>
+          <h3>Discogs</h3>
+          <p>Exportez votre collection depuis <strong>discogs.com → Collection → Export CSV</strong>. Le fichier contient artist, title, label, year, format.</p>
+          <div class="format-hint">
+            <strong>Colonnes attendues :</strong><br>
+            Artist, Title, Label, Catno, Format,<br>
+            Rating, Released, release_id
+          </div>
+          <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 Charger CSV Discogs</button>
+          <input type="file" id="file-discogs" accept=".csv" onchange="importDiscogs(this)">
+          <div class="status" id="status-discogs"></div>
+        </div>
+
+        <!-- MUSICBEE -->
+        <div class="import-card">
+          <div class="source-logo">🎧</div>
+          <h3>MusicBee</h3>
+          <p>Dans MusicBee : sélectionnez tous vos morceaux (Ctrl+A) → clic droit → <strong>Enregistrer comme playlist → Export M3U</strong>. Ou exportez en CSV via Fichier → Bibliothèque → Exporter.</p>
+          <div class="format-hint">
+            <strong>M3U (recommandé) :</strong> #EXTINF avec Artist - Title<br>
+            chemins fichiers : /Artist/Album/track.flac<br><br>
+            <strong>CSV (alternatif) :</strong><br>
+            Artist, Album Title, Year, Format, Genre
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-accent" onclick="document.getElementById('file-musicbee-m3u').click()">📂 Charger M3U</button>
+            <button class="btn" onclick="document.getElementById('file-musicbee').click()">📂 Charger CSV</button>
+          </div>
+          <input type="file" id="file-musicbee-m3u" accept=".m3u,.m3u8" onchange="importM3U(this)">
+          <input type="file" id="file-musicbee" accept=".csv" onchange="importMusicBee(this)">
+          <div class="status" id="status-musicbee"></div>
+        </div>
+
+        <!-- LASTFM API -->
+        <div class="import-card">
+          <div class="source-logo">🔵</div>
+          <h3>last.fm — Connexion API</h3>
+          <p>Connectez directement votre compte last.fm pour récupérer tout votre historique d'écoute automatiquement.</p>
+          <div class="format-hint" id="lastfm-sync-info">
+            <strong>Clé API :</strong> last.fm/api/account/create<br>
+            <strong>Nom d'utilisateur :</strong> votre pseudo last.fm<br>
+            <strong>Dernière sync :</strong> <span id="lastfm-last-sync-label">jamais</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
+            <input type="text" id="lastfm-apikey" placeholder="Clé API (32 caractères)" value="e8aae3c9ca05ced8f56443c1108fdc65" style="font-family:var(--mono);font-size:11px">
+            <input type="text" id="lastfm-user" placeholder="Nom d'utilisateur last.fm" value="terant">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-accent" onclick="connectLastfm()">🔗 Synchroniser last.fm</button>
+            <button class="btn btn-sm" onclick="loadMoreLastfm()" id="btn-lastfm-more" style="display:none">⏸ Pause</button>
+            <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
+          </div>
+          <div class="status" id="status-lastfm"></div>
+          <div id="lastfm-progress" style="margin-top:8px;display:none">
+            <div style="height:3px;background:var(--bg4);border-radius:2px">
+              <div id="lastfm-bar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
+            </div>
+            <div id="lastfm-progress-label" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:4px"></div>
+          </div>
+        </div>
+
+        <!-- CSV RÉIMPORT -->
+        <div class="import-card">
+          <div class="source-logo">♻️</div>
+          <h3>Réimport CSV (mise à jour)</h3>
+          <p>Rechargez un CSV précédemment exporté depuis cette application. Les entrées existantes seront <strong>mises à jour</strong>, les nouvelles <strong>ajoutées</strong>.</p>
+          <div class="format-hint">
+            <strong>Format export de cette app :</strong><br>
+            id, artist, album, year, genre,<br>
+            cd, flac, mp3, digital, note, plays
+          </div>
+          <button class="btn btn-accent" onclick="document.getElementById('file-reimport').click()">📂 Réimporter CSV</button>
+          <input type="file" id="file-reimport" accept=".csv" onchange="reimportCSV(this)">
+          <div class="status" id="status-reimport"></div>
+        </div>
+
+        <!-- RYM SCRAPER -->
+        <div class="import-card">
+          <div class="source-logo">⭐</div>
+          <h3>RateYourMusic — Import direct</h3>
+          <p>Récupère automatiquement vos ratings depuis votre profil RYM public. Pas besoin d'export manuel.</p>
+          <div class="format-hint">
+            <strong>Profil :</strong> rateyourmusic.com/collection_p/<span style="color:var(--accent)">tairanteuh</span>/<br>
+            <strong>Récupère :</strong> artiste, album, note, année, genre<br>
+            <strong>Pagination :</strong> toutes les pages automatiquement
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
+            <input type="text" id="rym-username" value="tairanteuh" placeholder="Pseudo RYM" style="font-size:13px">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-accent" onclick="scrapeRYM()">⭐ Importer depuis RYM</button>
+            <button class="btn btn-sm" id="btn-rym-stop" style="display:none" onclick="stopRYMScrape()">⏸ Arrêter</button>
+          </div>
+          <div class="status" id="status-rym-scrape"></div>
+          <div id="rym-scrape-progress" style="margin-top:8px;display:none">
+            <div style="height:3px;background:var(--bg4);border-radius:2px">
+              <div id="rym-scrape-bar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
+            </div>
+            <div id="rym-scrape-label" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:4px"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- EXPORT -->
+      <div class="import-card" style="grid-column: 1 / -1; margin-top:0">
+        <h3>Export & sauvegarde</h3>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Sauvegardez votre collection complète. Le CSV est compatible avec le réimport ci-dessus.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-accent" onclick="exportCSV()">↓ Exporter collection (CSV)</button>
+          <button class="btn" onclick="exportTracksCSV()">↓ Exporter morceaux isolés (CSV)</button>
+          <button class="btn" onclick="exportJSON()">↓ Exporter tout (JSON)</button>
+          <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
+          <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
+          <button class="btn" onclick="localStorage.removeItem('discotheque_firebase_cfg');location.reload()">🔥 Reconfigurer Firebase</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</main>
+</div><!-- /app -->
+
+<!-- MODAL ALBUM -->
+<div class="modal-overlay" id="modal-album">
+  <div class="modal">
+    <h2 id="modal-album-title">Ajouter un album</h2>
+    <input type="hidden" id="edit-id">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="form-row" style="grid-column:1/-1">
+        <label>Artiste</label>
+        <input type="text" id="f-artist" placeholder="ex. Miles Davis">
+      </div>
+      <div class="form-row" style="grid-column:1/-1">
+        <label>Album</label>
+        <input type="text" id="f-album" placeholder="ex. Kind of Blue">
+      </div>
+      <div class="form-row">
+        <label>Année</label>
+        <input type="text" id="f-year" placeholder="1959">
+      </div>
+      <div class="form-row">
+        <label>Genre</label>
+        <input type="text" id="f-genre" placeholder="Jazz, Rock…">
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Supports disponibles</label>
+      <div class="form-check-row">
+        <label class="form-check"><input type="checkbox" id="f-cd"> 💿 CD</label>
+        <label class="form-check"><input type="checkbox" id="f-flac"> FLAC</label>
+        <label class="form-check"><input type="checkbox" id="f-mp3"> MP3</label>
+        <label class="form-check"><input type="checkbox" id="f-digital"> Autre numérique</label>
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Note</label>
+      <div class="modal-stars" id="modal-stars">
+        <button class="modal-star" onclick="setModalNote(1)">★</button>
+        <button class="modal-star" onclick="setModalNote(2)">★</button>
+        <button class="modal-star" onclick="setModalNote(3)">★</button>
+        <button class="modal-star" onclick="setModalNote(4)">★</button>
+        <button class="modal-star" onclick="setModalNote(5)">★</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Écoutes last.fm</label>
+      <input type="text" id="f-plays" placeholder="0" style="width:100px">
+    </div>
+    <div class="form-row">
+      <label>Notes personnelles</label>
+      <textarea id="f-notes" placeholder="Édition, provenance, état…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeAlbumModal()">Annuler</button>
+      <button class="btn btn-accent" onclick="saveAlbum()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL TRACK -->
+<div class="modal-overlay" id="modal-track">
+  <div class="modal">
+    <h2>Ajouter un morceau isolé</h2>
+    <input type="hidden" id="t-edit-id">
+    <div class="form-row">
+      <label>Titre</label>
+      <input type="text" id="t-title" placeholder="ex. One More Time">
+    </div>
+    <div class="form-row">
+      <label>Artiste</label>
+      <input type="text" id="t-artist" placeholder="ex. Daft Punk">
+    </div>
+    <div class="form-row">
+      <label>Album source (optionnel)</label>
+      <input type="text" id="t-album" placeholder="ex. Discovery">
+    </div>
+    <div class="form-row">
+      <label>Format</label>
+      <select id="t-format">
+        <option value="flac">FLAC</option>
+        <option value="mp3">MP3</option>
+        <option value="aac">AAC</option>
+        <option value="autre">Autre</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Durée (mm:ss)</label>
+      <input type="text" id="t-duration" placeholder="3:45" style="width:100px">
+    </div>
+    <div class="form-row">
+      <label>Note</label>
+      <div class="modal-stars" id="track-modal-stars">
+        <button class="modal-star" onclick="setTrackNote(1)">★</button>
+        <button class="modal-star" onclick="setTrackNote(2)">★</button>
+        <button class="modal-star" onclick="setTrackNote(3)">★</button>
+        <button class="modal-star" onclick="setTrackNote(4)">★</button>
+        <button class="modal-star" onclick="setTrackNote(5)">★</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeTrackModal()">Annuler</button>
+      <button class="btn btn-accent" onclick="saveTrack()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL STOCK -->
+<div class="modal-overlay" id="modal-stock">
+  <div class="modal">
+    <h2 id="modal-stock-title">Ajouter au stock</h2>
+    <input type="hidden" id="s-edit-id">
+    <div class="form-row"><label>Artiste</label><input type="text" id="s-artist" placeholder="ex. Aphex Twin"></div>
+    <div class="form-row"><label>Album</label><input type="text" id="s-album" placeholder="ex. Selected Ambient Works"></div>
+    <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div><label class="form-row" style="margin:0"><label>Année</label><input type="text" id="s-year" placeholder="1992"></label></div>
+      <div><label class="form-row" style="margin:0"><label>Genre</label><input type="text" id="s-genre" placeholder="Électro…"></label></div>
+    </div>
+    <div class="form-row">
+      <label>Format</label>
+      <select id="s-format">
+        <option value="flac">FLAC</option>
+        <option value="mp3">MP3</option>
+        <option value="digital">Numérique</option>
+        <option value="autre">Autre</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Note</label>
+      <div class="modal-stars" id="stock-modal-stars">
+        <button class="modal-star" onclick="setStockNote(1)">★</button>
+        <button class="modal-star" onclick="setStockNote(2)">★</button>
+        <button class="modal-star" onclick="setStockNote(3)">★</button>
+        <button class="modal-star" onclick="setStockNote(4)">★</button>
+        <button class="modal-star" onclick="setStockNote(5)">★</button>
+      </div>
+    </div>
+    <div class="form-row"><label>Notes</label><textarea id="s-notes" placeholder="Source, provenance…"></textarea></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeStockModal()">Annuler</button>
+      <button class="btn btn-accent" onclick="saveStockItem()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ===================== STATE =====================
+let albums = [];
+let tracks = [];
+let stockItems = []; // albums en attente dans F:\music\!_00_stock\
+let lastfmData = [];
+let rymData = [];
+let associations = []; // [{cdId, numId}] — liens manuels entre entrées
+let modalNote = 0;
+let trackNote = 0;
+let currentPage = 1;
+let discoPage = 1;
+const PAGE_SIZE = 30;
+let nextId = 1;
+let _saveTimer = null;
+
+// ===================== LOCALSTORAGE =====================
+const LS_KEY = 'discotheque_v2';
+const LS_CFG = 'discotheque_firebase_cfg';
+
+function _saveToStorageImpl() {
+  setSaveIndicator('saving');
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      if (window._db) {
+        await saveToFirebase();
+      } else {
+        const now = new Date().toISOString();
+        // Document principal sans lastfmData (potentiellement énorme)
+        const data = { albums, tracks, stockItems, rymData, associations, nextId, savedAt: now };
+        localStorage.setItem(LS_KEY, JSON.stringify(data));
+        // lastfmData dans une clé séparée, compressée
+        if (lastfmData.length) {
+          const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
+          localStorage.setItem('discotheque_lastfm', JSON.stringify(compact));
+        }
+        setSaveIndicator('saved', now);
+      }
+    } catch(e) {
+      setSaveIndicator('error');
+      console.error('Sauvegarde échouée', e);
+    }
+  }, 600);
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    albums = data.albums || [];
+    tracks = data.tracks || [];
+    stockItems = data.stockItems || [];
+    rymData = data.rymData || [];
+    associations = data.associations || [];
+    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+    setSaveIndicator('saved', data.savedAt);
+    // Charger lastfmData depuis sa clé dédiée
+    loadLastfmFromLocalStorage();
+    return true;
+  } catch(e) { return false; }
+}
+
+// ===================== FIREBASE =====================
+window._db = null;
+
+// Config Firebase pré-remplie (modifiable dans l'écran de configuration)
+const FIREBASE_CONFIG_DEFAULT = {
+  apiKey: "AIzaSyCHvAzumKp8XO8BR8J3_NHmCXOe6eWkOlY",
+  authDomain: "terantdisco.firebaseapp.com",
+  projectId: "terantdisco",
+  storageBucket: "terantdisco.firebasestorage.app",
+  messagingSenderId: "442102986410",
+  appId: "1:442102986410:web:a6d31b887362b482f602d3"
+};
+
+async function connectFirebase(cfg) {
+  const errEl = document.getElementById('setup-error');
+  if (errEl) errEl.textContent = '';
+  try {
+    const config = cfg || {
+      apiKey:      (document.getElementById('cfg-apiKey').value.trim()) || FIREBASE_CONFIG_DEFAULT.apiKey,
+      authDomain:  (document.getElementById('cfg-authDomain').value.trim()) || FIREBASE_CONFIG_DEFAULT.authDomain,
+      projectId:   (document.getElementById('cfg-projectId').value.trim()) || FIREBASE_CONFIG_DEFAULT.projectId,
+      appId:       (document.getElementById('cfg-appId').value.trim()) || FIREBASE_CONFIG_DEFAULT.appId,
+      storageBucket: FIREBASE_CONFIG_DEFAULT.storageBucket,
+      messagingSenderId: FIREBASE_CONFIG_DEFAULT.messagingSenderId,
+    };
+    if (!config.apiKey || !config.projectId) {
+      if (errEl) errEl.textContent = 'API Key et Project ID sont obligatoires.';
+      return false;
+    }
+    // Init Firebase (avoid double-init)
+    if (!firebase.apps.length) {
+      firebase.initializeApp(config);
+    }
+    window._db = firebase.firestore();
+    // Test de connexion léger : lecture du document collection
+    setSaveIndicator('saving');
+    const testDoc = await window._db.collection('discotheque').doc('collection').get();
+    // Sauvegarde config dans localStorage pour les prochaines fois
+    localStorage.setItem(LS_CFG, JSON.stringify(config));
+    // Masquer l'écran de setup
+    const setupEl = document.getElementById('firebase-setup');
+    if (setupEl) setupEl.style.display = 'none';
+    // Utiliser le doc déjà chargé pour éviter une 2e requête
+    if (testDoc.exists) {
+      const data = testDoc.data();
+      albums = data.albums || [];
+      tracks = data.tracks || [];
+      lastfmData = data.lastfmData || [];
+      nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+      setSaveIndicator('saved', data.savedAt);
+    } else {
+      // Première connexion : pousser les données locales vers Firebase
+      await saveToFirebase();
+    }
+    renderAlbums(); renderTracks(); updateNavBadges();
+    updateFirebaseStatus(true, config.projectId);
+    toast('🔥 Firebase connecté — synchronisation active');
+    return true;
+  } catch(e) {
+    let msg = e.message || String(e);
+    if (msg.includes('permissions') || msg.includes('PERMISSION_DENIED')) {
+      msg = 'Permissions refusées — vérifiez les règles Firestore (elles doivent autoriser read/write: if true)';
+    } else if (msg.includes('not-found') || msg.includes('NOT_FOUND')) {
+      msg = 'Base Firestore introuvable — vérifiez le Project ID';
+    } else if (msg.includes('network') || msg.includes('fetch')) {
+      msg = 'Erreur réseau — vérifiez votre connexion internet';
+    }
+    if (errEl) errEl.textContent = 'Erreur : ' + msg;
+    setSaveIndicator('error');
+    window._db = null;
+    return false;
+  }
+}
+
+async function saveToFirebase() {
+  if (!window._db) return;
+  const now = new Date().toISOString();
+
+  // Document principal : albums, tracks, rymData, associations (toujours < 1 Mo)
+  const mainData = {
+    albums, tracks, rymData, associations, nextId,
+    savedAt: now,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await window._db.collection('discotheque').doc('collection').set(mainData);
+
+  // lastfmData : stocké séparément si présent, sinon dans localStorage uniquement
+  // On compresse en ne gardant que artist, album, plays (champs essentiels)
+  if (lastfmData.length) {
+    const lastfmCompact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
+    const lastfmPayload = JSON.stringify(lastfmCompact);
+    // Si ça tient dans 900 Ko on sauvegarde dans Firebase, sinon localStorage uniquement
+    if (lastfmPayload.length < 900000) {
+      try {
+        await window._db.collection('discotheque').doc('lastfm').set({
+          data: lastfmCompact,
+          savedAt: now,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch(e) {
+        // Trop gros même compressé → localStorage uniquement
+        localStorage.setItem('discotheque_lastfm', lastfmPayload);
+      }
+    } else {
+      // Trop gros pour Firebase → localStorage uniquement
+      localStorage.setItem('discotheque_lastfm', lastfmPayload);
+    }
+  }
+
+  setSaveIndicator('saved', now);
+}
+
+async function loadFromFirebase() {
+  if (!window._db) return false;
+  try {
+    const doc = await window._db.collection('discotheque').doc('collection').get();
+    if (!doc.exists) return false;
+    const data = doc.data();
+    albums = data.albums || [];
+    tracks = data.tracks || [];
+    stockItems = data.stockItems || [];
+    rymData = data.rymData || [];
+    associations = data.associations || [];
+    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+    setSaveIndicator('saved', data.savedAt);
+
+    // Charger lastfmData depuis le doc séparé Firebase ou depuis localStorage
+    try {
+      const lfDoc = await window._db.collection('discotheque').doc('lastfm').get();
+      if (lfDoc.exists) {
+        const compact = lfDoc.data().data || [];
+        lastfmData = compact.map(d => ({ artist: d.a, album: d.b, plays: d.p }));
+      } else {
+        loadLastfmFromLocalStorage();
+      }
+    } catch(e) {
+      loadLastfmFromLocalStorage();
+    }
+
+    return true;
+  } catch(e) { return false; }
+}
+
+function loadLastfmFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem('discotheque_lastfm');
+    if (raw) {
+      const compact = JSON.parse(raw);
+      lastfmData = compact.map(d => ({ artist: d.a, album: d.b, plays: d.p }));
+    }
+  } catch(e) {}
+}
+
+function skipFirebase() {
+  document.getElementById('firebase-setup').style.display = 'none';
+  localStorage.setItem(LS_CFG, 'skip');
+  initApp();
+}
+
+function updateFirebaseStatus(connected, projectId) {
+  const label = document.getElementById('save-label');
+  const dot = document.querySelector('.save-dot');
+  // Show project name in sidebar
+  const pct = document.getElementById('storage-pct');
+  if (pct && connected) pct.title = 'Firebase: ' + projectId;
+}
+
+// ===================== INDICATOR =====================
+function setSaveIndicator(state, isoDate) {
+  const el = document.getElementById('save-indicator');
+  const label = document.getElementById('save-label');
+  if (!el) return;
+  el.className = 'save-indicator ' + state;
+  const isFirebase = !!window._db;
+  if (state === 'saving') {
+    label.textContent = isFirebase ? '🔥 Sync…' : 'Sauvegarde…';
+  } else if (state === 'saved') {
+    const prefix = isFirebase ? '🔥 ' : '';
+    if (isoDate) {
+      const d = new Date(isoDate);
+      const diff = Math.floor((Date.now() - d) / 60000);
+      if (diff < 1) label.textContent = prefix + 'Synchronisé';
+      else if (diff < 60) label.textContent = prefix + `Sync il y a ${diff} min`;
+      else label.textContent = prefix + d.toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'});
+    } else { label.textContent = prefix + 'Synchronisé'; }
+  } else if (state === 'error') {
+    label.textContent = isFirebase ? '🔥 Erreur sync' : 'Erreur sauvegarde';
+  } else {
+    label.textContent = 'Aucune sauvegarde';
+  }
+}
+
+// Refresh label every minute
+setInterval(() => {
+  const raw = localStorage.getItem(LS_KEY);
+  if (raw && !window._db) { try { setSaveIndicator('saved', JSON.parse(raw).savedAt); } catch(e){} }
+}, 60000);
+
+// ===================== UTILS =====================
+function uid() { return nextId++; }
+
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (!lines.length) return [];
+  const header = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    const vals = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') inQ = !inQ;
+      else if (c === ',' && !inQ) { vals.push(cur); cur = ''; }
+      else cur += c;
+    }
+    vals.push(cur);
+    const obj = {};
+    header.forEach((h, i) => obj[h] = (vals[i] || '').trim().replace(/^"|"$/g, ''));
+    return obj;
+  });
+}
+
+function toCSVRow(vals) {
+  return vals.map(v => {
+    const s = String(v ?? '');
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',');
+}
+
+function readFile(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result);
+    r.onerror = rej;
+    r.readAsText(file, 'UTF-8');
+  });
+}
+
+function genreList() {
+  const s = new Set(albums.map(a => a.genre).filter(Boolean));
+  return [...s].sort();
+}
+
+function artistList() {
+  const s = new Set(albums.map(a => a.artist).filter(Boolean));
+  return [...s].sort((a, b) => a.localeCompare(b, 'fr'));
+}
+
+function trackArtistList() {
+  const s = new Set(tracks.map(t => t.artist).filter(Boolean));
+  return [...s].sort((a, b) => a.localeCompare(b, 'fr'));
+}
+
+// Normalisation robuste pour la fusion Discogs/MusicBee
+function normalizeKey(artist, album) {
+  const norm = s => {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  return norm(artist) + '|||' + norm(album);
+}
+
+function slugEmoji(artist) {
+  const map = { jazz:'🎷', rock:'🎸', pop:'🎤', électro:'🤖', electro:'🤖', 'trip-hop':'🌫️', classique:'🎻', métal:'🤘', metal:'🤘', folk:'🪕', soul:'🎙️', reggae:'🌴', blues:'🎼', funk:'🕺', ambient:'🌊', krautrock:'🔊', 'hip-hop':'🎤', rap:'🎤' };
+  const g = (albums.find(a => a.artist.toLowerCase() === artist.toLowerCase())?.genre || '').toLowerCase();
+  for (const k in map) if (g.includes(k)) return map[k];
+  const initials = artist.split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2);
+  return initials || '🎵';
+}
+
+function initials(artist) {
+  return artist.split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2);
+}
+
+// ===================== NAVIGATION =====================
+const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'rym', 'import'];
+function nav(id) {
+  SECTIONS.forEach(s => {
+    document.getElementById('sec-' + s).classList.toggle('active', s === id);
+    document.querySelectorAll('.nav-item').forEach(el => {
+      if (el.getAttribute('onclick') === `nav('${id}')`) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+  });
+  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Manquants last.fm', rym: 'RateYourMusic', import: 'Import / Export' };
+  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Écoutes non possédées', rym: 'Croisement collection & ratings', import: 'Sources externes & sauvegarde' };
+  document.getElementById('topbar-title').textContent = titles[id] || id;
+  document.getElementById('topbar-sub').textContent = subs[id] || '';
+  document.getElementById('global-search').value = '';
+  if (id === 'albums') renderAlbums();
+  if (id === 'discographie') renderDiscographie();
+  if (id === 'tracks') renderTracks();
+  if (id === 'stock') renderStock();
+  if (id === 'missing') renderMissing();
+  if (id === 'rym') renderRYM();
+}
+
+function onSearch() {
+  const active = SECTIONS.find(s => document.getElementById('sec-' + s).classList.contains('active'));
+  if (active === 'albums') { currentPage = 1; renderAlbums(); }
+  if (active === 'discographie') renderDiscographie();
+  if (active === 'tracks') renderTracks();
+  if (active === 'stock') renderStock();
+  if (active === 'missing') renderMissing();
+  if (active === 'rym') renderRYM();
+}
+
+// ===================== ALBUMS =====================
+function filteredAlbums() {
+  const q = document.getElementById('global-search').value.toLowerCase();
+  const af = document.getElementById('filter-artist').value;
+  const sf = document.getElementById('filter-support').value;
+  const gf = document.getElementById('filter-genre').value;
+  const nf = document.getElementById('filter-note').value;
+
+  return albums.filter(a => {
+    const match = !q || (a.artist + ' ' + a.album + ' ' + (a.genre||'')).toLowerCase().includes(q);
+    const am = !af || a.artist === af;
+    let sm = true;
+    if (sf === 'cd') sm = a.cd;
+    else if (sf === 'flac') sm = a.flac;
+    else if (sf === 'mp3') sm = a.mp3;
+    else if (sf === 'digital') sm = a.flac || a.mp3 || a.digital;
+    else if (sf === 'stock') sm = !!a.stock;
+    // Par défaut, exclure les entrées stock de la vue albums
+    if (!sf) sm = !a.stock;
+    const gm = !gf || a.genre === gf;
+    let nm = true;
+    if (nf === '5') nm = a.note === 5;
+    else if (nf === '4') nm = a.note >= 4;
+    else if (nf === '3') nm = a.note >= 3;
+    else if (nf === '0') nm = !a.note;
+    return match && am && sm && gm && nm;
+  });
+}
+
+function sortedAlbums(list) {
+  const col = document.getElementById('sort-col').value;
+  return [...list].sort((a, b) => {
+    if (col === 'year') return (b.year||0) - (a.year||0);
+    if (col === 'note') return (b.note||0) - (a.note||0);
+    if (col === 'plays') return (b.plays||0) - (a.plays||0);
+    const av = (a[col]||'').toLowerCase(), bv = (b[col]||'').toLowerCase();
+    return av < bv ? -1 : av > bv ? 1 : 0;
+  });
+}
+
+function renderAlbums() {
+  updateStats();
+  updateGenreFilter();
+  updateArtistFilter();
+  updateNavBadges();
+
+  const list = sortedAlbums(filteredAlbums());
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (currentPage > pages) currentPage = pages;
+  const slice = list.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const maxPlays = Math.max(1, ...albums.map(a => a.plays || 0));
+
+  const tbody = document.getElementById('album-tbody');
+  if (!slice.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
+    document.getElementById('page-info').textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = slice.map(a => {
+    const badges = [
+      a.cd ? '<span class="badge badge-cd">💿 CD</span>' : '',
+      a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
+      a.mp3 ? '<span class="badge badge-mp3">MP3</span>' : '',
+      a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
+    ].filter(Boolean).join('');
+    const stars = [1,2,3,4,5].map(i =>
+      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});event.stopPropagation()">★</button>`
+    ).join('');
+    const playsW = Math.round((a.plays || 0) / maxPlays * 100);
+    return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
+      <td>
+        <div class="artist-cell">
+          <div class="artist-avatar">${initials(a.artist)}</div>
+          <div class="artist-info">
+            <div class="name">${esc(a.album)}</div>
+            <div class="sub">${esc(a.artist)}</div>
+          </div>
+        </div>
+      </td>
+      <td class="mono">${a.year || '–'}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
+      <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
+      <td><div class="stars">${stars}</div></td>
+      <td>
+        <div class="plays-bar-wrap">
+          <div class="plays-bar"><div class="plays-fill" style="width:${playsW}%"></div></div>
+          <span class="plays-num">${a.plays||0}</span>
+        </div>
+      </td>
+      <td onclick="event.stopPropagation()">
+        <button class="btn btn-sm btn-danger" onclick="deleteAlbum(${a.id})" title="Supprimer">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('page-info').textContent = `Page ${currentPage} / ${pages} — ${total} albums`;
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function updateStats() {
+  document.getElementById('s-total').textContent = albums.length;
+  document.getElementById('s-cd').textContent = albums.filter(a => a.cd).length;
+  document.getElementById('s-num').textContent = albums.filter(a => a.flac || a.mp3 || a.digital).length;
+  const rated = albums.filter(a => a.note > 0);
+  document.getElementById('s-avg').textContent = rated.length
+    ? (rated.reduce((s, a) => s + a.note, 0) / rated.length).toFixed(1) : '–';
+  document.getElementById('s-plays').textContent = albums.reduce((s, a) => s + (a.plays || 0), 0).toLocaleString('fr-FR');
+  document.getElementById('storage-pct').textContent = albums.length + ' albums';
+  document.getElementById('storage-bar').style.width = Math.min(100, albums.length / 5) + '%';
+}
+
+function updateGenreFilter() {
+  const sel = document.getElementById('filter-genre');
+  const cur = sel.value;
+  const genres = genreList();
+  sel.innerHTML = '<option value="">Tous genres</option>' + genres.map(g => `<option value="${esc(g)}" ${g===cur?'selected':''}>${esc(g)}</option>`).join('');
+}
+
+function updateArtistFilter() {
+  const sel = document.getElementById('filter-artist');
+  const cur = sel.value;
+  const artists = artistList();
+  sel.innerHTML = '<option value="">Tous artistes</option>' + artists.map(a => `<option value="${esc(a)}" ${a===cur?'selected':''}>${esc(a)}</option>`).join('');
+
+  const sel2 = document.getElementById('filter-track-artist');
+  if (sel2) {
+    const cur2 = sel2.value;
+    const tArtists = trackArtistList();
+    sel2.innerHTML = '<option value="">Tous artistes</option>' + tArtists.map(a => `<option value="${esc(a)}" ${a===cur2?'selected':''}>${esc(a)}</option>`).join('');
+  }
+}
+
+function rateAlbum(id, note) {
+  const a = albums.find(x => x.id === id);
+  if (a) { a.note = a.note === note ? 0 : note; renderAlbums(); saveToStorage(); }
+}
+
+function deleteAlbum(id) {
+  if (!confirm('Supprimer cet album ?')) return;
+  albums = albums.filter(a => a.id !== id);
+  renderAlbums();
+  saveToStorage();
+  toast('Album supprimé');
+}
+
+function prevPage() { if (currentPage > 1) { currentPage--; renderAlbums(); } }
+function nextPage() {
+  const pages = Math.ceil(filteredAlbums().length / PAGE_SIZE);
+  if (currentPage < pages) { currentPage++; renderAlbums(); }
+}
+
+// ===================== TRACKS =====================
+function renderTracks() {
+  updateNavBadges();
+  const q = document.getElementById('global-search').value.toLowerCase();
+  const af = document.getElementById('filter-track-artist')?.value || '';
+  const ff = document.getElementById('filter-track-format').value;
+  const nf = document.getElementById('filter-track-note')?.value || '';
+  const list = tracks.filter(t => {
+    const m = !q || (t.title + ' ' + t.artist).toLowerCase().includes(q);
+    const am = !af || t.artist === af;
+    const fm = !ff || t.format === ff;
+    let nm = true;
+    if (nf === '5') nm = t.note === 5;
+    else if (nf === '4') nm = t.note >= 4;
+    else if (nf === '3') nm = t.note >= 3;
+    else if (nf === '0') nm = !t.note;
+    return m && am && fm && nm;
+  });
+  const tbody = document.getElementById('tracks-tbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
+    return;
+  }
+  const fmtBadge = { flac: 'badge-flac', mp3: 'badge-mp3', aac: 'badge-digital', autre: 'badge-digital' };
+  tbody.innerHTML = list.map(t => {
+    const stars = [1,2,3,4,5].map(i =>
+      `<button class="star ${(t.note||0)>=i?'on':''}" onclick="rateTrack(${t.id},${i});event.stopPropagation()">★</button>`
+    ).join('');
+    return `<tr>
+      <td style="font-weight:500">${esc(t.title)}</td>
+      <td style="color:var(--text2);font-size:13px">${esc(t.artist)}</td>
+      <td style="color:var(--text3);font-size:12px">${esc(t.album||'–')}</td>
+      <td><span class="badge ${fmtBadge[t.format]||'badge-digital'}">${t.format.toUpperCase()}</span></td>
+      <td class="mono">${t.duration||'–'}</td>
+      <td><div class="stars">${stars}</div></td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteTrack(${t.id})">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function rateTrack(id, note) {
+  const t = tracks.find(x => x.id === id);
+  if (t) { t.note = t.note === note ? 0 : note; renderTracks(); saveToStorage(); }
+}
+
+function deleteTrack(id) {
+  if (!confirm('Supprimer ce morceau ?')) return;
+  tracks = tracks.filter(t => t.id !== id);
+  renderTracks();
+  saveToStorage();
+  toast('Morceau supprimé');
+}
+
+// ===================== CACHE =====================
+// Les calculs de badges (computeMissing, RYM, disco) sont coûteux avec de gros datasets.
+// On les met en cache et on ne les recalcule que quand les données changent.
+let _cache = {};
+
+function invalidateCache() {
+  _cache = {};
+}
+
+function computeMissing() {
+  if (_cache.missing) return _cache.missing;
+  if (!lastfmData.length) return (_cache.missing = []);
+  const owned = new Set(albums.map(a => normalizeKey(a.artist, a.album)));
+  _cache.missing = lastfmData
+    .filter(d => d.artist && d.album && !owned.has(normalizeKey(d.artist, d.album)))
+    .sort((a, b) => b.plays - a.plays);
+  return _cache.missing;
+}
+
+let _navBadgeTimer = null;
+function updateNavBadges() {
+  // Debounce : on attend 80ms avant de recalculer pour éviter les appels en rafale
+  clearTimeout(_navBadgeTimer);
+  _navBadgeTimer = setTimeout(() => {
+    document.getElementById('nav-albums-count').textContent = albums.filter(a => !a.stock).length;
+    document.getElementById('nav-tracks-count').textContent = tracks.length;
+    document.getElementById('nav-missing-count').textContent = computeMissing().length;
+    const stockBadge = document.getElementById('nav-stock-count');
+    if (stockBadge) stockBadge.textContent = stockItems.length;
+    const rymBadge = document.getElementById('nav-rym-count');
+    if (rymBadge && rymData.length) rymBadge.textContent = computeRYMMissing().length;
+    const discoBadge = document.getElementById('nav-disco-warn');
+    if (discoBadge) discoBadge.textContent = getCDsWithoutBackup().length;
+  }, 80);
+}
+
+// Invalider le cache après toute mutation
+function saveToStorage() {
+  invalidateCache();
+  _saveToStorageImpl();
+}
+
+
+
+function renderMissing() {
+  updateNavBadges();
+  const list = computeMissing();
+  const q = document.getElementById('global-search').value.toLowerCase();
+  const filtered = q ? list.filter(m => (m.artist + ' ' + m.album).toLowerCase().includes(q)) : list;
+  const el = document.getElementById('missing-grid');
+  if (!lastfmData.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📊</div>Aucun historique last.fm chargé.<br>Importez votre CSV last.fm dans l\'onglet Import.</div>';
+    return;
+  }
+  if (!filtered.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">✅</div>Aucun manquant — votre collection couvre toutes vos écoutes !</div>';
+    return;
+  }
+  el.innerHTML = filtered.map((m, i) => `
+    <div class="missing-card">
+      <div class="missing-icon">🔍</div>
+      <div class="missing-info">
+        <div class="title">${esc(m.album)}</div>
+        <div class="sub">${esc(m.artist)}</div>
+        <div class="plays">${m.plays} écoute${m.plays>1?'s':''} · last.fm</div>
+      </div>
+      <span class="badge badge-missing">Manquant</span>
+      <button class="btn btn-sm" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋ Ajouter</button>
+    </div>`).join('');
+}
+
+function addFromMissing(artist, album) {
+  document.getElementById('f-artist').value = decodeURIComponent(artist);
+  document.getElementById('f-album').value = decodeURIComponent(album);
+  document.getElementById('edit-id').value = '';
+  setModalNote(0);
+  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
+  document.getElementById('modal-album').classList.add('open');
+  nav('albums');
+}
+
+// ===================== MODALS =====================
+let _modalNote = 0, _trackNote = 0;
+
+function openAlbumModal() {
+  document.getElementById('edit-id').value = '';
+  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
+  ['artist','album','year','genre','plays','notes'].forEach(f => document.getElementById('f-'+f).value = '');
+  ['cd','flac','mp3','digital'].forEach(f => document.getElementById('f-'+f).checked = false);
+  setModalNote(0);
+  document.getElementById('modal-album').classList.add('open');
+}
+
+function editAlbum(id) {
+  const a = albums.find(x => x.id === id);
+  if (!a) return;
+  document.getElementById('edit-id').value = id;
+  document.getElementById('modal-album-title').textContent = 'Modifier l\'album';
+  document.getElementById('f-artist').value = a.artist;
+  document.getElementById('f-album').value = a.album;
+  document.getElementById('f-year').value = a.year || '';
+  document.getElementById('f-genre').value = a.genre || '';
+  document.getElementById('f-plays').value = a.plays || '';
+  document.getElementById('f-notes').value = a.notes || '';
+  document.getElementById('f-cd').checked = !!a.cd;
+  document.getElementById('f-flac').checked = !!a.flac;
+  document.getElementById('f-mp3').checked = !!a.mp3;
+  document.getElementById('f-digital').checked = !!a.digital;
+  setModalNote(a.note || 0);
+  document.getElementById('modal-album').classList.add('open');
+}
+
+function closeAlbumModal() { document.getElementById('modal-album').classList.remove('open'); }
+
+function setModalNote(n) {
+  _modalNote = n;
+  document.querySelectorAll('#modal-stars .modal-star').forEach((s, i) => s.classList.toggle('on', i < n));
+}
+
+function saveAlbum() {
+  const artist = document.getElementById('f-artist').value.trim();
+  const album = document.getElementById('f-album').value.trim();
+  if (!artist || !album) { toast('Artiste et album requis', 'error'); return; }
+  const eid = document.getElementById('edit-id').value;
+  const data = {
+    artist, album,
+    year: document.getElementById('f-year').value.trim(),
+    genre: document.getElementById('f-genre').value.trim(),
+    cd: document.getElementById('f-cd').checked,
+    flac: document.getElementById('f-flac').checked,
+    mp3: document.getElementById('f-mp3').checked,
+    digital: document.getElementById('f-digital').checked,
+    note: _modalNote,
+    plays: parseInt(document.getElementById('f-plays').value) || 0,
+    notes: document.getElementById('f-notes').value.trim(),
+  };
+  if (eid) {
+    const idx = albums.findIndex(a => a.id == eid);
+    if (idx !== -1) albums[idx] = { ...albums[idx], ...data };
+    toast('Album mis à jour');
+  } else {
+    albums.push({ id: uid(), ...data });
+    toast('Album ajouté ✓');
+  }
+  closeAlbumModal();
+  currentPage = 1;
+  renderAlbums();
+  saveToStorage();
+}
+
+function openTrackModal() {
+  document.getElementById('t-edit-id').value = '';
+  ['title','artist','album','duration'].forEach(f => document.getElementById('t-'+f).value = '');
+  setTrackNote(0);
+  document.getElementById('modal-track').classList.add('open');
+}
+
+function closeTrackModal() { document.getElementById('modal-track').classList.remove('open'); }
+
+function setTrackNote(n) {
+  _trackNote = n;
+  document.querySelectorAll('#track-modal-stars .modal-star').forEach((s, i) => s.classList.toggle('on', i < n));
+}
+
+function saveTrack() {
+  const title = document.getElementById('t-title').value.trim();
+  const artist = document.getElementById('t-artist').value.trim();
+  if (!title || !artist) { toast('Titre et artiste requis', 'error'); return; }
+  const eid = document.getElementById('t-edit-id').value;
+  const data = {
+    title, artist,
+    album: document.getElementById('t-album').value.trim(),
+    format: document.getElementById('t-format').value,
+    duration: document.getElementById('t-duration').value.trim(),
+    note: _trackNote,
+  };
+  if (eid) {
+    const idx = tracks.findIndex(t => t.id == eid);
+    if (idx !== -1) tracks[idx] = { ...tracks[idx], ...data };
+  } else {
+    tracks.push({ id: uid(), ...data });
+    toast('Morceau ajouté ✓');
+  }
+  closeTrackModal();
+  renderTracks();
+  saveToStorage();
+}
+
+// Close modals on overlay click
+['modal-album','modal-track'].forEach(id => {
+  document.getElementById(id).addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('open');
+  });
+});
+
+// RYM threshold change
+document.addEventListener('change', e => {
+  if (e.target.id === 'rym-threshold') renderRYM();
+});
+
+// ===================== IMPORT: DISCOGS =====================
+async function importDiscogs(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-discogs');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const rows = parseCSV(text);
+    let added = 0, updated = 0;
+    rows.forEach(row => {
+      const artist = row['artist'] || row['artists'] || row['artist name'] || '';
+      const album = row['title'] || row['album'] || row['album title'] || '';
+      if (!artist || !album) return;
+      const fmt = (row['format'] || '').toLowerCase();
+      const isCd = fmt.includes('cd') || fmt.includes('vinyl') || fmt.includes('lp');
+      const year = row['released'] || row['year'] || row['date'] || '';
+      const rating = parseInt(row['rating'] || '0') || 0;
+      const key = normalizeKey(artist, album);
+      const existing = albums.find(a => normalizeKey(a.artist, a.album) === key);
+      if (existing) {
+        if (isCd) existing.cd = true;
+        if (rating && !existing.note) existing.note = Math.min(5, rating);
+        updated++;
+      } else {
+        albums.push({ id: uid(), artist, album, year: year.slice(0, 4), genre: '', cd: isCd, flac: false, mp3: false, digital: false, note: Math.min(5, rating), plays: 0 });
+        added++;
+      }
+    });
+    status.textContent = `✓ ${added} ajoutés, ${updated} mis à jour`;
+    status.className = 'status ok';
+    renderAlbums();
+    toast(`Discogs : ${added} ajoutés, ${updated} mis à jour`);
+    saveToStorage();
+  } catch (e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  }
+  input.value = '';
+}
+
+// ===================== IMPORT: MUSICBEE =====================
+async function importMusicBee(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-musicbee');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const rows = parseCSV(text);
+    let added = 0, updated = 0;
+    // Group by artist + album
+    const grouped = {};
+    rows.forEach(row => {
+      const artist = row['artist'] || row['album artist'] || row['albumartist'] || '';
+      const album = row['album'] || row['album title'] || '';
+      if (!album) return;
+      const k = normalizeKey(artist, album);
+      if (!grouped[k]) grouped[k] = { artist, album, rows: [] };
+      grouped[k].rows.push(row);
+    });
+    Object.values(grouped).forEach(g => {
+      const r = g.rows[0];
+      const fmt = (r['format'] || r['codec'] || '').toLowerCase();
+      const flac = fmt.includes('flac');
+      const mp3 = fmt.includes('mp3');
+      const year = r['year'] || r['date'] || '';
+      const genre = r['genre'] || '';
+      const plays = g.rows.reduce((s, rr) => s + (parseInt(rr['plays'] || rr['play count'] || 0) || 0), 0);
+      const key = normalizeKey(g.artist, g.album);
+      const existing = albums.find(a => normalizeKey(a.artist, a.album) === key);
+      if (existing) {
+        if (flac) existing.flac = true;
+        if (mp3) existing.mp3 = true;
+        if (plays) existing.plays = (existing.plays || 0) + plays;
+        updated++;
+      } else {
+        albums.push({ id: uid(), artist: g.artist, album: g.album, year: year.slice(0, 4), genre, cd: false, flac, mp3, digital: !flac && !mp3, note: 0, plays });
+        added++;
+      }
+    });
+    status.textContent = `✓ ${added} albums ajoutés, ${updated} mis à jour`;
+    status.className = 'status ok';
+    renderAlbums();
+    toast(`MusicBee : ${added} albums, ${updated} mis à jour`);
+    saveToStorage();
+  } catch (e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  }
+  input.value = '';
+}
+
+// ===================== IMPORT: M3U (MUSICBEE) =====================
+async function importM3U(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-musicbee');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // Détecter le type de playlist selon le nom de fichier ET les chemins
+    const fileName = file.name.toLowerCase();
+    const isTrackPlaylist = /top.?ti|top.?track|favorite|best|singles?|isolé/i.test(fileName);
+    const isStockPlaylist = /stock|00.stock|!_00/i.test(fileName);
+
+    const grouped = {};       // albums normaux
+    const isolatedTracks = []; // morceaux isolés (top titres)
+    const stockAlbums = [];    // albums stock (!_00_stock)
+    let currentMeta = null;
+
+    for (const line of lines) {
+      if (line.startsWith('#EXTINF:')) {
+        const meta = line.slice(line.indexOf(',') + 1).trim();
+        const dashIdx = meta.indexOf(' - ');
+        if (dashIdx !== -1) {
+          currentMeta = { artist: meta.slice(0, dashIdx).trim(), title: meta.slice(dashIdx + 3).trim() };
+        } else {
+          currentMeta = { artist: '', title: meta };
+        }
+      } else if (!line.startsWith('#')) {
+        const parts = line.replace(/\\/g, '/').split('/');
+        const filename = parts[parts.length - 1];
+        const ext = filename.split('.').pop().toLowerCase();
+        const isFlac = ext === 'flac';
+        const isMp3 = ext === 'mp3';
+        const isAac = ['aac','m4a','alac'].includes(ext);
+        const format = isFlac ? 'flac' : isMp3 ? 'mp3' : isAac ? 'aac' : 'autre';
+
+        let albumFromPath = '', artistFromPath = '';
+        if (parts.length >= 3) { albumFromPath = parts[parts.length-2]; artistFromPath = parts[parts.length-3]; }
+        else if (parts.length >= 2) { albumFromPath = parts[parts.length-2]; }
+
+        const artistMeta = (currentMeta?.artist || artistFromPath || '').trim();
+        const titleMeta = (currentMeta?.title || filename.replace(/\.\w+$/,'')).trim();
+        const albumRaw = albumFromPath.trim();
+        const albumClean = albumRaw.replace(/^\d+\s*[-–]\s*/,'').trim();
+        const artistClean = artistMeta.replace(/^\d+\s*[-–]\s*/,'').trim();
+
+        // Détecter le dossier dans le chemin complet
+        const pathLower = line.toLowerCase().replace(/\\/g,'/');
+        const folderIsStock = pathLower.includes('!_00_stock') || pathLower.includes('stock') || isStockPlaylist;
+        const folderIsTopTitres = pathLower.includes('top titres') || pathLower.includes('top-titres') || pathLower.includes('top_titres') || /top.?ti/i.test(albumRaw) || isTrackPlaylist;
+        const folderIsTopTracks = /top.?track|favorite|best|single|isolé/i.test(albumRaw);
+
+        if (folderIsStock) {
+          // → Stock
+          if (!artistClean && !albumClean) { currentMeta = null; continue; }
+          const key = normalizeKey(artistClean, albumClean);
+          if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
+            stockAlbums.push({ artist: artistClean, album: albumClean, format });
+          }
+        } else if (folderIsTopTitres || folderIsTopTracks) {
+          // → Morceaux isolés
+          if (!artistClean && !titleMeta) { currentMeta = null; continue; }
+          isolatedTracks.push({ title: titleMeta, artist: artistClean || artistFromPath, album: '', format });
+        } else {
+          // → Album normal
+          if (!artistClean && !albumClean) { currentMeta = null; continue; }
+          const key = normalizeKey(artistClean, albumClean);
+          if (!grouped[key]) grouped[key] = { artist: artistClean, album: albumClean, tracks: 0, flac: false, mp3: false, digital: false };
+          grouped[key].tracks++;
+          if (isFlac) grouped[key].flac = true;
+          else if (isMp3) grouped[key].mp3 = true;
+          else grouped[key].digital = true;
+        }
+        currentMeta = null;
+      }
+    }
+
+    let albumsAdded = 0, albumsUpdated = 0, tracksAdded = 0, tracksUpdated = 0, stockAdded = 0, stockUpdated = 0;
+
+    // Albums normaux
+    Object.values(grouped).forEach(g => {
+      if (!g.artist && !g.album) return;
+      const key = normalizeKey(g.artist, g.album);
+      const existing = albums.find(a => normalizeKey(a.artist, a.album) === key);
+      if (existing) { if (g.flac) existing.flac=true; if (g.mp3) existing.mp3=true; if (g.digital) existing.digital=true; albumsUpdated++; }
+      else { albums.push({ id: uid(), artist: g.artist, album: g.album, year:'', genre:'', cd:false, flac:g.flac, mp3:g.mp3, digital:g.digital, note:0, plays:0 }); albumsAdded++; }
+    });
+
+    // Morceaux isolés
+    isolatedTracks.forEach(t => {
+      if (!t.title || !t.artist) return;
+      const existing = tracks.find(x => x.title.toLowerCase()===t.title.toLowerCase() && x.artist.toLowerCase()===t.artist.toLowerCase());
+      if (existing) { tracksUpdated++; }
+      else { tracks.push({ id: uid(), title: t.title, artist: t.artist, album: '', format: t.format, duration: '', note: 0 }); tracksAdded++; }
+    });
+
+    // Stock
+    stockAlbums.forEach(s => {
+      const key = normalizeKey(s.artist, s.album);
+      const existing = stockItems.find(x => normalizeKey(x.artist, x.album) === key);
+      if (existing) { stockUpdated++; }
+      else { stockItems.push({ id: uid(), artist: s.artist, album: s.album, year:'', genre:'', format: s.format, note:0, notes:'' }); stockAdded++; }
+    });
+
+    const parts2 = [];
+    if (albumsAdded || albumsUpdated) parts2.push(`${albumsAdded} albums ajoutés, ${albumsUpdated} mis à jour`);
+    if (tracksAdded || tracksUpdated) parts2.push(`${tracksAdded} morceaux isolés`);
+    if (stockAdded || stockUpdated) parts2.push(`${stockAdded} en stock`);
+    status.textContent = `✓ M3U : ${parts2.join(' — ') || 'aucune entrée'}`;
+    status.className = 'status ok';
+    invalidateCache();
+    renderAlbums(); renderTracks(); renderStock();
+    toast(`M3U : ${albumsAdded + tracksAdded + stockAdded} nouvelles entrées`);
+    saveToStorage();
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  }
+  input.value = '';
+}
+
+
+function updateLastSyncLabel() {
+  const el = document.getElementById('lastfm-last-sync-label');
+  if (!el) return;
+  const ts = localStorage.getItem(LASTFM_SYNC_KEY);
+  if (!ts) { el.textContent = 'jamais'; return; }
+  const d = new Date(parseInt(ts) * 1000);
+  el.textContent = d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+}
+
+
+let _lastfmApiKey = 'e8aae3c9ca05ced8f56443c1108fdc65';
+let _lastfmUser = 'terant';
+let _lastfmTotalPages = 0;
+let _lastfmCurrentPage = 0;
+let _lastfmCounts = {};
+let _lastfmAbort = false;
+const LASTFM_PAGE_SIZE = 200;
+const LASTFM_BASE = 'https://ws.audioscrobbler.com/2.0/';
+const LASTFM_SYNC_KEY = 'lastfm_last_sync';
+
+async function connectLastfm() {
+  const status = document.getElementById('status-lastfm');
+  const apiKey = document.getElementById('lastfm-apikey').value.trim();
+  const user = document.getElementById('lastfm-user').value.trim();
+  if (!apiKey || !user) {
+    status.textContent = 'Clé API et nom d\'utilisateur requis.';
+    status.className = 'status err';
+    return;
+  }
+  _lastfmApiKey = apiKey;
+  _lastfmUser = user;
+  _lastfmCurrentPage = 0;
+  _lastfmTotalPages = 0;
+  _lastfmAbort = false;
+
+  localStorage.setItem('lastfm_cfg', JSON.stringify({ apiKey, user }));
+
+  // Récupérer la date du dernier scrobble connu
+  const lastSyncRaw = localStorage.getItem(LASTFM_SYNC_KEY);
+  const lastSyncTs = lastSyncRaw ? parseInt(lastSyncRaw) : 0;
+  const isIncremental = lastSyncTs > 0;
+
+  status.textContent = isIncremental
+    ? `Recherche des nouveaux scrobbles depuis le ${new Date(lastSyncTs * 1000).toLocaleDateString('fr-FR')}…`
+    : 'Première synchronisation complète…';
+  status.className = 'status';
+
+  try {
+    const infoUrl = `${LASTFM_BASE}?method=user.getinfo&user=${encodeURIComponent(user)}&api_key=${apiKey}&format=json`;
+    const infoRes = await fetch(infoUrl);
+    const infoData = await infoRes.json();
+    if (infoData.error) {
+      // Erreur 11 = service temporairement indisponible, on réessaie
+      if (infoData.error === 11 || infoData.error === 16) {
+        status.textContent = 'Serveur last.fm indisponible, nouvelle tentative dans 5s…';
+        await new Promise(r => setTimeout(r, 5000));
+        return connectLastfm();
+      }
+      status.textContent = 'Erreur last.fm : ' + infoData.message;
+      status.className = 'status err';
+      return;
+    }
+    const totalScrobbles = parseInt(infoData.user?.playcount || 0);
+
+    if (isIncremental) {
+      // Sync incrémentale : on récupère uniquement depuis lastSyncTs
+      _lastfmCounts = {};
+      // Reconstruire les counts existants depuis lastfmData sauvegardé
+      lastfmData.forEach(d => { _lastfmCounts[normalizeKey(d.artist, d.album)] = d; });
+      await fetchLastfmIncremental(lastSyncTs);
+    } else {
+      // Première fois : chargement complet
+      _lastfmCounts = {};
+      _lastfmTotalPages = Math.ceil(totalScrobbles / LASTFM_PAGE_SIZE);
+      status.textContent = `✓ Connecté — ${totalScrobbles.toLocaleString('fr-FR')} scrobbles à charger`;
+      status.className = 'status ok';
+      await fetchLastfmPage(1);
+    }
+  } catch(e) {
+    status.textContent = 'Erreur réseau : ' + e.message;
+    status.className = 'status err';
+  }
+}
+
+async function fetchLastfmIncremental(fromTs) {
+  const status = document.getElementById('status-lastfm');
+  const progress = document.getElementById('lastfm-progress');
+  const bar = document.getElementById('lastfm-bar');
+  const progressLabel = document.getElementById('lastfm-progress-label');
+  const btnMore = document.getElementById('btn-lastfm-more');
+
+  progress.style.display = 'block';
+  btnMore.style.display = 'none';
+
+  let page = 1;
+  let totalNewScrobbles = 0;
+  let latestTs = fromTs;
+  let done = false;
+
+  while (!done && !_lastfmAbort) {
+    try {
+      const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&limit=${LASTFM_PAGE_SIZE}&page=${page}&from=${fromTs + 1}&extended=0`;
+      const res = await fetch(url);
+      if (res.status === 429) {
+        progressLabel.textContent = 'Limite API, pause 10s…';
+        await new Promise(r => setTimeout(r, 10000));
+        continue;
+      }
+      const data = await res.json();
+      if (data.error) {
+        if (data.error === 11 || data.error === 16) {
+          progressLabel.textContent = 'Serveur last.fm indisponible, pause 10s…';
+          await new Promise(r => setTimeout(r, 10000));
+          continue;
+        }
+        status.textContent = 'Erreur last.fm : ' + data.message;
+        status.className = 'status err';
+        progress.style.display = 'none';
+        return;
+      }
+
+      const tracks = data.recenttracks?.track || [];
+      const totalPages = parseInt(data.recenttracks?.['@attr']?.totalPages || 1);
+      const total = parseInt(data.recenttracks?.['@attr']?.total || 0);
+
+      tracks.forEach(t => {
+        if (t['@attr']?.nowplaying) return;
+        const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+        const album = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
+        const ts = parseInt(t.date?.uts || 0);
+        if (ts > latestTs) latestTs = ts;
+        if (!artist || !album) return;
+        const k = normalizeKey(artist, album);
+        if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0 };
+        _lastfmCounts[k].plays++;
+        totalNewScrobbles++;
+      });
+
+      const pct = totalPages > 1 ? Math.round((page / totalPages) * 100) : 100;
+      bar.style.width = pct + '%';
+      progressLabel.textContent = `Page ${page}/${totalPages} — ${total.toLocaleString('fr-FR')} nouveaux scrobbles`;
+
+      if (page >= totalPages || tracks.length === 0) {
+        done = true;
+      } else {
+        page++;
+        await new Promise(r => setTimeout(r, 220));
+      }
+    } catch(e) {
+      progressLabel.textContent = 'Erreur réseau, nouvelle tentative…';
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+
+  // Finaliser
+  lastfmData = Object.values(_lastfmCounts);
+  lastfmData.forEach(d => {
+    const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
+    if (a) a.plays = d.plays;
+  });
+
+  if (latestTs > fromTs) {
+    localStorage.setItem(LASTFM_SYNC_KEY, String(latestTs));
+    updateLastSyncLabel();
+  }
+
+  const newAlbums = totalNewScrobbles;
+  progress.style.display = 'none';
+
+  if (totalNewScrobbles === 0) {
+    status.textContent = '✓ Déjà à jour — aucun nouveau scrobble';
+    status.className = 'status ok';
+  } else {
+    status.textContent = `✓ +${totalNewScrobbles.toLocaleString('fr-FR')} nouveaux scrobbles — ${lastfmData.length} albums au total`;
+    status.className = 'status ok';
+    toast(`last.fm : +${totalNewScrobbles.toLocaleString('fr-FR')} scrobbles synchronisés`);
+  }
+
+  renderAlbums();
+  updateNavBadges();
+  saveToStorage();
+}
+
+async function fetchLastfmPage(page) {
+  const status = document.getElementById('status-lastfm');
+  const progress = document.getElementById('lastfm-progress');
+  const bar = document.getElementById('lastfm-bar');
+  const progressLabel = document.getElementById('lastfm-progress-label');
+  const btnMore = document.getElementById('btn-lastfm-more');
+
+  progress.style.display = 'block';
+  btnMore.style.display = 'inline-flex';
+  btnMore.textContent = '⏸ Pause';
+  _lastfmAbort = false;
+
+  let currentPage = page;
+
+  while (currentPage <= _lastfmTotalPages && !_lastfmAbort) {
+    try {
+      const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&limit=${LASTFM_PAGE_SIZE}&page=${currentPage}&extended=0`;
+      const res = await fetch(url);
+
+      // Respecter le rate limit : si 429 on attend et on réessaie
+      if (res.status === 429) {
+        progressLabel.textContent = `Limite API atteinte, pause 10s… (page ${currentPage}/${_lastfmTotalPages})`;
+        await new Promise(r => setTimeout(r, 10000));
+        continue;
+      }
+
+      const data = await res.json();
+      if (data.error) {
+        if (data.error === 11 || data.error === 16) {
+          progressLabel.textContent = `Serveur last.fm indisponible, pause 10s… (page ${currentPage})`;
+          await new Promise(r => setTimeout(r, 10000));
+          continue;
+        }
+        status.textContent = 'Erreur last.fm : ' + data.message;
+        status.className = 'status err';
+        progress.style.display = 'none';
+        return;
+      }
+
+      const tracks = data.recenttracks?.track || [];
+      _lastfmTotalPages = parseInt(data.recenttracks?.['@attr']?.totalPages || _lastfmTotalPages);
+      _lastfmCurrentPage = parseInt(data.recenttracks?.['@attr']?.page || currentPage);
+      const totalTracks = parseInt(data.recenttracks?.['@attr']?.total || 0);
+
+      tracks.forEach(t => {
+        if (t['@attr']?.nowplaying) return;
+        const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+        const album = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
+        if (!artist || !album) return;
+        const k = normalizeKey(artist, album);
+        if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0 };
+        _lastfmCounts[k].plays++;
+      });
+
+      const pct = Math.round((currentPage / _lastfmTotalPages) * 100);
+      bar.style.width = pct + '%';
+      const scrobblesLoaded = Math.min(currentPage * LASTFM_PAGE_SIZE, totalTracks);
+      progressLabel.textContent = `Page ${currentPage}/${_lastfmTotalPages} — ${scrobblesLoaded.toLocaleString('fr-FR')} / ${totalTracks.toLocaleString('fr-FR')} scrobbles — ${Object.keys(_lastfmCounts).length} albums`;
+
+      // Mettre à jour les plays en temps réel toutes les 10 pages
+      if (currentPage % 10 === 0) {
+        lastfmData = Object.values(_lastfmCounts);
+        lastfmData.forEach(d => {
+          const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
+          if (a) a.plays = d.plays;
+        });
+        updateNavBadges();
+      }
+
+      currentPage++;
+      _lastfmCurrentPage = currentPage;
+
+      // Pause entre les requêtes pour respecter l'API last.fm (5 req/s max)
+      await new Promise(r => setTimeout(r, 220));
+
+    } catch(e) {
+      // Erreur réseau : on réessaie après 3s
+      progressLabel.textContent = `Erreur réseau, nouvelle tentative… (page ${currentPage})`;
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+
+  // Terminé ou annulé
+  lastfmData = Object.values(_lastfmCounts);
+  lastfmData.forEach(d => {
+    const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
+    if (a) a.plays = d.plays;
+  });
+
+  if (_lastfmAbort) {
+    status.textContent = `⏸ Arrêté à la page ${_lastfmCurrentPage - 1}/${_lastfmTotalPages} — ${lastfmData.length} albums chargés jusqu'ici`;
+    status.className = 'status ok';
+    btnMore.textContent = '▶ Reprendre le chargement';
+    btnMore.style.display = 'inline-flex';
+  } else {
+    // Sauvegarder le timestamp actuel comme point de départ des prochaines syncs
+    localStorage.setItem(LASTFM_SYNC_KEY, String(Math.floor(Date.now() / 1000)));
+    updateLastSyncLabel();
+    status.textContent = `✓ Complet — ${lastfmData.length} albums distincts chargés`;
+    status.className = 'status ok';
+    bar.style.width = '100%';
+    progress.style.display = 'none';
+    btnMore.style.display = 'none';
+    toast(`last.fm : ${lastfmData.length} albums synchronisés`);
+  }
+
+  renderAlbums();
+  updateNavBadges();
+  saveToStorage();
+}
+
+async function loadMoreLastfm() {
+  if (_lastfmAbort) {
+    // Reprendre depuis là où on s'est arrêté
+    _lastfmAbort = false;
+    document.getElementById('btn-lastfm-more').style.display = 'none';
+    await fetchLastfmPage(_lastfmCurrentPage);
+  } else {
+    // Mettre en pause
+    _lastfmAbort = true;
+  }
+}
+
+
+// ===================== STOCK =====================
+let _stockNote = 0;
+
+function openStockModal(id) {
+  _stockNote = 0;
+  document.getElementById('s-edit-id').value = id || '';
+  document.getElementById('modal-stock-title').textContent = id ? 'Modifier' : 'Ajouter au stock';
+  if (id) {
+    const s = stockItems.find(x => x.id === id);
+    if (s) {
+      document.getElementById('s-artist').value = s.artist;
+      document.getElementById('s-album').value = s.album;
+      document.getElementById('s-year').value = s.year || '';
+      document.getElementById('s-genre').value = s.genre || '';
+      document.getElementById('s-format').value = s.format || 'flac';
+      document.getElementById('s-notes').value = s.notes || '';
+      _stockNote = s.note || 0;
+    }
+  } else {
+    ['s-artist','s-album','s-year','s-genre','s-notes'].forEach(f => document.getElementById(f).value = '');
+    document.getElementById('s-format').value = 'flac';
+  }
+  document.querySelectorAll('#stock-modal-stars .modal-star').forEach((s,i) => s.classList.toggle('on', i < _stockNote));
+  document.getElementById('modal-stock').classList.add('open');
+}
+
+function closeStockModal() { document.getElementById('modal-stock').classList.remove('open'); }
+
+function setStockNote(n) {
+  _stockNote = n;
+  document.querySelectorAll('#stock-modal-stars .modal-star').forEach((s,i) => s.classList.toggle('on', i < n));
+}
+
+function saveStockItem() {
+  const artist = document.getElementById('s-artist').value.trim();
+  const album = document.getElementById('s-album').value.trim();
+  if (!artist || !album) { toast('Artiste et album requis', 'error'); return; }
+  const eid = parseInt(document.getElementById('s-edit-id').value) || null;
+  const data = {
+    artist, album,
+    year: document.getElementById('s-year').value.trim(),
+    genre: document.getElementById('s-genre').value.trim(),
+    format: document.getElementById('s-format').value,
+    notes: document.getElementById('s-notes').value.trim(),
+    note: _stockNote,
+    addedAt: new Date().toISOString(),
+  };
+  if (eid) {
+    const idx = stockItems.findIndex(x => x.id === eid);
+    if (idx !== -1) stockItems[idx] = { ...stockItems[idx], ...data };
+    toast('Mis à jour ✓');
+  } else {
+    stockItems.push({ id: uid(), ...data });
+    toast('Ajouté au stock ✓');
+  }
+  closeStockModal();
+  renderStock();
+  saveToStorage();
+}
+
+function deleteStockItem(id) {
+  if (!confirm('Retirer cet album du stock ?')) return;
+  stockItems = stockItems.filter(s => s.id !== id);
+  renderStock();
+  saveToStorage();
+  toast('Retiré du stock');
+}
+
+function moveStockToCollection(id) {
+  const s = stockItems.find(x => x.id === id);
+  if (!s) return;
+  const fmt = s.format || 'flac';
+  albums.push({
+    id: uid(), artist: s.artist, album: s.album, year: s.year || '', genre: s.genre || '',
+    cd: false, flac: fmt === 'flac', mp3: fmt === 'mp3', digital: fmt === 'digital' || fmt === 'autre',
+    note: s.note || 0, plays: 0, notes: s.notes || ''
+  });
+  stockItems = stockItems.filter(x => x.id !== id);
+  invalidateCache();
+  renderStock();
+  saveToStorage();
+  toast(`"${s.album}" déplacé vers la collection ✓`);
+}
+
+function renderStock() {
+  updateNavBadges();
+  const q = document.getElementById('global-search').value.toLowerCase();
+  const af = document.getElementById('filter-stock-artist')?.value || '';
+  const gf = document.getElementById('filter-stock-genre')?.value || '';
+
+  let list = stockItems.filter(s => {
+    const m = !q || (s.artist + ' ' + s.album).toLowerCase().includes(q);
+    const am = !af || s.artist === af;
+    const gm = !gf || s.genre === gf;
+    return m && am && gm;
+  }).sort((a, b) => a.artist.localeCompare(b.artist, 'fr'));
+
+  // Update artist filter
+  const artists = [...new Set(stockItems.map(s => s.artist).filter(Boolean))].sort((a,b) => a.localeCompare(b,'fr'));
+  const selA = document.getElementById('filter-stock-artist');
+  const curA = selA?.value || '';
+  if (selA) selA.innerHTML = '<option value="">Tous artistes</option>' + artists.map(a => `<option value="${esc(a)}" ${a===curA?'selected':''}>${esc(a)}</option>`).join('');
+
+  // Update genre filter
+  const genres = [...new Set(stockItems.map(s => s.genre).filter(Boolean))].sort();
+  const selG = document.getElementById('filter-stock-genre');
+  const curG = selG?.value || '';
+  if (selG) selG.innerHTML = '<option value="">Tous genres</option>' + genres.map(g => `<option value="${esc(g)}" ${g===curG?'selected':''}>${esc(g)}</option>`).join('');
+
+  const tbody = document.getElementById('stock-tbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📦</div>Aucun album en stock</div></td></tr>';
+    return;
+  }
+
+  const fmtBadge = { flac: 'badge-flac', mp3: 'badge-mp3', digital: 'badge-digital', autre: 'badge-digital' };
+  const stars = s => [1,2,3,4,5].map(i =>
+    `<button class="star ${(s.note||0)>=i?'on':''}" onclick="rateStock(${s.id},${i});event.stopPropagation()">★</button>`
+  ).join('');
+
+  tbody.innerHTML = list.map(s => `
+    <tr onclick="openStockModal(${s.id})" style="cursor:pointer">
+      <td>
+        <div class="artist-cell">
+          <div class="artist-avatar">${initials(s.artist)}</div>
+          <div class="artist-info">
+            <div class="name">${esc(s.album)}</div>
+            <div class="sub">${esc(s.artist)}</div>
+          </div>
+        </div>
+      </td>
+      <td class="mono">${s.year || '–'}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(s.genre||'–')}</td>
+      <td><span class="badge ${fmtBadge[s.format]||'badge-digital'}">${(s.format||'?').toUpperCase()}</span></td>
+      <td><div class="stars">${stars(s)}</div></td>
+      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="moveStockToCollection(${s.id})" title="Déplacer vers la collection">→ Collecter</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteStockItem(${s.id})">✕</button>
+      </td>
+    </tr>`).join('');
+}
+
+function rateStock(id, note) {
+  const s = stockItems.find(x => x.id === id);
+  if (s) { s.note = s.note === note ? 0 : note; renderStock(); saveToStorage(); }
+}
+
+function exportStockCSV() {
+  const header = ['id','artist','album','year','genre','format','note','notes'];
+  const rows = [header.join(','), ...stockItems.map(s => toCSVRow([s.id,s.artist,s.album,s.year||'',s.genre||'',s.format||'',s.note||0,s.notes||'']))];
+  download('discothèque_stock.csv', rows.join('\n'), 'text/csv');
+  toast('Export stock téléchargé ✓');
+}
+
+document.getElementById('modal-stock').addEventListener('click', function(e) {
+  if (e.target === this) closeStockModal();
+});
+
+// ===================== DISCOGRAPHIE =====================
+
+// Retourne l'id numérique lié à un cdId (via association manuelle ou auto-match)
+function getLinkedNumId(cdId) {
+  const manual = associations.find(a => a.cdId === cdId);
+  if (manual) return manual.numId;
+  return null;
+}
+
+// Un album a une sauvegarde numérique si :
+// - il a flac/mp3/digital coché sur lui-même
+// - OU il est associé manuellement à un autre album numérique
+// - OU un autre album partage le même normalizeKey et est numérique
+// Cache de lookup : Set des clés numériques pour éviter O(n²)
+function getDigitalKeysSet() {
+  if (_cache.digitalKeysSet) return _cache.digitalKeysSet;
+  _cache.digitalKeysSet = new Set(
+    albums
+      .filter(a => a.flac || a.mp3 || a.digital)
+      .map(a => normalizeKey(a.artist, a.album))
+  );
+  return _cache.digitalKeysSet;
+}
+
+function getCDKeysSet() {
+  if (_cache.cdKeysSet) return _cache.cdKeysSet;
+  _cache.cdKeysSet = new Set(
+    albums.filter(a => a.cd).map(a => normalizeKey(a.artist, a.album))
+  );
+  return _cache.cdKeysSet;
+}
+
+function hasDigitalBackup(album) {
+  if (album.flac || album.mp3 || album.digital) return true;
+  const linkedId = getLinkedNumId(album.id);
+  if (linkedId) {
+    const linked = albums.find(a => a.id === linkedId);
+    if (linked && (linked.flac || linked.mp3 || linked.digital)) return true;
+  }
+  const key = normalizeKey(album.artist, album.album);
+  return getDigitalKeysSet().has(key);
+}
+
+// Liste des CDs Discogs sans aucune sauvegarde numérique
+function getCDsWithoutBackup() {
+  if (_cache.cdsWithoutBackup) return _cache.cdsWithoutBackup;
+  _cache.cdsWithoutBackup = albums.filter(a => a.cd && !hasDigitalBackup(a));
+  return _cache.cdsWithoutBackup;
+}
+
+// Liste des entrées numériques sans CD Discogs correspondant
+function getNumericWithoutCD() {
+  if (_cache.numericWithoutCD) return _cache.numericWithoutCD;
+  const cdKeys = getCDKeysSet();
+  const linkedNumIds = new Set(associations.map(a => a.numId));
+  _cache.numericWithoutCD = albums
+    .filter(a => (a.flac || a.mp3 || a.digital) && !a.cd)
+    .filter(a => {
+      if (cdKeys.has(normalizeKey(a.artist, a.album))) return false;
+      if (linkedNumIds.has(a.id)) {
+        const link = associations.find(assoc => assoc.numId === a.id);
+        const cdAlbum = link ? albums.find(b => b.id === link.cdId) : null;
+        if (cdAlbum && cdAlbum.cd) return false;
+      }
+      return true;
+    });
+  return _cache.numericWithoutCD;
+}
+
+function discoFilteredList() {
+  const filter = document.getElementById('disco-filter')?.value || 'all';
+  const sort = document.getElementById('disco-sort')?.value || 'artist';
+  const q = document.getElementById('global-search').value.toLowerCase();
+
+  let list = [];
+  if (filter === 'no-cd') {
+    list = getNumericWithoutCD();
+  } else {
+    list = albums.filter(a => a.cd);
+    if (filter === 'missing') list = list.filter(a => !hasDigitalBackup(a));
+    if (filter === 'ok') list = list.filter(a => hasDigitalBackup(a));
+  }
+
+  if (q) list = list.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
+
+  return [...list].sort((a, b) => {
+    if (sort === 'year') return (b.year || 0) - (a.year || 0);
+    if (sort === 'album') return (a.album || '').localeCompare(b.album || '', 'fr');
+    return (a.artist || '').localeCompare(b.artist || '', 'fr');
+  });
+}
+
+function renderDiscographie() {
+  const all = albums.filter(a => a.cd);
+  const saved = all.filter(a => hasDigitalBackup(a));
+  const missingNum = getCDsWithoutBackup();
+  const noCD = getNumericWithoutCD();
+
+  document.getElementById('disco-total').textContent = all.length;
+  document.getElementById('disco-saved').textContent = saved.length;
+  document.getElementById('disco-missing-num').textContent = missingNum.length;
+  document.getElementById('disco-missing-cd').textContent = noCD.length;
+
+  const list = discoFilteredList();
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (discoPage > pages) discoPage = pages;
+  const slice = list.slice((discoPage - 1) * PAGE_SIZE, discoPage * PAGE_SIZE);
+
+  const tbody = document.getElementById('disco-tbody');
+  if (!slice.length) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
+    document.getElementById('disco-page-info').textContent = '';
+    updateNavBadges();
+    return;
+  }
+
+  const filter = document.getElementById('disco-filter')?.value || 'all';
+
+  tbody.innerHTML = slice.map(a => {
+    const isCD = a.cd;
+    const hasNum = hasDigitalBackup(a);
+    const linkedId = getLinkedNumId(a.id);
+    const linked = linkedId ? albums.find(b => b.id === linkedId) : null;
+
+    // Statut
+    let statusBadge = '';
+    if (filter === 'no-cd') {
+      statusBadge = '<span class="badge badge-digital">Numérique</span>';
+    } else if (hasNum) {
+      statusBadge = '<span class="badge badge-flac" style="background:rgba(200,240,100,0.15);color:var(--accent)">✅ Sauvegardé</span>';
+    } else {
+      statusBadge = '<span class="badge badge-missing">⚠️ Sans backup</span>';
+    }
+
+    // Supports liés
+    const numBadges = [];
+    if (a.flac || (linked && linked.flac)) numBadges.push('<span class="badge badge-flac">FLAC</span>');
+    if (a.mp3 || (linked && linked.mp3)) numBadges.push('<span class="badge badge-mp3">MP3</span>');
+    if (a.digital || (linked && linked.digital)) numBadges.push('<span class="badge badge-digital">Digital</span>');
+    if (linked) numBadges.push(`<span class="badge" style="background:var(--purple-dim);color:var(--purple);border:1px solid rgba(176,140,255,0.2)">🔗 ${esc(linked.album)}</span>`);
+
+    // Bouton associer (seulement pour CDs sans backup ou backup partiel)
+    const assocBtn = isCD
+      ? `<button class="btn btn-sm" onclick="openAssocModal(${a.id})" title="Associer à une entrée numérique">🔗 Associer</button>`
+      : '';
+    const unlinkBtn = linkedId
+      ? `<button class="btn btn-sm btn-danger" onclick="removeAssociation(${a.id})" title="Supprimer l'association">✕</button>`
+      : '';
+
+    const stars = [1,2,3,4,5].map(i =>
+      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderDiscographie();event.stopPropagation()">★</button>`
+    ).join('');
+
+    return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
+      <td>
+        <div class="artist-cell">
+          <div class="artist-avatar">${initials(a.artist)}</div>
+          <div class="artist-info">
+            <div class="name">${esc(a.album)}</div>
+            <div class="sub">${esc(a.artist)}</div>
+          </div>
+        </div>
+      </td>
+      <td class="mono">${a.year || '–'}</td>
+      <td>${statusBadge}</td>
+      <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
+      <td><div class="stars">${stars}</div></td>
+      <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
+        ${assocBtn}${unlinkBtn}
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('disco-page-info').textContent = `Page ${discoPage} / ${pages} — ${total} entrées`;
+  updateNavBadges();
+}
+
+function prevDiscoPage() { if (discoPage > 1) { discoPage--; renderDiscographie(); } }
+function nextDiscoPage() {
+  const pages = Math.ceil(discoFilteredList().length / PAGE_SIZE);
+  if (discoPage < pages) { discoPage++; renderDiscographie(); }
+}
+
+// ===================== ASSOCIATION =====================
+let _assocTargetId = null;
+
+function openAssocModal(cdId) {
+  _assocTargetId = cdId;
+  const a = albums.find(x => x.id === cdId);
+  document.getElementById('assoc-cd-info').innerHTML =
+    `<strong>CD :</strong> ${esc(a?.album)} — ${esc(a?.artist)} ${a?.year ? '(' + a.year + ')' : ''}`;
+  document.getElementById('assoc-search').value = a?.artist || '';
+  renderAssocList();
+  document.getElementById('modal-assoc').classList.add('open');
+}
+
+function closeAssocModal() {
+  document.getElementById('modal-assoc').classList.remove('open');
+  _assocTargetId = null;
+}
+
+function renderAssocList() {
+  const q = document.getElementById('assoc-search').value.toLowerCase();
+  const cdAlbum = albums.find(a => a.id === _assocTargetId);
+
+  // Candidats : albums numériques (flac/mp3/digital) non déjà associés comme numId
+  const usedNumIds = new Set(associations.map(a => a.numId));
+  const candidates = albums
+    .filter(a => (a.flac || a.mp3 || a.digital) && a.id !== _assocTargetId && !usedNumIds.has(a.id))
+    .filter(a => !q || (a.artist + ' ' + a.album).toLowerCase().includes(q))
+    .sort((a, b) => a.artist.localeCompare(b.artist, 'fr'));
+
+  const el = document.getElementById('assoc-list');
+  if (!candidates.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:12px">Aucune entrée numérique trouvée</div>';
+    return;
+  }
+
+  el.innerHTML = candidates.map(a => {
+    const numBadges = [
+      a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
+      a.mp3 ? '<span class="badge badge-mp3">MP3</span>' : '',
+      a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
+    ].filter(Boolean).join('');
+    // Score de similarité pour affichage visuel
+    const cdKey = normalizeKey(cdAlbum?.artist || '', cdAlbum?.album || '');
+    const aKey = normalizeKey(a.artist, a.album);
+    const similar = cdKey === aKey;
+    return `<div style="background:${similar ? 'var(--accent-dim)' : 'var(--bg3)'};border:1px solid ${similar ? 'rgba(200,240,100,0.3)' : 'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociation(${a.id})">
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(a.album)}</div>
+        <div style="font-size:11px;color:var(--text2)">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
+      </div>
+      <div style="display:flex;gap:4px">${numBadges}</div>
+      ${similar ? '<span style="font-size:10px;color:var(--accent);font-family:var(--mono)">≈ match</span>' : ''}
+    </div>`;
+  }).join('');
+}
+
+function applyAssociation(numId) {
+  if (!_assocTargetId) return;
+  // Supprimer association existante pour ce cdId
+  associations = associations.filter(a => a.cdId !== _assocTargetId);
+  associations.push({ cdId: _assocTargetId, numId });
+  closeAssocModal();
+  renderDiscographie();
+  saveToStorage();
+  toast('Association créée ✓');
+}
+
+function removeAssociation(cdId) {
+  associations = associations.filter(a => a.cdId !== cdId);
+  renderDiscographie();
+  saveToStorage();
+  toast('Association supprimée');
+}
+
+document.getElementById('modal-assoc').addEventListener('click', function(e) {
+  if (e.target === this) closeAssocModal();
+});
+
+
+async function importRYM(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-rym');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const rows = parseCSV(text);
+    let imported = 0;
+    const parsed = [];
+    rows.forEach(row => {
+      // Colonnes export natif RYM :
+      // "RYM Rating","First Name","Last Name","Title","Release_Date","Genres","Labels","Catalog#","Review"
+      // Ou variante : "Rating","Artist","Album"
+      const rating = parseFloat(
+        row['rym rating'] || row['rating'] || row['note'] || '0'
+      );
+      if (!rating) return;
+
+      // Nom artiste : soit colonne "Artist", soit "First Name" + "Last Name"
+      let artist = row['artist'] || row['artist name'] || '';
+      if (!artist) {
+        const fn = (row['first name'] || '').trim();
+        const ln = (row['last name'] || '').trim();
+        artist = [fn, ln].filter(Boolean).join(' ');
+      }
+
+      const album = row['title'] || row['album'] || row['album title'] || '';
+      if (!artist || !album) return;
+
+      const year = (row['release_date'] || row['year'] || '').slice(0, 4);
+      const genre = row['genres'] || row['genre'] || '';
+
+      parsed.push({ artist: artist.trim(), album: album.trim(), rating, year, genre });
+      imported++;
+    });
+
+    rymData = parsed;
+    status.textContent = `✓ ${imported} ratings RYM chargés`;
+    status.className = 'status ok';
+    renderRYM();
+    updateNavBadges();
+    saveToStorage();
+    toast(`RYM : ${imported} ratings importés`);
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  }
+  input.value = '';
+}
+
+function getRYMThreshold() {
+  const sel = document.getElementById('rym-threshold');
+  return sel ? parseFloat(sel.value) : 3.5;
+}
+
+// Albums notés >= seuil sur RYM mais absents de la collection (CD ou numérique)
+function computeRYMMissing() {
+  if (_cache.rymMissing) return _cache.rymMissing;
+  if (!rymData.length) return (_cache.rymMissing = []);
+  const threshold = getRYMThreshold();
+  const ownedKeys = new Set(albums.filter(a => a.cd || a.flac || a.mp3 || a.digital).map(a => normalizeKey(a.artist, a.album)));
+  _cache.rymMissing = rymData
+    .filter(r => r.rating >= threshold && !ownedKeys.has(normalizeKey(r.artist, r.album)))
+    .sort((a, b) => b.rating - a.rating);
+  return _cache.rymMissing;
+}
+
+// Albums de la collection (CD ou numérique) absents de RYM
+function computeCollectionNotOnRYM() {
+  if (!rymData.length) return [];
+  const rymKeys = new Set(rymData.map(r => normalizeKey(r.artist, r.album)));
+  return albums
+    .filter(a => (a.cd || a.flac || a.mp3 || a.digital))
+    .filter(a => !rymKeys.has(normalizeKey(a.artist, a.album)))
+    .sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album, 'fr'));
+}
+
+function rymStars(rating) {
+  // RYM note sur 5 avec demi-étoiles
+  const full = Math.floor(rating);
+  const half = rating % 1 >= 0.25 && rating % 1 < 0.75;
+  let s = '';
+  for (let i = 1; i <= 5; i++) {
+    if (i <= full) s += '<span style="color:var(--amber)">★</span>';
+    else if (i === full + 1 && half) s += '<span style="color:var(--amber);opacity:0.5">★</span>';
+    else s += '<span style="color:var(--border2)">★</span>';
+  }
+  return `<span style="font-size:13px">${s}</span> <span style="font-family:var(--mono);font-size:11px;color:var(--text2)">${rating.toFixed(2)}</span>`;
+}
+
+function renderRYM() {
+  if (!rymData.length) {
+    document.getElementById('rym-missing-list').innerHTML =
+      '<div class="empty"><div class="empty-icon">⭐</div>Chargez votre fichier ratings.csv RYM ci-dessus.</div>';
+    document.getElementById('rym-unrated-list').innerHTML = '';
+    document.getElementById('rym-missing-count').textContent = '0';
+    document.getElementById('rym-unrated-count').textContent = '0';
+    return;
+  }
+
+  const q = document.getElementById('global-search').value.toLowerCase();
+
+  // --- Notés sur RYM mais absents de la collection ---
+  let missing = computeRYMMissing();
+  if (q) missing = missing.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  document.getElementById('rym-missing-count').textContent = missing.length;
+  const missingEl = document.getElementById('rym-missing-list');
+  if (!missing.length) {
+    missingEl.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-icon">✅</div>Aucun manquant au-dessus du seuil !</div>';
+  } else {
+    missingEl.innerHTML = missing.map(r => `
+      <div class="missing-card" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div style="display:flex;align-items:center;gap:10px;width:100%">
+          <div style="flex:1">
+            <div class="missing-info" style="margin:0">
+              <div class="title">${esc(r.album)}</div>
+              <div class="sub">${esc(r.artist)}${r.year ? ' · ' + r.year : ''}</div>
+            </div>
+          </div>
+          ${rymStars(r.rating)}
+          <button class="btn btn-sm" onclick="addFromRYM('${encodeURIComponent(r.artist)}','${encodeURIComponent(r.album)}','${r.year||''}','${encodeURIComponent(r.genre||'')}')">＋ Ajouter</button>
+        </div>
+        ${r.genre ? `<div style="font-size:11px;color:var(--text3)">${esc(r.genre)}</div>` : ''}
+      </div>`).join('');
+  }
+
+  // --- Dans la collection mais absents de RYM ---
+  let unrated = computeCollectionNotOnRYM();
+  if (q) unrated = unrated.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
+  document.getElementById('rym-unrated-count').textContent = unrated.length;
+  const unratedEl = document.getElementById('rym-unrated-list');
+  if (!unrated.length) {
+    unratedEl.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-icon">✅</div>Tous vos albums sont sur RYM !</div>';
+  } else {
+    unratedEl.innerHTML = unrated.map(a => {
+      const badges = [
+        a.cd ? '<span class="badge badge-cd">CD</span>' : '',
+        a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
+        a.mp3 ? '<span class="badge badge-mp3">MP3</span>' : '',
+      ].filter(Boolean).join('');
+      return `
+        <div class="missing-card">
+          <div class="artist-avatar">${initials(a.artist)}</div>
+          <div class="missing-info">
+            <div class="title">${esc(a.album)}</div>
+            <div class="sub">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
+            <div style="display:flex;gap:4px;margin-top:4px">${badges}</div>
+          </div>
+          <span class="badge badge-missing">Non noté</span>
+        </div>`;
+    }).join('');
+  }
+
+  updateNavBadges();
+}
+
+function addFromRYM(artist, album, year, genre) {
+  document.getElementById('f-artist').value = decodeURIComponent(artist);
+  document.getElementById('f-album').value = decodeURIComponent(album);
+  document.getElementById('f-year').value = year || '';
+  document.getElementById('f-genre').value = decodeURIComponent(genre);
+  document.getElementById('edit-id').value = '';
+  setModalNote(0);
+  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
+  document.getElementById('modal-album').classList.add('open');
+  nav('albums');
+}
+
+// ===================== RYM SCRAPER =====================
+let _rymScrapeAbort = false;
+
+async function scrapeRYM() {
+  const username = document.getElementById('rym-username').value.trim();
+  if (!username) { toast('Entrez votre pseudo RYM', 'error'); return; }
+
+  const status = document.getElementById('status-rym-scrape');
+  const progress = document.getElementById('rym-scrape-progress');
+  const bar = document.getElementById('rym-scrape-bar');
+  const label = document.getElementById('rym-scrape-label');
+  const btnStop = document.getElementById('btn-rym-stop');
+
+  status.textContent = 'Connexion à RateYourMusic…';
+  status.className = 'status';
+  progress.style.display = 'block';
+  bar.style.width = '0%';
+  btnStop.style.display = 'inline-flex';
+  _rymScrapeAbort = false;
+
+  // On utilise allorigins comme proxy CORS
+  const PROXY = 'https://api.allorigins.win/get?url=';
+  const parsed = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && !_rymScrapeAbort) {
+    try {
+      const rymUrl = `https://rateyourmusic.com/collection_p/${encodeURIComponent(username)}/r0.5-5.0/${page}/`;
+      const proxyUrl = PROXY + encodeURIComponent(rymUrl);
+      label.textContent = `Page ${page}/${totalPages === 1 ? '?' : totalPages} — ${parsed.length} ratings récupérés`;
+
+      const res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const html = json.contents;
+
+      if (!html) throw new Error('Réponse vide du proxy');
+
+      // Parser le HTML avec DOMParser
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+
+      // Détecter le nombre total de pages
+      if (page === 1) {
+        // Chercher le dernier numéro de page dans la pagination
+        const pageLinks = doc.querySelectorAll('.navspan, .page_link, [class*="page"]');
+        let maxPage = 1;
+        pageLinks.forEach(el => {
+          const n = parseInt(el.textContent.trim());
+          if (!isNaN(n) && n > maxPage) maxPage = n;
+        });
+        // Fallback : chercher dans les liens de pagination
+        if (maxPage === 1) {
+          doc.querySelectorAll('a[href*="collection_p"]').forEach(a => {
+            const m = a.href.match(/\/(\d+)\/?$/);
+            if (m) { const n = parseInt(m[1]); if (n > maxPage) maxPage = n; }
+          });
+        }
+        totalPages = Math.max(1, maxPage);
+      }
+
+      // Extraire les ratings — structure RYM : .or_q_albumrating_txt ou .page_collection_item
+      // Plusieurs sélecteurs pour couvrir différentes versions de la page RYM
+      const items = doc.querySelectorAll(
+        '.page_collection_item, .or_q_albumartist, tr[id^="lpref"]'
+      );
+
+      if (items.length === 0) {
+        // Essayer une structure alternative
+        const rows = doc.querySelectorAll('tr');
+        rows.forEach(row => {
+          const ratingEl = row.querySelector('.or_q_albumrating_txt, [class*="rating"]');
+          const titleEl = row.querySelector('.or_q_albumartist_links_pub a, a[href*="/release/"]');
+          const artistEl = row.querySelector('a[href*="/artist/"]');
+          if (!ratingEl || !titleEl) return;
+
+          const ratingText = ratingEl.textContent.trim().replace(',', '.');
+          const rating = parseFloat(ratingText);
+          if (!rating || rating < 0.5) return;
+
+          const album = titleEl.textContent.trim();
+          const artist = artistEl ? artistEl.textContent.trim() : '';
+          if (!album) return;
+
+          // Année et genre
+          const yearEl = row.querySelector('.or_q_albumartist_txt');
+          const year = yearEl ? (yearEl.textContent.match(/\b(19|20)\d{2}\b/) || [])[0] || '' : '';
+
+          parsed.push({ artist, album, rating, year, genre: '' });
+        });
+      } else {
+        items.forEach(item => {
+          // Essayer d'extraire artiste, album, note
+          const ratingEl = item.querySelector('[class*="rating"], .or_q_albumrating_txt');
+          const albumEl = item.querySelector('a[href*="/release/"]');
+          const artistEl = item.querySelector('a[href*="/artist/"]');
+
+          if (!ratingEl || !albumEl) return;
+          const ratingText = ratingEl.textContent.trim().replace(',', '.');
+          const rating = parseFloat(ratingText);
+          if (!rating || rating < 0.5) return;
+
+          const album = albumEl.textContent.trim();
+          const artist = artistEl ? artistEl.textContent.trim() : '';
+          if (!album) return;
+
+          const yearEl = item.querySelector('[class*="year"], .or_q_albumartist_txt');
+          const year = yearEl ? (yearEl.textContent.match(/\b(19|20)\d{2}\b/) || [])[0] || '' : '';
+          const genreEl = item.querySelector('[class*="genre"]');
+          const genre = genreEl ? genreEl.textContent.trim() : '';
+
+          parsed.push({ artist, album, rating, year, genre });
+        });
+      }
+
+      const pct = Math.round((page / totalPages) * 100);
+      bar.style.width = pct + '%';
+      label.textContent = `Page ${page}/${totalPages} — ${parsed.length} ratings`;
+
+      page++;
+      if (page <= totalPages) await new Promise(r => setTimeout(r, 1500)); // pause entre pages
+    } catch(e) {
+      status.textContent = 'Erreur page ' + page + ' : ' + e.message;
+      status.className = 'status err';
+      // Réessayer une fois après 3s
+      await new Promise(r => setTimeout(r, 3000));
+      if (_rymScrapeAbort) break;
+    }
+  }
+
+  btnStop.style.display = 'none';
+  progress.style.display = 'none';
+
+  if (parsed.length === 0) {
+    status.textContent = '⚠️ Aucun rating trouvé. La structure HTML de RYM a peut-être changé, ou votre profil est privé.';
+    status.className = 'status err';
+    return;
+  }
+
+  // Dédupliquer et fusionner avec rymData existant
+  const newItems = [];
+  parsed.forEach(r => {
+    const key = normalizeKey(r.artist, r.album);
+    const existing = rymData.find(x => normalizeKey(x.artist, x.album) === key);
+    if (existing) {
+      existing.rating = r.rating;
+      if (r.year) existing.year = r.year;
+      if (r.genre) existing.genre = r.genre;
+    } else {
+      newItems.push(r);
+    }
+  });
+  rymData = [...rymData, ...newItems];
+  invalidateCache();
+
+  status.textContent = `✓ ${parsed.length} ratings importés (${newItems.length} nouveaux, ${parsed.length - newItems.length} mis à jour)`;
+  status.className = 'status ok';
+  renderRYM();
+  updateNavBadges();
+  saveToStorage();
+  toast(`RYM : ${parsed.length} ratings importés`);
+}
+
+function stopRYMScrape() {
+  _rymScrapeAbort = true;
+  document.getElementById('btn-rym-stop').style.display = 'none';
+}
+
+// ===================== REIMPORT CSV =====================
+async function reimportCSV(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-reimport');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const rows = parseCSV(text);
+    let added = 0, updated = 0;
+    rows.forEach(row => {
+      const artist = row['artist'] || '';
+      const album = row['album'] || '';
+      if (!artist || !album) return;
+      const id = parseInt(row['id']) || null;
+      const data = {
+        artist, album,
+        year: row['year'] || '',
+        genre: row['genre'] || '',
+        cd: row['cd'] === 'true' || row['cd'] === '1',
+        flac: row['flac'] === 'true' || row['flac'] === '1',
+        mp3: row['mp3'] === 'true' || row['mp3'] === '1',
+        digital: row['digital'] === 'true' || row['digital'] === '1',
+        note: parseInt(row['note']) || 0,
+        plays: parseInt(row['plays']) || 0,
+        notes: row['notes'] || '',
+      };
+      const existing = id ? albums.find(a => a.id === id) : albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
+      if (existing) {
+        Object.assign(existing, data);
+        updated++;
+      } else {
+        albums.push({ id: id || uid(), ...data });
+        added++;
+      }
+    });
+    status.textContent = `✓ ${added} ajoutés, ${updated} mis à jour`;
+    status.className = 'status ok';
+    renderAlbums();
+    toast(`Réimport : ${added} ajoutés, ${updated} mis à jour`);
+    saveToStorage();
+  } catch (e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  }
+  input.value = '';
+}
+
+// ===================== EXPORT =====================
+function exportCSV() {
+  const header = ['id','artist','album','year','genre','cd','flac','mp3','digital','note','plays','notes'];
+  const rows = [header.join(','), ...albums.map(a => toCSVRow([
+    a.id, a.artist, a.album, a.year||'', a.genre||'',
+    a.cd?'true':'false', a.flac?'true':'false', a.mp3?'true':'false', a.digital?'true':'false',
+    a.note||0, a.plays||0, a.notes||''
+  ]))];
+  download('discothèque_albums.csv', rows.join('\n'), 'text/csv');
+  toast('Export CSV téléchargé ✓');
+}
+
+function exportTracksCSV() {
+  const header = ['id','title','artist','album','format','duration','note'];
+  const rows = [header.join(','), ...tracks.map(t => toCSVRow([t.id, t.title, t.artist, t.album||'', t.format, t.duration||'', t.note||0]))];
+  download('discothèque_morceaux.csv', rows.join('\n'), 'text/csv');
+  toast('Export morceaux téléchargé ✓');
+}
+
+function exportJSON() {
+  const data = JSON.stringify({ albums, tracks, lastfmData, exportedAt: new Date().toISOString() }, null, 2);
+  download('discothèque_backup.json', data, 'application/json');
+  toast('Export JSON téléchargé ✓');
+}
+
+function download(filename, content, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type }));
+  a.download = filename;
+  a.click();
+}
+
+function clearAll() {
+  if (!confirm('Vider toute la collection ET effacer la sauvegarde locale ?')) return;
+  albums = []; tracks = []; stockItems = []; lastfmData = []; rymData = []; associations = [];
+  localStorage.removeItem(LS_KEY);
+  if (window._db) {
+    window._db.collection('discotheque').doc('collection').delete().catch(()=>{});
+  }
+  setSaveIndicator('none');
+  renderAlbums(); renderTracks(); updateNavBadges();
+  toast('Collection vidée');
+}
+
+// ===================== DEMO DATA =====================
+function loadDemo() {
+  albums = [
+    { id: uid(), artist: 'Miles Davis', album: 'Kind of Blue', year: '1959', genre: 'Jazz', cd: true, flac: true, mp3: false, digital: false, note: 5, plays: 42, notes: '' },
+    { id: uid(), artist: 'Pink Floyd', album: 'The Dark Side of the Moon', year: '1973', genre: 'Rock', cd: true, flac: false, mp3: false, digital: false, note: 5, plays: 28, notes: '' },
+    { id: uid(), artist: 'Daft Punk', album: 'Random Access Memories', year: '2013', genre: 'Électro', cd: false, flac: true, mp3: false, digital: false, note: 4, plays: 55, notes: '' },
+    { id: uid(), artist: 'Massive Attack', album: 'Mezzanine', year: '1998', genre: 'Trip-hop', cd: true, flac: true, mp3: false, digital: false, note: 5, plays: 19, notes: '' },
+    { id: uid(), artist: 'Radiohead', album: 'OK Computer', year: '1997', genre: 'Rock', cd: false, flac: false, mp3: true, digital: false, note: 4, plays: 31, notes: '' },
+    { id: uid(), artist: 'Björk', album: 'Homogenic', year: '1997', genre: 'Art pop', cd: false, flac: true, mp3: false, digital: false, note: 0, plays: 12, notes: '' },
+    { id: uid(), artist: 'Can', album: 'Tago Mago', year: '1971', genre: 'Krautrock', cd: true, flac: false, mp3: false, digital: false, note: 5, plays: 8, notes: 'Édition originale United Artists' },
+    { id: uid(), artist: 'John Coltrane', album: 'A Love Supreme', year: '1964', genre: 'Jazz', cd: true, flac: true, mp3: false, digital: false, note: 5, plays: 37, notes: '' },
+    { id: uid(), artist: 'Portishead', album: 'Dummy', year: '1994', genre: 'Trip-hop', cd: true, flac: false, mp3: false, digital: false, note: 5, plays: 22, notes: '' },
+    { id: uid(), artist: 'Aphex Twin', album: 'Selected Ambient Works 85-92', year: '1992', genre: 'Électro', cd: false, flac: true, mp3: false, digital: false, note: 4, plays: 15, notes: '' },
+  ];
+  tracks = [
+    { id: uid(), title: 'One More Time', artist: 'Daft Punk', album: 'Discovery', format: 'mp3', duration: '5:20', note: 5 },
+    { id: uid(), title: 'Teardrop', artist: 'Massive Attack', album: 'Mezzanine', format: 'flac', duration: '5:30', note: 4 },
+    { id: uid(), title: 'Karma Police', artist: 'Radiohead', album: 'OK Computer', format: 'flac', duration: '4:21', note: 5 },
+  ];
+  lastfmData = [
+    { artist: 'Burial', album: 'Untrue', plays: 18 },
+    { artist: 'The xx', album: 'xx', plays: 14 },
+    { artist: 'Four Tet', album: 'There Is Love In You', plays: 11 },
+    { artist: 'Portishead', album: 'Third', plays: 9 },
+  ];
+}
+
+// ===================== STARTUP =====================
+async function initApp() {
+  const restored = loadFromStorage();
+  if (!restored) {
+    loadDemo();
+    saveToStorage();
+  }
+  // Restaurer config last.fm et reconnecter automatiquement
+  const lfmCfg = localStorage.getItem('lastfm_cfg');
+  if (lfmCfg) {
+    try {
+      const { apiKey, user } = JSON.parse(lfmCfg);
+      const el1 = document.getElementById('lastfm-apikey');
+      const el2 = document.getElementById('lastfm-user');
+      if (el1) el1.value = apiKey;
+      if (el2) el2.value = user;
+      _lastfmApiKey = apiKey;
+      _lastfmUser = user;
+    } catch(e) {}
+  } else {
+    // Config par défaut intégrée : lancer la synchro last.fm silencieusement
+    setTimeout(() => connectLastfm(), 1500);
+  }
+  // Afficher date dernière sync
+  updateLastSyncLabel();
+  renderAlbums();
+  renderTracks();
+  updateNavBadges();
+}
+
+(async function startup() {
+  const savedCfg = localStorage.getItem(LS_CFG);
+  if (!savedCfg) {
+    // Première ouverture : tenter connexion automatique avec la config intégrée
+    loadDemo();
+    const ok = await connectFirebase(FIREBASE_CONFIG_DEFAULT);
+    if (!ok) {
+      // Afficher l'écran de config si la connexion auto échoue
+      document.getElementById('firebase-setup').style.display = 'flex';
+    }
+  } else if (savedCfg === 'skip') {
+    await initApp();
+  } else {
+    try {
+      const cfg = JSON.parse(savedCfg);
+      const ok = await connectFirebase(cfg);
+      if (!ok) await initApp();
+    } catch(e) {
+      await initApp();
+    }
+  }
+})();
+</script>
+</body>
+</html>
