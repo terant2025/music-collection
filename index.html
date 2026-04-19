@@ -2103,7 +2103,18 @@ async function importMusicBee(input) {
     const text = await readFile(file);
     const rows = parseCSV(text);
     let added = 0, updated = 0;
-    // Group by artist + album
+
+    // Convertir une note MusicBee en étoiles 0-5
+    // MusicBee exporte en % (0,20,40,60,80,100) ou en 0-5 selon la version
+    function parseMBRating(raw) {
+      if (!raw && raw !== 0) return 0;
+      const n = parseFloat(raw);
+      if (isNaN(n)) return 0;
+      if (n > 5) return Math.round(n / 20); // format % → étoiles
+      return Math.round(n); // déjà en étoiles
+    }
+
+    // Grouper par album — prendre la note max des morceaux
     const grouped = {};
     rows.forEach(row => {
       const artist = row['artist'] || row['album artist'] || row['albumartist'] || '';
@@ -2113,6 +2124,7 @@ async function importMusicBee(input) {
       if (!grouped[k]) grouped[k] = { artist, album, rows: [] };
       grouped[k].rows.push(row);
     });
+
     Object.values(grouped).forEach(g => {
       const r = g.rows[0];
       const fmt = (r['format'] || r['codec'] || '').toLowerCase();
@@ -2122,12 +2134,15 @@ async function importMusicBee(input) {
       const genre = r['genre'] || '';
       const plays = g.rows.reduce((s, rr) => s + (parseInt(rr['plays'] || rr['play count'] || 0) || 0), 0);
 
-      // Appariement : d'abord par discogsId si présent dans le CSV MusicBee, sinon par clé normalisée
+      // Note : prendre la valeur max parmi tous les morceaux de l'album
+      const note = Math.max(0, ...g.rows.map(rr =>
+        parseMBRating(rr['rating'] || rr['rating (0-5)'] || rr['stars'] || rr['note'] || rr['track rating'] || 0)
+      ));
+
       const discogsId = r['discogs_id'] || r['discogs id'] || '';
       let existing = discogsId ? albums.find(a => a.discogsId === discogsId) : null;
       if (!existing) {
         const key = normalizeKey(g.artist, g.album);
-        // Essayer aussi avec l'artiste nettoyé (sans les (2) Discogs)
         existing = albums.find(a =>
           normalizeKey(a.artist, a.album) === key ||
           normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key
@@ -2139,13 +2154,30 @@ async function importMusicBee(input) {
         if (mp3) existing.mp3 = true;
         if (plays) existing.plays = (existing.plays || 0) + plays;
         if (genre && !existing.genre) existing.genre = genre;
+        if (note && !existing.note) existing.note = note; // n'écrase pas une note existante
         updated++;
       } else {
-        albums.push({ id: uid(), artist: g.artist, album: g.album, year: year.slice(0, 4), genre, cd: false, flac, mp3, digital: !flac && !mp3, note: 0, plays });
+        albums.push({ id: uid(), artist: g.artist, album: g.album, year: year.slice(0, 4), genre, cd: false, flac, mp3, digital: !flac && !mp3, note, plays });
         added++;
       }
     });
-    status.textContent = `✓ ${added} albums ajoutés, ${updated} mis à jour`;
+
+    // Morceaux isolés : noter aussi les tracks individuels
+    let tracksRated = 0;
+    rows.forEach(row => {
+      const title = row['title'] || row['track title'] || '';
+      const artist = row['artist'] || '';
+      if (!title || !artist) return;
+      const note = parseMBRating(row['rating'] || row['rating (0-5)'] || row['stars'] || row['note'] || 0);
+      if (!note) return;
+      const existing = tracks.find(t =>
+        t.title.toLowerCase() === title.toLowerCase() &&
+        t.artist.toLowerCase() === artist.toLowerCase()
+      );
+      if (existing && !existing.note) { existing.note = note; tracksRated++; }
+    });
+
+    status.textContent = `✓ ${added} albums ajoutés, ${updated} mis à jour${tracksRated ? `, ${tracksRated} morceaux notés` : ''}`;
     status.className = 'status ok';
     renderAlbums();
     toast(`MusicBee : ${added} albums, ${updated} mis à jour`);
@@ -2178,13 +2210,23 @@ async function importM3U(input) {
 
     for (const line of lines) {
       if (line.startsWith('#EXTINF:')) {
+        // Format MusicBee étendu : #EXTINF:duration,Artist - Title
+        // ou avec tags : #EXTINF:duration tvg-name="..." rating="80"
         const meta = line.slice(line.indexOf(',') + 1).trim();
         const dashIdx = meta.indexOf(' - ');
-        if (dashIdx !== -1) {
-          currentMeta = { artist: meta.slice(0, dashIdx).trim(), title: meta.slice(dashIdx + 3).trim() };
-        } else {
-          currentMeta = { artist: '', title: meta };
-        }
+        let artist = '', title = meta;
+        if (dashIdx !== -1) { artist = meta.slice(0, dashIdx).trim(); title = meta.slice(dashIdx + 3).trim(); }
+
+        // Extraire la note depuis les attributs EXTINF si présents
+        // Formats possibles : rating="80" ou #RATING:80 sur la ligne suivante
+        const ratingMatch = line.match(/rating[=:]["']?(\d+)/i);
+        const rating = ratingMatch ? Math.round(parseInt(ratingMatch[1]) / 20) : 0; // % → étoiles
+
+        currentMeta = { artist, title, rating };
+      } else if (line.startsWith('#RATING:')) {
+        // Tag MusicBee séparé : #RATING:80
+        const r = parseInt(line.split(':')[1]) || 0;
+        if (currentMeta) currentMeta.rating = Math.round(r / 20);
       } else if (!line.startsWith('#')) {
         const parts = line.replace(/\\/g, '/').split('/');
         const filename = parts[parts.length - 1];
@@ -2211,25 +2253,25 @@ async function importM3U(input) {
         const folderIsTopTracks = /top.?track|favorite|best|single|isolé/i.test(albumRaw);
 
         if (folderIsStock) {
-          // → Stock
           if (!artistClean && !albumClean) { currentMeta = null; continue; }
           const key = normalizeKey(artistClean, albumClean);
           if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
             stockAlbums.push({ artist: artistClean, album: albumClean, format });
           }
         } else if (folderIsTopTitres || folderIsTopTracks) {
-          // → Morceaux isolés
           if (!artistClean && !titleMeta) { currentMeta = null; continue; }
-          isolatedTracks.push({ title: titleMeta, artist: artistClean || artistFromPath, album: '', format });
+          isolatedTracks.push({ title: titleMeta, artist: artistClean || artistFromPath, album: '', format, rating: currentMeta?.rating || 0 });
         } else {
-          // → Album normal
           if (!artistClean && !albumClean) { currentMeta = null; continue; }
           const key = normalizeKey(artistClean, albumClean);
-          if (!grouped[key]) grouped[key] = { artist: artistClean, album: albumClean, tracks: 0, flac: false, mp3: false, digital: false };
+          if (!grouped[key]) grouped[key] = { artist: artistClean, album: albumClean, tracks: 0, flac: false, mp3: false, digital: false, maxRating: 0 };
           grouped[key].tracks++;
           if (isFlac) grouped[key].flac = true;
           else if (isMp3) grouped[key].mp3 = true;
           else grouped[key].digital = true;
+          // Prendre la note max parmi tous les morceaux de l'album
+          const r = currentMeta?.rating || 0;
+          if (r > grouped[key].maxRating) grouped[key].maxRating = r;
         }
         currentMeta = null;
       }
@@ -2242,16 +2284,29 @@ async function importM3U(input) {
       if (!g.artist && !g.album) return;
       const key = normalizeKey(g.artist, g.album);
       const existing = albums.find(a => normalizeKey(a.artist, a.album) === key);
-      if (existing) { if (g.flac) existing.flac=true; if (g.mp3) existing.mp3=true; if (g.digital) existing.digital=true; albumsUpdated++; }
-      else { albums.push({ id: uid(), artist: g.artist, album: g.album, year:'', genre:'', cd:false, flac:g.flac, mp3:g.mp3, digital:g.digital, note:0, plays:0 }); albumsAdded++; }
+      if (existing) {
+        if (g.flac) existing.flac = true;
+        if (g.mp3) existing.mp3 = true;
+        if (g.digital) existing.digital = true;
+        if (g.maxRating && !existing.note) existing.note = g.maxRating;
+        albumsUpdated++;
+      } else {
+        albums.push({ id: uid(), artist: g.artist, album: g.album, year:'', genre:'', cd:false, flac:g.flac, mp3:g.mp3, digital:g.digital, note: g.maxRating || 0, plays:0 });
+        albumsAdded++;
+      }
     });
 
     // Morceaux isolés
     isolatedTracks.forEach(t => {
       if (!t.title || !t.artist) return;
       const existing = tracks.find(x => x.title.toLowerCase()===t.title.toLowerCase() && x.artist.toLowerCase()===t.artist.toLowerCase());
-      if (existing) { tracksUpdated++; }
-      else { tracks.push({ id: uid(), title: t.title, artist: t.artist, album: '', format: t.format, duration: '', note: 0 }); tracksAdded++; }
+      if (existing) {
+        if (t.rating && !existing.note) existing.note = t.rating;
+        tracksUpdated++;
+      } else {
+        tracks.push({ id: uid(), title: t.title, artist: t.artist, album: '', format: t.format, duration: '', note: t.rating || 0 });
+        tracksAdded++;
+      }
     });
 
     // Stock
