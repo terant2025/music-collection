@@ -1142,13 +1142,16 @@ function _saveToStorageImpl() {
         await saveToFirebase();
       } else {
         const now = new Date().toISOString();
-        // Document principal sans lastfmData (potentiellement énorme)
-        const data = { albums, tracks, stockItems, rymData, associations, nextId, savedAt: now };
+        // Document principal sans lastfmData et rymData
+        const data = { albums, tracks, stockItems, associations, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
-        // lastfmData dans une clé séparée, compressée
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
           localStorage.setItem('discotheque_lastfm', JSON.stringify(compact));
+        }
+        if (rymData.length) {
+          const compact = rymData.map(d => ({ a: d.artist, b: d.album, r: d.rating, o: d.ownership||'' }));
+          localStorage.setItem('discotheque_rym', JSON.stringify(compact));
         }
         setSaveIndicator('saved', now);
       }
@@ -1167,12 +1170,12 @@ function loadFromStorage() {
     albums = data.albums || [];
     tracks = data.tracks || [];
     stockItems = data.stockItems || [];
-    rymData = data.rymData || [];
+    rymData = data.rymData || []; // rétrocompat anciens saves
     associations = data.associations || [];
     nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
     setSaveIndicator('saved', data.savedAt);
-    // Charger lastfmData depuis sa clé dédiée
     loadLastfmFromLocalStorage();
+    loadRymFromLocalStorage(); // écrase rymData si clé dédiée présente
     return true;
   } catch(e) { return false; }
 }
@@ -1254,36 +1257,57 @@ async function connectFirebase(cfg) {
 async function saveToFirebase() {
   if (!window._db) return;
   const now = new Date().toISOString();
+  const ts = firebase.firestore.FieldValue.serverTimestamp();
 
-  // Document principal : albums, tracks, rymData, associations (toujours < 1 Mo)
-  const mainData = {
-    albums, tracks, rymData, associations, nextId,
-    savedAt: now,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
-  await window._db.collection('discotheque').doc('collection').set(mainData);
-
-  // lastfmData : stocké séparément si présent, sinon dans localStorage uniquement
-  // On compresse en ne gardant que artist, album, plays (champs essentiels)
-  if (lastfmData.length) {
-    const lastfmCompact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
-    const lastfmPayload = JSON.stringify(lastfmCompact);
-    // Si ça tient dans 900 Ko on sauvegarde dans Firebase, sinon localStorage uniquement
-    if (lastfmPayload.length < 900000) {
+  // Fonction utilitaire : sauvegarder un dataset dans Firebase ou localStorage selon la taille
+  async function saveDataset(docName, lsKey, payload) {
+    const json = JSON.stringify(payload);
+    if (json.length < 900000) {
       try {
-        await window._db.collection('discotheque').doc('lastfm').set({
-          data: lastfmCompact,
-          savedAt: now,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-      } catch(e) {
-        // Trop gros même compressé → localStorage uniquement
-        localStorage.setItem('discotheque_lastfm', lastfmPayload);
-      }
-    } else {
-      // Trop gros pour Firebase → localStorage uniquement
-      localStorage.setItem('discotheque_lastfm', lastfmPayload);
+        await window._db.collection('discotheque').doc(docName).set({ data: payload, savedAt: now, updatedAt: ts });
+        return;
+      } catch(e) {}
     }
+    // Fallback localStorage
+    localStorage.setItem(lsKey, json);
+  }
+
+  // Document principal : uniquement albums, tracks, stockItems, associations, nextId
+  // rymData et lastfmData sont dans des docs séparés
+  const mainData = {
+    albums, tracks, stockItems, associations, nextId,
+    savedAt: now, updatedAt: ts
+  };
+
+  // Vérifier la taille avant d'envoyer
+  const mainJson = JSON.stringify(mainData);
+  if (mainJson.length > 950000) {
+    // Albums trop nombreux — sauvegarder en deux tranches
+    const mid = Math.floor(albums.length / 2);
+    await window._db.collection('discotheque').doc('collection').set({
+      albums: albums.slice(0, mid), tracks, stockItems, associations, nextId,
+      savedAt: now, updatedAt: ts
+    });
+    await window._db.collection('discotheque').doc('collection2').set({
+      albums: albums.slice(mid),
+      savedAt: now, updatedAt: ts
+    });
+  } else {
+    await window._db.collection('discotheque').doc('collection').set(mainData);
+    // Supprimer collection2 si elle existait
+    await window._db.collection('discotheque').doc('collection2').delete().catch(()=>{});
+  }
+
+  // lastfmData — compressé {a, b, p}
+  if (lastfmData.length) {
+    const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
+    await saveDataset('lastfm', 'discotheque_lastfm', compact);
+  }
+
+  // rymData — compressé {a, b, r, o}
+  if (rymData.length) {
+    const compact = rymData.map(d => ({ a: d.artist, b: d.album, r: d.rating, o: d.ownership||'' }));
+    await saveDataset('rym', 'discotheque_rym', compact);
   }
 
   setSaveIndicator('saved', now);
@@ -1298,23 +1322,33 @@ async function loadFromFirebase() {
     albums = data.albums || [];
     tracks = data.tracks || [];
     stockItems = data.stockItems || [];
-    rymData = data.rymData || [];
     associations = data.associations || [];
-    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+    nextId = data.nextId || 1;
+
+    // Charger collection2 si elle existe (albums splitté)
+    try {
+      const doc2 = await window._db.collection('discotheque').doc('collection2').get();
+      if (doc2.exists) albums = [...albums, ...(doc2.data().albums || [])];
+    } catch(e) {}
+
+    nextId = Math.max(nextId, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1;
     setSaveIndicator('saved', data.savedAt);
 
-    // Charger lastfmData depuis le doc séparé Firebase ou depuis localStorage
+    // lastfmData
     try {
       const lfDoc = await window._db.collection('discotheque').doc('lastfm').get();
       if (lfDoc.exists) {
-        const compact = lfDoc.data().data || [];
-        lastfmData = compact.map(d => ({ artist: d.a, album: d.b, plays: d.p }));
-      } else {
-        loadLastfmFromLocalStorage();
-      }
-    } catch(e) {
-      loadLastfmFromLocalStorage();
-    }
+        lastfmData = (lfDoc.data().data || []).map(d => ({ artist: d.a, album: d.b, plays: d.p }));
+      } else { loadLastfmFromLocalStorage(); }
+    } catch(e) { loadLastfmFromLocalStorage(); }
+
+    // rymData
+    try {
+      const ryDoc = await window._db.collection('discotheque').doc('rym').get();
+      if (ryDoc.exists) {
+        rymData = (ryDoc.data().data || []).map(d => ({ artist: d.a, album: d.b, rating: d.r, ownership: d.o||'' }));
+      } else { loadRymFromLocalStorage(); }
+    } catch(e) { loadRymFromLocalStorage(); }
 
     return true;
   } catch(e) { return false; }
@@ -1326,6 +1360,16 @@ function loadLastfmFromLocalStorage() {
     if (raw) {
       const compact = JSON.parse(raw);
       lastfmData = compact.map(d => ({ artist: d.a, album: d.b, plays: d.p }));
+    }
+  } catch(e) {}
+}
+
+function loadRymFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem('discotheque_rym');
+    if (raw) {
+      const compact = JSON.parse(raw);
+      rymData = compact.map(d => ({ artist: d.a, album: d.b, rating: d.r, ownership: d.o||'' }));
     }
   } catch(e) {}
 }
@@ -1497,14 +1541,28 @@ function onSearch() {
 }
 
 // ===================== ALBUMS =====================
+
+// Cache des clés stock pour exclusion rapide
+function getStockKeysSet() {
+  if (_cache.stockKeysSet) return _cache.stockKeysSet;
+  _cache.stockKeysSet = new Set(stockItems.map(s => normalizeKey(s.artist, s.album)));
+  return _cache.stockKeysSet;
+}
+
 function filteredAlbums() {
   const q = document.getElementById('global-search').value.toLowerCase();
   const af = document.getElementById('filter-artist').value;
   const sf = document.getElementById('filter-support').value;
   const gf = document.getElementById('filter-genre').value;
   const nf = document.getElementById('filter-note').value;
+  const stockKeys = getStockKeysSet();
 
   return albums.filter(a => {
+    // Toujours exclure les albums présents dans stockItems (sauf filtre stock explicite)
+    const isInStock = stockKeys.has(normalizeKey(a.artist, a.album));
+    if (sf !== 'stock' && isInStock) return false;
+    if (sf === 'stock') return isInStock;
+
     const match = !q || (a.artist + ' ' + a.album + ' ' + (a.genre||'')).toLowerCase().includes(q);
     const am = !af || a.artist === af;
     let sm = true;
@@ -1512,9 +1570,6 @@ function filteredAlbums() {
     else if (sf === 'flac') sm = a.flac;
     else if (sf === 'mp3') sm = a.mp3;
     else if (sf === 'digital') sm = a.flac || a.mp3 || a.digital;
-    else if (sf === 'stock') sm = !!a.stock;
-    // Par défaut, exclure les entrées stock de la vue albums
-    if (!sf) sm = !a.stock;
     const gm = !gf || a.genre === gf;
     let nm = true;
     if (nf === '5') nm = a.note === 5;
@@ -1540,7 +1595,6 @@ function renderAlbums() {
   updateStats();
   updateGenreFilter();
   updateArtistFilter();
-  updateNavBadges();
 
   const list = sortedAlbums(filteredAlbums());
   const total = list.length;
@@ -1654,7 +1708,7 @@ function nextPage() {
 
 // ===================== TRACKS =====================
 function renderTracks() {
-  updateNavBadges();
+  // updateNavBadges called by saveToStorage
   const q = document.getElementById('global-search').value.toLowerCase();
   const af = document.getElementById('filter-track-artist')?.value || '';
   const ff = document.getElementById('filter-track-format').value;
@@ -1750,7 +1804,7 @@ function saveToStorage() {
 
 
 function renderMissing() {
-  updateNavBadges();
+  // updateNavBadges called by saveToStorage
   const list = computeMissing();
   const q = document.getElementById('global-search').value.toLowerCase();
   const filtered = q ? list.filter(m => (m.artist + ' ' + m.album).toLowerCase().includes(q)) : list;
@@ -2008,7 +2062,7 @@ async function importM3U(input) {
     // Détecter le type de playlist selon le nom de fichier ET les chemins
     const fileName = file.name.toLowerCase();
     const isTrackPlaylist = /top.?ti|top.?track|favorite|best|singles?|isolé/i.test(fileName);
-    const isStockPlaylist = /stock|00.stock|!_00/i.test(fileName);
+    const isStockPlaylist = /!_00_stock|00.stock/i.test(fileName);
 
     const grouped = {};       // albums normaux
     const isolatedTracks = []; // morceaux isolés (top titres)
@@ -2045,7 +2099,7 @@ async function importM3U(input) {
 
         // Détecter le dossier dans le chemin complet
         const pathLower = line.toLowerCase().replace(/\\/g,'/');
-        const folderIsStock = pathLower.includes('!_00_stock') || pathLower.includes('stock') || isStockPlaylist;
+        const folderIsStock = pathLower.includes('!_00_stock') || isStockPlaylist;
         const folderIsTopTitres = pathLower.includes('top titres') || pathLower.includes('top-titres') || pathLower.includes('top_titres') || /top.?ti/i.test(albumRaw) || isTrackPlaylist;
         const folderIsTopTracks = /top.?track|favorite|best|single|isolé/i.test(albumRaw);
 
@@ -2481,6 +2535,7 @@ function saveStockItem() {
     stockItems.push({ id: uid(), ...data });
     toast('Ajouté au stock ✓');
   }
+  invalidateCache(); // stockKeysSet doit être recalculé
   closeStockModal();
   renderStock();
   saveToStorage();
@@ -2489,6 +2544,7 @@ function saveStockItem() {
 function deleteStockItem(id) {
   if (!confirm('Retirer cet album du stock ?')) return;
   stockItems = stockItems.filter(s => s.id !== id);
+  invalidateCache();
   renderStock();
   saveToStorage();
   toast('Retiré du stock');
@@ -2511,7 +2567,7 @@ function moveStockToCollection(id) {
 }
 
 function renderStock() {
-  updateNavBadges();
+  // updateNavBadges called by saveToStorage
   const q = document.getElementById('global-search').value.toLowerCase();
   const af = document.getElementById('filter-stock-artist')?.value || '';
   const gf = document.getElementById('filter-stock-genre')?.value || '';
@@ -2657,12 +2713,14 @@ function discoFilteredList() {
   const filter = document.getElementById('disco-filter')?.value || 'all';
   const sort = document.getElementById('disco-sort')?.value || 'artist';
   const q = document.getElementById('global-search').value.toLowerCase();
+  const stockKeys = getStockKeysSet();
 
   let list = [];
   if (filter === 'no-cd') {
     list = getNumericWithoutCD();
   } else {
-    list = albums.filter(a => a.cd);
+    // Exclure les albums du stock de la discographie
+    list = albums.filter(a => a.cd && !stockKeys.has(normalizeKey(a.artist, a.album)));
     if (filter === 'missing') list = list.filter(a => !hasDigitalBackup(a));
     if (filter === 'ok') list = list.filter(a => hasDigitalBackup(a));
   }
@@ -2697,7 +2755,7 @@ function renderDiscographie() {
   if (!slice.length) {
     tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
     document.getElementById('disco-page-info').textContent = '';
-    updateNavBadges();
+  // updateNavBadges called by saveToStorage
     return;
   }
 
