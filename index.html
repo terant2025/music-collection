@@ -5,9 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<!-- Supabase SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root {
   --bg: #0e0e0f;
@@ -449,25 +448,18 @@ input[type="file"] { display: none; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .save-indicator.saving .save-dot { animation: pulse 1s infinite; }
 
-/* FIREBASE CONFIG SCREEN */
-#firebase-setup {
+/* SUPABASE INDICATOR */
+#supabase-setup {
   position: fixed; inset: 0; background: var(--bg);
   z-index: 5000; display: flex; align-items: center; justify-content: center;
 }
 .setup-box {
-  width: 560px; max-width: 95vw;
+  width: 480px; max-width: 95vw;
   background: var(--bg2); border: 1px solid var(--border2);
   border-radius: var(--radius-lg); padding: 36px;
 }
 .setup-box h2 { font-size: 18px; font-weight: 500; margin-bottom: 6px; }
-.setup-box .lead { font-size: 13px; color: var(--text2); margin-bottom: 28px; line-height: 1.7; }
-.setup-steps {
-  background: var(--bg3); border-radius: var(--radius);
-  padding: 16px 18px; margin-bottom: 24px;
-  font-size: 12px; color: var(--text2); line-height: 2;
-  border-left: 2px solid var(--accent);
-}
-.setup-steps strong { color: var(--accent); font-family: var(--mono); }
+.setup-box .lead { font-size: 13px; color: var(--text2); margin-bottom: 24px; line-height: 1.7; }
 .setup-field { margin-bottom: 14px; }
 .setup-field label { display: block; font-size: 11px; font-family: var(--mono); color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
 .setup-field input { width: 100%; background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 8px 12px; border-radius: var(--radius); outline: none; }
@@ -481,26 +473,16 @@ input[type="file"] { display: none; }
 </head>
 <body>
 
-<!-- FIREBASE SETUP SCREEN -->
-<div id="firebase-setup" style="display:none">
+<!-- SUPABASE SETUP SCREEN -->
+<div id="supabase-setup" style="display:none">
   <div class="setup-box">
-    <h2>🔥 Connexion Firebase</h2>
-    <p class="lead">Pour synchroniser votre collection sur tous vos appareils, connectez un projet Firebase Firestore. C'est gratuit et prend 5 minutes.</p>
-    <div class="setup-steps">
-      <strong>1.</strong> Allez sur <strong>console.firebase.google.com</strong><br>
-      <strong>2.</strong> Créez un projet → Firestore Database → mode Production<br>
-      <strong>3.</strong> Paramètres du projet → Vos applications → Web → Enregistrer<br>
-      <strong>4.</strong> Copiez les valeurs de <strong>firebaseConfig</strong> ci-dessous<br>
-      <strong>5.</strong> Dans Firestore → Règles, collez : <strong>allow read, write: if true;</strong>
-    </div>
-    <div class="setup-field"><label>API Key</label><input id="cfg-apiKey" placeholder="AIzaSy…"></div>
-    <div class="setup-field"><label>Auth Domain</label><input id="cfg-authDomain" placeholder="mon-projet.firebaseapp.com"></div>
-    <div class="setup-field"><label>Project ID</label><input id="cfg-projectId" placeholder="mon-projet-12345"></div>
-    <div class="setup-field"><label>App ID</label><input id="cfg-appId" placeholder="1:123456789:web:abc…"></div>
+    <h2>🟢 Connexion Supabase</h2>
+    <p class="lead">Entrez votre clé API Supabase pour synchroniser votre collection. Trouvez-la dans <strong>Settings → API → anon public</strong>.</p>
+    <div class="setup-field"><label>Anon Key</label><input id="cfg-anon-key" placeholder="eyJhbGciOiJIUzI1NiIs…" type="password"></div>
     <div class="setup-error" id="setup-error"></div>
     <div class="setup-footer">
-      <button class="setup-skip" onclick="skipFirebase()">Utiliser sans Firebase (local uniquement)</button>
-      <button class="btn btn-accent" onclick="connectFirebase()">Connecter →</button>
+      <button class="setup-skip" onclick="skipSupabase()">Utiliser sans Supabase (local uniquement)</button>
+      <button class="btn btn-accent" onclick="connectSupabase()">Connecter →</button>
     </div>
   </div>
 </div>
@@ -962,7 +944,7 @@ input[type="file"] { display: none; }
           <input type="file" id="file-reimport-json" accept=".json" onchange="reimportJSON(this)">
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
-          <button class="btn" onclick="localStorage.removeItem('discotheque_firebase_cfg');location.reload()">🔥 Reconfigurer Firebase</button>
+          <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
       </div>
@@ -1159,18 +1141,17 @@ let _saveTimer = null;
 
 // ===================== LOCALSTORAGE =====================
 const LS_KEY = 'discotheque_v2';
-const LS_CFG = 'discotheque_firebase_cfg';
+const LS_CFG = 'discotheque_backend_cfg';
 
 function _saveToStorageImpl() {
   setSaveIndicator('saving');
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     try {
-      if (window._db) {
-        await saveToFirebase();
+      if (window._sb) {
+        await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        // Document principal sans lastfmData et rymData
         const data = { albums, tracks, stockItems, associations, rymAssociations, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
@@ -1209,179 +1190,204 @@ function loadFromStorage() {
   } catch(e) { return false; }
 }
 
-// ===================== FIREBASE =====================
-window._db = null;
+// ===================== SUPABASE =====================
+const SUPABASE_URL = 'https://mjedlmumiljdrmjobefm.supabase.co';
+const LS_ANON_KEY = 'supabase_anon_key';
+window._sb = null; // client Supabase
 
-// Config Firebase pré-remplie (modifiable dans l'écran de configuration)
-const FIREBASE_CONFIG_DEFAULT = {
-  apiKey: "AIzaSyCHvAzumKp8XO8BR8J3_NHmCXOe6eWkOlY",
-  authDomain: "terantdisco.firebaseapp.com",
-  projectId: "terantdisco",
-  storageBucket: "terantdisco.firebasestorage.app",
-  messagingSenderId: "442102986410",
-  appId: "1:442102986410:web:a6d31b887362b482f602d3"
-};
-
-async function connectFirebase(cfg) {
+async function connectSupabase(anonKey) {
   const errEl = document.getElementById('setup-error');
   if (errEl) errEl.textContent = '';
+  const key = anonKey || document.getElementById('cfg-anon-key')?.value.trim();
+  if (!key) {
+    if (errEl) errEl.textContent = 'Clé API requise.';
+    return false;
+  }
   try {
-    const config = cfg || {
-      apiKey:      (document.getElementById('cfg-apiKey').value.trim()) || FIREBASE_CONFIG_DEFAULT.apiKey,
-      authDomain:  (document.getElementById('cfg-authDomain').value.trim()) || FIREBASE_CONFIG_DEFAULT.authDomain,
-      projectId:   (document.getElementById('cfg-projectId').value.trim()) || FIREBASE_CONFIG_DEFAULT.projectId,
-      appId:       (document.getElementById('cfg-appId').value.trim()) || FIREBASE_CONFIG_DEFAULT.appId,
-      storageBucket: FIREBASE_CONFIG_DEFAULT.storageBucket,
-      messagingSenderId: FIREBASE_CONFIG_DEFAULT.messagingSenderId,
-    };
-    if (!config.apiKey || !config.projectId) {
-      if (errEl) errEl.textContent = 'API Key et Project ID sont obligatoires.';
-      return false;
-    }
-    // Init Firebase (avoid double-init)
-    if (!firebase.apps.length) {
-      firebase.initializeApp(config);
-    }
-    window._db = firebase.firestore();
-    // Test de connexion léger : lecture du document collection
-    setSaveIndicator('saving');
-    const testDoc = await window._db.collection('discotheque').doc('collection').get();
-    // Sauvegarde config dans localStorage pour les prochaines fois
-    localStorage.setItem(LS_CFG, JSON.stringify(config));
-    // Masquer l'écran de setup
-    const setupEl = document.getElementById('firebase-setup');
+    window._sb = supabase.createClient(SUPABASE_URL, key);
+    // Test : lire la table meta
+    const { error } = await window._sb.from('meta').select('value').eq('key', 'next_id').single();
+    if (error && error.code !== 'PGRST116') throw error; // PGRST116 = not found = OK
+    localStorage.setItem(LS_ANON_KEY, key);
+    localStorage.setItem(LS_CFG, 'supabase');
+    const setupEl = document.getElementById('supabase-setup');
     if (setupEl) setupEl.style.display = 'none';
-    // Utiliser le doc déjà chargé pour éviter une 2e requête
-    if (testDoc.exists) {
-      const data = testDoc.data();
-      albums = data.albums || [];
-      tracks = data.tracks || [];
-      lastfmData = data.lastfmData || [];
-      nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
-      setSaveIndicator('saved', data.savedAt);
-    } else {
-      // Première connexion : pousser les données locales vers Firebase
-      await saveToFirebase();
-    }
+    const loaded = await loadFromSupabase();
+    if (!loaded) await saveToSupabase();
     renderAlbums(); renderTracks(); updateNavBadges();
-    updateFirebaseStatus(true, config.projectId);
-    toast('🔥 Firebase connecté — synchronisation active');
+    setSaveIndicator('saved');
+    toast('🟢 Supabase connecté');
     return true;
   } catch(e) {
-    let msg = e.message || String(e);
-    if (msg.includes('permissions') || msg.includes('PERMISSION_DENIED')) {
-      msg = 'Permissions refusées — vérifiez les règles Firestore (elles doivent autoriser read/write: if true)';
-    } else if (msg.includes('not-found') || msg.includes('NOT_FOUND')) {
-      msg = 'Base Firestore introuvable — vérifiez le Project ID';
-    } else if (msg.includes('network') || msg.includes('fetch')) {
-      msg = 'Erreur réseau — vérifiez votre connexion internet';
-    }
-    if (errEl) errEl.textContent = 'Erreur : ' + msg;
-    setSaveIndicator('error');
-    window._db = null;
+    if (errEl) errEl.textContent = 'Erreur : ' + (e.message || String(e));
+    window._sb = null;
     return false;
   }
 }
 
-async function saveToFirebase() {
-  if (!window._db) return;
-  const now = new Date().toISOString();
-  const ts = firebase.firestore.FieldValue.serverTimestamp();
-
-  // Fonction utilitaire : sauvegarder un dataset dans Firebase ou localStorage selon la taille
-  async function saveDataset(docName, lsKey, payload) {
-    const json = JSON.stringify(payload);
-    if (json.length < 900000) {
-      try {
-        await window._db.collection('discotheque').doc(docName).set({ data: payload, savedAt: now, updatedAt: ts });
-        return;
-      } catch(e) {}
-    }
-    // Fallback localStorage
-    localStorage.setItem(lsKey, json);
-  }
-
-  // Document principal : uniquement albums, tracks, stockItems, associations, nextId
-  // rymData et lastfmData sont dans des docs séparés
-  const mainData = {
-    albums, tracks, stockItems, associations, rymAssociations, nextId,
-    savedAt: now, updatedAt: ts
-  };
-
-  // Vérifier la taille avant d'envoyer
-  const mainJson = JSON.stringify(mainData);
-  if (mainJson.length > 950000) {
-    // Albums trop nombreux — sauvegarder en deux tranches
-    const mid = Math.floor(albums.length / 2);
-    await window._db.collection('discotheque').doc('collection').set({
-      albums: albums.slice(0, mid), tracks, stockItems, associations, nextId,
-      savedAt: now, updatedAt: ts
-    });
-    await window._db.collection('discotheque').doc('collection2').set({
-      albums: albums.slice(mid),
-      savedAt: now, updatedAt: ts
-    });
-  } else {
-    await window._db.collection('discotheque').doc('collection').set(mainData);
-    // Supprimer collection2 si elle existait
-    await window._db.collection('discotheque').doc('collection2').delete().catch(()=>{});
-  }
-
-  // lastfmData — compressé {a, b, p}
-  if (lastfmData.length) {
-    const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
-    await saveDataset('lastfm', 'discotheque_lastfm', compact);
-  }
-
-  // rymData — compressé {a, b, r, o}
-  if (rymData.length) {
-    const compact = rymData.map(d => ({ a: d.artist, b: d.album, r: d.rating, o: d.ownership||'' }));
-    await saveDataset('rym', 'discotheque_rym', compact);
-  }
-
-  setSaveIndicator('saved', now);
+function skipSupabase() {
+  document.getElementById('supabase-setup').style.display = 'none';
+  localStorage.setItem(LS_CFG, 'skip');
+  initApp();
 }
 
-async function loadFromFirebase() {
-  if (!window._db) return false;
+// Chunk helper : Supabase limite les upserts à ~500 lignes
+async function sbUpsert(table, rows, onConflict) {
+  if (!rows.length) return;
+  const size = 400;
+  for (let i = 0; i < rows.length; i += size) {
+    const { error } = await window._sb.from(table).upsert(rows.slice(i, i + size), { onConflict });
+    if (error) throw error;
+  }
+}
+
+async function saveToSupabase() {
+  if (!window._sb) return;
+  setSaveIndicator('saving');
+  const now = new Date().toISOString();
   try {
-    const doc = await window._db.collection('discotheque').doc('collection').get();
-    if (!doc.exists) return false;
-    const data = doc.data();
-    albums = data.albums || [];
-    tracks = data.tracks || [];
-    stockItems = data.stockItems || [];
-    associations = data.associations || [];
-    rymAssociations = data.rymAssociations || [];
-    nextId = data.nextId || 1;
+    // Albums
+    const albumRows = albums.map(a => ({
+      id: a.id, artist: a.artist, artist_raw: a.artistRaw || a.artist,
+      album: a.album, year: a.year || null, genre: a.genre || null,
+      cd: !!a.cd, flac: !!a.flac, mp3: !!a.mp3, digital: !!a.digital,
+      note: a.note || 0, plays: a.plays || 0, notes: a.notes || null,
+      discogs_id: a.discogsId || null, label: a.label || null, catno: a.catno || null,
+      updated_at: now
+    }));
+    await sbUpsert('albums', albumRows, 'id');
 
-    // Charger collection2 si elle existe (albums splitté)
-    try {
-      const doc2 = await window._db.collection('discotheque').doc('collection2').get();
-      if (doc2.exists) albums = [...albums, ...(doc2.data().albums || [])];
-    } catch(e) {}
+    // Tracks
+    const trackRows = tracks.map(t => ({
+      id: t.id, title: t.title, artist: t.artist, album: t.album || null,
+      format: t.format, duration: t.duration || null, note: t.note || 0, updated_at: now
+    }));
+    await sbUpsert('tracks', trackRows, 'id');
 
-    nextId = Math.max(nextId, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1;
-    setSaveIndicator('saved', data.savedAt);
+    // Stock
+    const stockRows = stockItems.map(s => ({
+      id: s.id, artist: s.artist, album: s.album, year: s.year || null,
+      genre: s.genre || null, format: s.format || null, note: s.note || 0,
+      notes: s.notes || null, updated_at: now
+    }));
+    await sbUpsert('stock_items', stockRows, 'id');
+
+    // Associations Discogs/MusicBee
+    if (associations.length) {
+      await window._sb.from('associations').delete().neq('cd_id', -1);
+      await sbUpsert('associations', associations.map(a => ({ cd_id: a.cdId, num_id: a.numId })), 'cd_id');
+    }
+
+    // Associations RYM
+    if (rymAssociations.length) {
+      await window._sb.from('rym_associations').delete().neq('rym_key', '');
+      await sbUpsert('rym_associations', rymAssociations.map(a => ({ rym_key: a.rymKey, album_id: a.albumId })), 'rym_key');
+    }
 
     // lastfmData
-    try {
-      const lfDoc = await window._db.collection('discotheque').doc('lastfm').get();
-      if (lfDoc.exists) {
-        lastfmData = (lfDoc.data().data || []).map(d => ({ artist: d.a, album: d.b, plays: d.p }));
-      } else { loadLastfmFromLocalStorage(); }
-    } catch(e) { loadLastfmFromLocalStorage(); }
+    if (lastfmData.length) {
+      const lfRows = lastfmData.map(d => ({ artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: now }));
+      await sbUpsert('lastfm_data', lfRows, 'artist,album');
+    }
 
     // rymData
-    try {
-      const ryDoc = await window._db.collection('discotheque').doc('rym').get();
-      if (ryDoc.exists) {
-        rymData = (ryDoc.data().data || []).map(d => ({ artist: d.a, album: d.b, rating: d.r, ownership: d.o||'' }));
-      } else { loadRymFromLocalStorage(); }
-    } catch(e) { loadRymFromLocalStorage(); }
+    if (rymData.length) {
+      const rymRows = rymData.map(d => ({
+        artist: d.artist, album: d.album, rating: d.rating,
+        ownership: d.ownership || null, year: d.year || null, genre: d.genre || null, updated_at: now
+      }));
+      await sbUpsert('rym_data', rymRows, 'artist,album');
+    }
 
+    // meta : next_id
+    await window._sb.from('meta').upsert({ key: 'next_id', value: String(nextId) }, { onConflict: 'key' });
+
+    setSaveIndicator('saved', now);
+  } catch(e) {
+    setSaveIndicator('error');
+    console.error('Supabase save error:', e);
+  }
+}
+
+async function loadFromSupabase() {
+  if (!window._sb) return false;
+  try {
+    // Albums
+    const { data: alb, error: e1 } = await window._sb.from('albums').select('*').order('id');
+    if (e1) throw e1;
+    if (!alb || !alb.length) return false;
+
+    albums = alb.map(a => ({
+      id: a.id, artist: a.artist, artistRaw: a.artist_raw, album: a.album,
+      year: a.year || '', genre: a.genre || '',
+      cd: !!a.cd, flac: !!a.flac, mp3: !!a.mp3, digital: !!a.digital,
+      note: a.note || 0, plays: a.plays || 0, notes: a.notes || '',
+      discogsId: a.discogs_id || undefined, label: a.label || undefined, catno: a.catno || undefined
+    }));
+
+    // Tracks
+    const { data: trk } = await window._sb.from('tracks').select('*').order('id');
+    tracks = (trk || []).map(t => ({
+      id: t.id, title: t.title, artist: t.artist, album: t.album || '',
+      format: t.format, duration: t.duration || '', note: t.note || 0
+    }));
+
+    // Stock
+    const { data: stk } = await window._sb.from('stock_items').select('*').order('id');
+    stockItems = (stk || []).map(s => ({
+      id: s.id, artist: s.artist, album: s.album, year: s.year || '',
+      genre: s.genre || '', format: s.format || 'flac', note: s.note || 0, notes: s.notes || ''
+    }));
+
+    // Associations
+    const { data: assoc } = await window._sb.from('associations').select('*');
+    associations = (assoc || []).map(a => ({ cdId: a.cd_id, numId: a.num_id }));
+
+    const { data: rymAssoc } = await window._sb.from('rym_associations').select('*');
+    rymAssociations = (rymAssoc || []).map(a => ({ rymKey: a.rym_key, albumId: a.album_id }));
+
+    // lastfmData — chargé en arrière-plan (peut être gros)
+    loadLastfmFromSupabase();
+
+    // rymData
+    const { data: rym } = await window._sb.from('rym_data').select('*');
+    rymData = (rym || []).map(d => ({
+      artist: d.artist, album: d.album, rating: d.rating,
+      ownership: d.ownership || '', year: d.year || '', genre: d.genre || ''
+    }));
+
+    // meta
+    const { data: meta } = await window._sb.from('meta').select('value').eq('key', 'next_id').single();
+    if (meta) nextId = parseInt(meta.value) || nextId;
+    nextId = Math.max(nextId, ...albums.map(a => a.id || 0), ...tracks.map(t => t.id || 0)) + 1;
+
+    setSaveIndicator('saved');
     return true;
-  } catch(e) { return false; }
+  } catch(e) {
+    console.error('Supabase load error:', e);
+    return false;
+  }
+}
+
+async function loadLastfmFromSupabase() {
+  if (!window._sb) return;
+  try {
+    // Charger par pages de 1000 pour gérer les 41000+ entrées
+    let all = [], page = 0;
+    const pageSize = 1000;
+    while (true) {
+      const { data, error } = await window._sb
+        .from('lastfm_data').select('artist,album,plays')
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+      if (error || !data || !data.length) break;
+      all = all.concat(data);
+      if (data.length < pageSize) break;
+      page++;
+    }
+    lastfmData = all.map(d => ({ artist: d.artist, album: d.album, plays: d.plays }));
+    invalidateCache();
+    updateNavBadges();
+  } catch(e) { loadLastfmFromLocalStorage(); }
 }
 
 function loadLastfmFromLocalStorage() {
@@ -1389,7 +1395,7 @@ function loadLastfmFromLocalStorage() {
     const raw = localStorage.getItem('discotheque_lastfm');
     if (raw) {
       const compact = JSON.parse(raw);
-      lastfmData = compact.map(d => ({ artist: d.a, album: d.b, plays: d.p }));
+      lastfmData = compact.map(d => ({ artist: d.a || d.artist, album: d.b || d.album, plays: d.p || d.plays }));
     }
   } catch(e) {}
 }
@@ -1399,23 +1405,9 @@ function loadRymFromLocalStorage() {
     const raw = localStorage.getItem('discotheque_rym');
     if (raw) {
       const compact = JSON.parse(raw);
-      rymData = compact.map(d => ({ artist: d.a, album: d.b, rating: d.r, ownership: d.o||'' }));
+      rymData = compact.map(d => ({ artist: d.a || d.artist, album: d.b || d.album, rating: d.r || d.rating, ownership: d.o || d.ownership || '' }));
     }
   } catch(e) {}
-}
-
-function skipFirebase() {
-  document.getElementById('firebase-setup').style.display = 'none';
-  localStorage.setItem(LS_CFG, 'skip');
-  initApp();
-}
-
-function updateFirebaseStatus(connected, projectId) {
-  const label = document.getElementById('save-label');
-  const dot = document.querySelector('.save-dot');
-  // Show project name in sidebar
-  const pct = document.getElementById('storage-pct');
-  if (pct && connected) pct.title = 'Firebase: ' + projectId;
 }
 
 // ===================== INDICATOR =====================
@@ -1424,11 +1416,11 @@ function setSaveIndicator(state, isoDate) {
   const label = document.getElementById('save-label');
   if (!el) return;
   el.className = 'save-indicator ' + state;
-  const isFirebase = !!window._db;
+  const isSupa = !!window._sb;
   if (state === 'saving') {
-    label.textContent = isFirebase ? '🔥 Sync…' : 'Sauvegarde…';
+    label.textContent = isSupa ? '🟢 Sync…' : 'Sauvegarde…';
   } else if (state === 'saved') {
-    const prefix = isFirebase ? '🔥 ' : '';
+    const prefix = isSupa ? '🟢 ' : '';
     if (isoDate) {
       const d = new Date(isoDate);
       const diff = Math.floor((Date.now() - d) / 60000);
@@ -1437,19 +1429,20 @@ function setSaveIndicator(state, isoDate) {
       else label.textContent = prefix + d.toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'});
     } else { label.textContent = prefix + 'Synchronisé'; }
   } else if (state === 'error') {
-    label.textContent = isFirebase ? '🔥 Erreur sync' : 'Erreur sauvegarde';
+    label.textContent = isSupa ? '🟢 Erreur sync' : 'Erreur sauvegarde';
   } else {
     label.textContent = 'Aucune sauvegarde';
   }
 }
 
-// Refresh label every minute
 setInterval(() => {
   const raw = localStorage.getItem(LS_KEY);
-  if (raw && !window._db) { try { setSaveIndicator('saved', JSON.parse(raw).savedAt); } catch(e){} }
+  if (raw && !window._sb) { try { setSaveIndicator('saved', JSON.parse(raw).savedAt); } catch(e){} }
 }, 60000);
 
-// ===================== UTILS =====================
+
+
+
 function uid() { return nextId++; }
 
 function toast(msg, type = 'success') {
@@ -3660,24 +3653,18 @@ async function initApp() {
 
 (async function startup() {
   const savedCfg = localStorage.getItem(LS_CFG);
-  if (!savedCfg) {
-    // Première ouverture : tenter connexion automatique avec la config intégrée
-    loadDemo();
-    const ok = await connectFirebase(FIREBASE_CONFIG_DEFAULT);
-    if (!ok) {
-      // Afficher l'écran de config si la connexion auto échoue
-      document.getElementById('firebase-setup').style.display = 'flex';
-    }
+  const savedKey = localStorage.getItem(LS_ANON_KEY);
+
+  if (savedCfg === 'supabase' && savedKey) {
+    // Reconnexion automatique avec la clé sauvegardée
+    const ok = await connectSupabase(savedKey);
+    if (!ok) await initApp();
   } else if (savedCfg === 'skip') {
     await initApp();
   } else {
-    try {
-      const cfg = JSON.parse(savedCfg);
-      const ok = await connectFirebase(cfg);
-      if (!ok) await initApp();
-    } catch(e) {
-      await initApp();
-    }
+    // Première ouverture : charger démo et montrer l'écran de config
+    loadDemo();
+    document.getElementById('supabase-setup').style.display = 'flex';
   }
 })();
 </script>
