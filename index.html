@@ -953,15 +953,18 @@ input[type="file"] { display: none; }
       <!-- EXPORT -->
       <div class="import-card" style="grid-column: 1 / -1; margin-top:0">
         <h3>Export & sauvegarde</h3>
-        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Sauvegardez votre collection complète. Le CSV est compatible avec le réimport ci-dessus.</p>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Sauvegardez votre collection complète. Le CSV est compatible avec le réimport ci-dessus. Le JSON restaure l'intégralité de la collection.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn btn-accent" onclick="exportCSV()">↓ Exporter collection (CSV)</button>
           <button class="btn" onclick="exportTracksCSV()">↓ Exporter morceaux isolés (CSV)</button>
           <button class="btn" onclick="exportJSON()">↓ Exporter tout (JSON)</button>
+          <button class="btn btn-accent" onclick="document.getElementById('file-reimport-json').click()">📂 Restaurer depuis JSON</button>
+          <input type="file" id="file-reimport-json" accept=".json" onchange="reimportJSON(this)">
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
           <button class="btn" onclick="localStorage.removeItem('discotheque_firebase_cfg');location.reload()">🔥 Reconfigurer Firebase</button>
         </div>
+        <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
       </div>
     </div>
 
@@ -3492,9 +3495,74 @@ function exportTracksCSV() {
 }
 
 function exportJSON() {
-  const data = JSON.stringify({ albums, tracks, lastfmData, exportedAt: new Date().toISOString() }, null, 2);
+  const data = JSON.stringify({
+    albums, tracks, stockItems, lastfmData, rymData,
+    associations, rymAssociations, nextId,
+    exportedAt: new Date().toISOString(),
+    version: 2
+  }, null, 2);
   download('discothèque_backup.json', data, 'application/json');
   toast('Export JSON téléchargé ✓');
+}
+
+async function reimportJSON(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-json-reimport');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const data = JSON.parse(text);
+
+    if (!data.albums && !data.tracks) {
+      status.textContent = 'Erreur : fichier JSON invalide (aucune donnée albums ou tracks trouvée)';
+      status.className = 'status err';
+      input.value = '';
+      return;
+    }
+
+    const summary = [];
+
+    if (!confirm(`Restaurer depuis "${file.name}" ?\n\nCela remplacera :\n- ${(data.albums||[]).length} albums\n- ${(data.tracks||[]).length} morceaux isolés\n- ${(data.stockItems||[]).length} albums en stock\n- ${(data.rymData||[]).length} ratings RYM\n- ${(data.lastfmData||[]).length} entrées last.fm\n\nVotre collection actuelle sera écrasée.`)) {
+      input.value = '';
+      return;
+    }
+
+    // Restaurer toutes les données
+    albums = data.albums || [];
+    tracks = data.tracks || [];
+    stockItems = data.stockItems || [];
+    rymData = data.rymData || [];
+    associations = data.associations || [];
+    rymAssociations = data.rymAssociations || [];
+    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+
+    // lastfmData — peut être énorme, restaurer quand même
+    if (data.lastfmData?.length) {
+      lastfmData = data.lastfmData;
+      summary.push(`${lastfmData.length} entrées last.fm`);
+    }
+
+    summary.unshift(
+      `${albums.length} albums`,
+      `${tracks.length} morceaux`,
+      `${stockItems.length} en stock`,
+      `${rymData.length} ratings RYM`
+    );
+
+    invalidateCache();
+    renderAlbums();
+    renderTracks();
+    updateNavBadges();
+    saveToStorage();
+
+    status.textContent = `✓ Restauré : ${summary.join(', ')}`;
+    status.className = 'status ok';
+    toast('Collection restaurée depuis JSON ✓');
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  }
+  input.value = '';
 }
 
 function download(filename, content, type) {
