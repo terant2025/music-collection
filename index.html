@@ -2356,6 +2356,43 @@ async function fetchLastfmIncremental(fromTs) {
   saveToStorage();
 }
 
+// Clés localStorage pour la sauvegarde progressive
+const LASTFM_CHECKPOINT_KEY = 'lastfm_checkpoint';
+
+function saveLastfmCheckpoint(currentPage, totalPages) {
+  // Sauvegarde légère : juste les counts agrégés + position
+  const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays }));
+  try {
+    localStorage.setItem(LASTFM_CHECKPOINT_KEY, JSON.stringify({
+      page: currentPage,
+      totalPages,
+      counts: compact,
+      savedAt: Date.now()
+    }));
+  } catch(e) {
+    // localStorage plein — on continue sans checkpoint
+    console.warn('Checkpoint last.fm non sauvegardé (localStorage plein)');
+  }
+}
+
+function loadLastfmCheckpoint() {
+  try {
+    const raw = localStorage.getItem(LASTFM_CHECKPOINT_KEY);
+    if (!raw) return null;
+    const cp = JSON.parse(raw);
+    // Ignorer les checkpoints de plus de 48h (les plays auront changé)
+    if (Date.now() - cp.savedAt > 48 * 3600 * 1000) {
+      localStorage.removeItem(LASTFM_CHECKPOINT_KEY);
+      return null;
+    }
+    return cp;
+  } catch(e) { return null; }
+}
+
+function clearLastfmCheckpoint() {
+  localStorage.removeItem(LASTFM_CHECKPOINT_KEY);
+}
+
 async function fetchLastfmPage(page) {
   const status = document.getElementById('status-lastfm');
   const progress = document.getElementById('lastfm-progress');
@@ -2368,32 +2405,54 @@ async function fetchLastfmPage(page) {
   btnMore.textContent = '⏸ Pause';
   _lastfmAbort = false;
 
+  // Vérifier si un checkpoint existe pour reprendre
+  const checkpoint = loadLastfmCheckpoint();
   let currentPage = page;
+  if (checkpoint && checkpoint.page > page && checkpoint.totalPages === _lastfmTotalPages) {
+    // Reprendre depuis le checkpoint
+    currentPage = checkpoint.page;
+    _lastfmCounts = {};
+    checkpoint.counts.forEach(d => {
+      _lastfmCounts[normalizeKey(d.a, d.b)] = { artist: d.a, album: d.b, plays: d.p };
+    });
+    progressLabel.textContent = `Reprise depuis la page ${currentPage} (checkpoint trouvé)`;
+  }
+
+  let errorStreak = 0; // compteur d'erreurs consécutives
 
   while (currentPage <= _lastfmTotalPages && !_lastfmAbort) {
     try {
       const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&limit=${LASTFM_PAGE_SIZE}&page=${currentPage}&extended=0`;
       const res = await fetch(url);
 
-      // Respecter le rate limit : si 429 on attend et on réessaie
       if (res.status === 429) {
-        progressLabel.textContent = `Limite API atteinte, pause 10s… (page ${currentPage}/${_lastfmTotalPages})`;
-        await new Promise(r => setTimeout(r, 10000));
+        progressLabel.textContent = `Limite API, pause 15s… (page ${currentPage}/${_lastfmTotalPages})`;
+        await new Promise(r => setTimeout(r, 15000));
         continue;
       }
 
       const data = await res.json();
+
       if (data.error) {
         if (data.error === 11 || data.error === 16) {
-          progressLabel.textContent = `Serveur last.fm indisponible, pause 10s… (page ${currentPage})`;
-          await new Promise(r => setTimeout(r, 10000));
+          // Erreur temporaire serveur last.fm — attendre et réessayer
+          errorStreak++;
+          const wait = Math.min(30000, 5000 * errorStreak);
+          progressLabel.textContent = `Serveur last.fm indisponible (erreur ${data.error}), pause ${wait/1000}s… (page ${currentPage})`;
+          await new Promise(r => setTimeout(r, wait));
           continue;
         }
-        status.textContent = 'Erreur last.fm : ' + data.message;
+        // Erreur fatale — sauvegarder le checkpoint et s'arrêter
+        saveLastfmCheckpoint(currentPage, _lastfmTotalPages);
+        status.textContent = `⚠️ Erreur last.fm : ${data.message} — checkpoint sauvegardé à la page ${currentPage}`;
         status.className = 'status err';
         progress.style.display = 'none';
+        btnMore.textContent = '▶ Reprendre';
+        btnMore.style.display = 'inline-flex';
         return;
       }
+
+      errorStreak = 0; // reset streak en cas de succès
 
       const tracks = data.recenttracks?.track || [];
       _lastfmTotalPages = parseInt(data.recenttracks?.['@attr']?.totalPages || _lastfmTotalPages);
@@ -2415,30 +2474,33 @@ async function fetchLastfmPage(page) {
       const scrobblesLoaded = Math.min(currentPage * LASTFM_PAGE_SIZE, totalTracks);
       progressLabel.textContent = `Page ${currentPage}/${_lastfmTotalPages} — ${scrobblesLoaded.toLocaleString('fr-FR')} / ${totalTracks.toLocaleString('fr-FR')} scrobbles — ${Object.keys(_lastfmCounts).length} albums`;
 
-      // Mettre à jour les plays en temps réel toutes les 10 pages
+      // Checkpoint + mise à jour plays toutes les 10 pages
       if (currentPage % 10 === 0) {
         lastfmData = Object.values(_lastfmCounts);
         lastfmData.forEach(d => {
           const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
           if (a) a.plays = d.plays;
         });
+        saveLastfmCheckpoint(currentPage + 1, _lastfmTotalPages);
         updateNavBadges();
       }
 
       currentPage++;
       _lastfmCurrentPage = currentPage;
 
-      // Pause entre les requêtes pour respecter l'API last.fm (5 req/s max)
       await new Promise(r => setTimeout(r, 220));
 
     } catch(e) {
-      // Erreur réseau : on réessaie après 3s
-      progressLabel.textContent = `Erreur réseau, nouvelle tentative… (page ${currentPage})`;
-      await new Promise(r => setTimeout(r, 3000));
+      // Erreur réseau — sauvegarder checkpoint et réessayer
+      errorStreak++;
+      saveLastfmCheckpoint(currentPage, _lastfmTotalPages);
+      const wait = Math.min(15000, 3000 * errorStreak);
+      progressLabel.textContent = `Erreur réseau, nouvelle tentative dans ${wait/1000}s… (page ${currentPage}) — checkpoint sauvegardé`;
+      await new Promise(r => setTimeout(r, wait));
     }
   }
 
-  // Terminé ou annulé
+  // Terminé ou pause
   lastfmData = Object.values(_lastfmCounts);
   lastfmData.forEach(d => {
     const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
@@ -2446,12 +2508,13 @@ async function fetchLastfmPage(page) {
   });
 
   if (_lastfmAbort) {
-    status.textContent = `⏸ Arrêté à la page ${_lastfmCurrentPage - 1}/${_lastfmTotalPages} — ${lastfmData.length} albums chargés jusqu'ici`;
+    saveLastfmCheckpoint(currentPage, _lastfmTotalPages);
+    status.textContent = `⏸ Mis en pause à la page ${currentPage - 1}/${_lastfmTotalPages} — ${lastfmData.length} albums — checkpoint sauvegardé`;
     status.className = 'status ok';
-    btnMore.textContent = '▶ Reprendre le chargement';
+    btnMore.textContent = '▶ Reprendre';
     btnMore.style.display = 'inline-flex';
   } else {
-    // Sauvegarder le timestamp actuel comme point de départ des prochaines syncs
+    clearLastfmCheckpoint();
     localStorage.setItem(LASTFM_SYNC_KEY, String(Math.floor(Date.now() / 1000)));
     updateLastSyncLabel();
     status.textContent = `✓ Complet — ${lastfmData.length} albums distincts chargés`;
@@ -2469,12 +2532,21 @@ async function fetchLastfmPage(page) {
 
 async function loadMoreLastfm() {
   if (_lastfmAbort) {
-    // Reprendre depuis là où on s'est arrêté
     _lastfmAbort = false;
     document.getElementById('btn-lastfm-more').style.display = 'none';
-    await fetchLastfmPage(_lastfmCurrentPage);
+    // Reprendre depuis le checkpoint si disponible, sinon depuis la page courante
+    const cp = loadLastfmCheckpoint();
+    if (cp && cp.counts) {
+      _lastfmCounts = {};
+      cp.counts.forEach(d => {
+        _lastfmCounts[normalizeKey(d.a, d.b)] = { artist: d.a, album: d.b, plays: d.p };
+      });
+      _lastfmTotalPages = cp.totalPages;
+      await fetchLastfmPage(cp.page);
+    } else {
+      await fetchLastfmPage(_lastfmCurrentPage);
+    }
   } else {
-    // Mettre en pause
     _lastfmAbort = true;
   }
 }
@@ -3303,6 +3375,23 @@ async function initApp() {
   } else {
     // Config par défaut intégrée : lancer la synchro last.fm silencieusement
     setTimeout(() => connectLastfm(), 1500);
+  }
+  // Vérifier si un checkpoint last.fm existe
+  const cp = loadLastfmCheckpoint();
+  if (cp) {
+    const status = document.getElementById('status-lastfm');
+    const btnMore = document.getElementById('btn-lastfm-more');
+    if (status) {
+      status.textContent = `⏸ Chargement interrompu à la page ${cp.page}/${cp.totalPages} — ${cp.counts?.length || 0} albums — cliquez Reprendre`;
+      status.className = 'status ok';
+    }
+    if (btnMore) {
+      btnMore.textContent = '▶ Reprendre';
+      btnMore.style.display = 'inline-flex';
+      _lastfmAbort = true;
+      _lastfmTotalPages = cp.totalPages;
+      _lastfmCurrentPage = cp.page;
+    }
   }
   // Afficher date dernière sync
   updateLastSyncLabel();
