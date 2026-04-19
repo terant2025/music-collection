@@ -811,8 +811,8 @@ input[type="file"] { display: none; }
           Release_Date, Genres (colonnes export natif RYM)
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-accent" onclick="document.getElementById('file-rym').click()">📂 Charger ratings.csv RYM</button>
-          <input type="file" id="file-rym" accept=".csv" onchange="importRYM(this)">
+          <button class="btn btn-accent" onclick="document.getElementById('file-rym').click()">📂 Charger page(s) HTML RYM</button>
+          <input type="file" id="file-rym" accept=".htm,.html" multiple onchange="importRYMHtml(this)">
           <select id="rym-threshold" style="font-size:13px">
             <option value="3.5">Note RYM ≥ 3.5</option>
             <option value="3">Note RYM ≥ 3.0</option>
@@ -931,30 +931,21 @@ input[type="file"] { display: none; }
           <div class="status" id="status-reimport"></div>
         </div>
 
-        <!-- RYM SCRAPER -->
+        <!-- RYM IMPORT HTML -->
         <div class="import-card">
           <div class="source-logo">⭐</div>
-          <h3>RateYourMusic — Import direct</h3>
-          <p>Récupère automatiquement vos ratings depuis votre profil RYM public. Pas besoin d'export manuel.</p>
+          <h3>RateYourMusic — Import HTML</h3>
+          <p>Sur votre page RYM : <strong>Ctrl+S → "Page Web, HTML seulement"</strong>. Chargez le fichier ici. Fonctionne avec une ou plusieurs pages.</p>
           <div class="format-hint">
-            <strong>Profil :</strong> rateyourmusic.com/collection_p/<span style="color:var(--accent)">tairanteuh</span>/<br>
-            <strong>Récupère :</strong> artiste, album, note, année, genre<br>
-            <strong>Pagination :</strong> toutes les pages automatiquement
-          </div>
-          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
-            <input type="text" id="rym-username" value="tairanteuh" placeholder="Pseudo RYM" style="font-size:13px">
+            <strong>Page à sauvegarder :</strong><br>
+            rateyourmusic.com/collection_p/<span style="color:var(--accent)">tairanteuh</span>/<br><br>
+            <strong>Récupère :</strong> artiste, album, note, ownership (CD)
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-accent" onclick="scrapeRYM()">⭐ Importer depuis RYM</button>
-            <button class="btn btn-sm" id="btn-rym-stop" style="display:none" onclick="stopRYMScrape()">⏸ Arrêter</button>
+            <button class="btn btn-accent" onclick="document.getElementById('file-rym-html').click()">📂 Charger page(s) RYM</button>
+            <input type="file" id="file-rym-html" accept=".htm,.html" multiple onchange="importRYMHtml(this)">
           </div>
           <div class="status" id="status-rym-scrape"></div>
-          <div id="rym-scrape-progress" style="margin-top:8px;display:none">
-            <div style="height:3px;background:var(--bg4);border-radius:2px">
-              <div id="rym-scrape-bar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
-            </div>
-            <div id="rym-scrape-label" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:4px"></div>
-          </div>
         </div>
 
       </div>
@@ -3024,172 +3015,94 @@ function addFromRYM(artist, album, year, genre) {
   nav('albums');
 }
 
-// ===================== RYM SCRAPER =====================
-let _rymScrapeAbort = false;
-
-async function scrapeRYM() {
-  const username = document.getElementById('rym-username').value.trim();
-  if (!username) { toast('Entrez votre pseudo RYM', 'error'); return; }
+// ===================== RYM HTML IMPORT =====================
+async function importRYMHtml(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
 
   const status = document.getElementById('status-rym-scrape');
-  const progress = document.getElementById('rym-scrape-progress');
-  const bar = document.getElementById('rym-scrape-bar');
-  const label = document.getElementById('rym-scrape-label');
-  const btnStop = document.getElementById('btn-rym-stop');
-
-  status.textContent = 'Connexion à RateYourMusic…';
+  status.textContent = `Lecture de ${files.length} fichier(s)…`;
   status.className = 'status';
-  progress.style.display = 'block';
-  bar.style.width = '0%';
-  btnStop.style.display = 'inline-flex';
-  _rymScrapeAbort = false;
 
-  // On utilise allorigins comme proxy CORS
-  const PROXY = 'https://api.allorigins.win/get?url=';
-  const parsed = [];
-  let page = 1;
-  let totalPages = 1;
+  let totalParsed = 0, totalNew = 0, totalUpdated = 0;
 
-  while (page <= totalPages && !_rymScrapeAbort) {
+  for (const file of files) {
     try {
-      const rymUrl = `https://rateyourmusic.com/collection_p/${encodeURIComponent(username)}/r0.5-5.0/${page}/`;
-      const proxyUrl = PROXY + encodeURIComponent(rymUrl);
-      label.textContent = `Page ${page}/${totalPages === 1 ? '?' : totalPages} — ${parsed.length} ratings récupérés`;
+      const text = await readFile(file);
+      const doc = new DOMParser().parseFromString(text, 'text/html');
 
-      const res = await fetch(proxyUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      const html = json.contents;
+      // Structure RYM : <tr id="page_catalog_item_XXXXXXX">
+      //   <td class="or_q_artist"><a class="artist">Nom artiste <span class="subtext">[alias]</span></a></td>
+      //   <td class="or_q_album"><a class="album">Titre album</a></td>
+      //   <td class="or_q_rating">3.5</td>
+      //   <td class="or_q_ownership">CD</td>  ← optionnel
+      // </tr>
 
-      if (!html) throw new Error('Réponse vide du proxy');
+      const rows = doc.querySelectorAll('tr[id^="page_catalog_item_"]');
 
-      // Parser le HTML avec DOMParser
-      const doc = new DOMParser().parseFromString(html, 'text/html');
+      rows.forEach(row => {
+        // Artiste — enlever le subtext [alias]
+        const artistEl = row.querySelector('.or_q_artist .artist');
+        if (!artistEl) return;
+        // Cloner pour enlever le span subtext avant de lire le texte
+        const artistClone = artistEl.cloneNode(true);
+        artistClone.querySelectorAll('.subtext').forEach(s => s.remove());
+        const artist = artistClone.textContent.trim();
 
-      // Détecter le nombre total de pages
-      if (page === 1) {
-        // Chercher le dernier numéro de page dans la pagination
-        const pageLinks = doc.querySelectorAll('.navspan, .page_link, [class*="page"]');
-        let maxPage = 1;
-        pageLinks.forEach(el => {
-          const n = parseInt(el.textContent.trim());
-          if (!isNaN(n) && n > maxPage) maxPage = n;
-        });
-        // Fallback : chercher dans les liens de pagination
-        if (maxPage === 1) {
-          doc.querySelectorAll('a[href*="collection_p"]').forEach(a => {
-            const m = a.href.match(/\/(\d+)\/?$/);
-            if (m) { const n = parseInt(m[1]); if (n > maxPage) maxPage = n; }
-          });
+        // Album
+        const albumEl = row.querySelector('.or_q_album .album');
+        if (!albumEl) return;
+        const album = albumEl.textContent.trim();
+
+        if (!artist || !album) return;
+
+        // Note — peut être vide (&nbsp;) si non noté
+        const ratingEl = row.querySelector('.or_q_rating');
+        const ratingText = ratingEl ? ratingEl.textContent.trim() : '';
+        const rating = parseFloat(ratingText) || 0;
+
+        // Ownership (CD, Wishlist, etc.)
+        const ownershipEl = row.querySelector('.or_q_ownership');
+        const ownership = ownershipEl ? ownershipEl.textContent.trim() : '';
+
+        // N'importer que les entrées notées (rating > 0)
+        if (!rating) return;
+
+        totalParsed++;
+        const key = normalizeKey(artist, album);
+        const existing = rymData.find(x => normalizeKey(x.artist, x.album) === key);
+        if (existing) {
+          existing.rating = rating;
+          existing.ownership = ownership;
+          totalUpdated++;
+        } else {
+          rymData.push({ artist, album, rating, year: '', genre: '', ownership });
+          totalNew++;
         }
-        totalPages = Math.max(1, maxPage);
-      }
+      });
 
-      // Extraire les ratings — structure RYM : .or_q_albumrating_txt ou .page_collection_item
-      // Plusieurs sélecteurs pour couvrir différentes versions de la page RYM
-      const items = doc.querySelectorAll(
-        '.page_collection_item, .or_q_albumartist, tr[id^="lpref"]'
-      );
-
-      if (items.length === 0) {
-        // Essayer une structure alternative
-        const rows = doc.querySelectorAll('tr');
-        rows.forEach(row => {
-          const ratingEl = row.querySelector('.or_q_albumrating_txt, [class*="rating"]');
-          const titleEl = row.querySelector('.or_q_albumartist_links_pub a, a[href*="/release/"]');
-          const artistEl = row.querySelector('a[href*="/artist/"]');
-          if (!ratingEl || !titleEl) return;
-
-          const ratingText = ratingEl.textContent.trim().replace(',', '.');
-          const rating = parseFloat(ratingText);
-          if (!rating || rating < 0.5) return;
-
-          const album = titleEl.textContent.trim();
-          const artist = artistEl ? artistEl.textContent.trim() : '';
-          if (!album) return;
-
-          // Année et genre
-          const yearEl = row.querySelector('.or_q_albumartist_txt');
-          const year = yearEl ? (yearEl.textContent.match(/\b(19|20)\d{2}\b/) || [])[0] || '' : '';
-
-          parsed.push({ artist, album, rating, year, genre: '' });
-        });
-      } else {
-        items.forEach(item => {
-          // Essayer d'extraire artiste, album, note
-          const ratingEl = item.querySelector('[class*="rating"], .or_q_albumrating_txt');
-          const albumEl = item.querySelector('a[href*="/release/"]');
-          const artistEl = item.querySelector('a[href*="/artist/"]');
-
-          if (!ratingEl || !albumEl) return;
-          const ratingText = ratingEl.textContent.trim().replace(',', '.');
-          const rating = parseFloat(ratingText);
-          if (!rating || rating < 0.5) return;
-
-          const album = albumEl.textContent.trim();
-          const artist = artistEl ? artistEl.textContent.trim() : '';
-          if (!album) return;
-
-          const yearEl = item.querySelector('[class*="year"], .or_q_albumartist_txt');
-          const year = yearEl ? (yearEl.textContent.match(/\b(19|20)\d{2}\b/) || [])[0] || '' : '';
-          const genreEl = item.querySelector('[class*="genre"]');
-          const genre = genreEl ? genreEl.textContent.trim() : '';
-
-          parsed.push({ artist, album, rating, year, genre });
-        });
-      }
-
-      const pct = Math.round((page / totalPages) * 100);
-      bar.style.width = pct + '%';
-      label.textContent = `Page ${page}/${totalPages} — ${parsed.length} ratings`;
-
-      page++;
-      if (page <= totalPages) await new Promise(r => setTimeout(r, 1500)); // pause entre pages
+      status.textContent = `Fichier "${file.name}" : ${rows.length} lignes lues…`;
     } catch(e) {
-      status.textContent = 'Erreur page ' + page + ' : ' + e.message;
+      status.textContent = `Erreur sur "${file.name}" : ${e.message}`;
       status.className = 'status err';
-      // Réessayer une fois après 3s
-      await new Promise(r => setTimeout(r, 3000));
-      if (_rymScrapeAbort) break;
     }
   }
 
-  btnStop.style.display = 'none';
-  progress.style.display = 'none';
-
-  if (parsed.length === 0) {
-    status.textContent = '⚠️ Aucun rating trouvé. La structure HTML de RYM a peut-être changé, ou votre profil est privé.';
-    status.className = 'status err';
-    return;
-  }
-
-  // Dédupliquer et fusionner avec rymData existant
-  const newItems = [];
-  parsed.forEach(r => {
-    const key = normalizeKey(r.artist, r.album);
-    const existing = rymData.find(x => normalizeKey(x.artist, x.album) === key);
-    if (existing) {
-      existing.rating = r.rating;
-      if (r.year) existing.year = r.year;
-      if (r.genre) existing.genre = r.genre;
-    } else {
-      newItems.push(r);
-    }
-  });
-  rymData = [...rymData, ...newItems];
   invalidateCache();
 
-  status.textContent = `✓ ${parsed.length} ratings importés (${newItems.length} nouveaux, ${parsed.length - newItems.length} mis à jour)`;
-  status.className = 'status ok';
-  renderRYM();
-  updateNavBadges();
-  saveToStorage();
-  toast(`RYM : ${parsed.length} ratings importés`);
-}
+  if (totalParsed === 0) {
+    status.textContent = '⚠️ Aucun rating trouvé. Vérifiez que vous avez sauvegardé la bonne page RYM.';
+    status.className = 'status err';
+  } else {
+    status.textContent = `✓ ${totalParsed} ratings importés — ${totalNew} nouveaux, ${totalUpdated} mis à jour`;
+    status.className = 'status ok';
+    renderRYM();
+    updateNavBadges();
+    saveToStorage();
+    toast(`RYM : ${totalParsed} ratings importés`);
+  }
 
-function stopRYMScrape() {
-  _rymScrapeAbort = true;
-  document.getElementById('btn-rym-stop').style.display = 'none';
+  input.value = '';
 }
 
 // ===================== REIMPORT CSV =====================
