@@ -854,17 +854,19 @@ input[type="file"] { display: none; }
         <div class="import-card">
           <div class="source-logo">🎧</div>
           <h3>MusicBee</h3>
-          <p>Dans MusicBee : sélectionnez tous vos morceaux (Ctrl+A) → clic droit → <strong>Enregistrer comme playlist → Export M3U</strong>. Ou exportez en CSV via Fichier → Bibliothèque → Exporter.</p>
+          <p>Dans MusicBee : <strong>Fichier → Bibliothèque → Exporter en XML</strong> (format iTunes). Ou exportez en M3U/CSV.</p>
           <div class="format-hint">
-            <strong>M3U (recommandé) :</strong> #EXTINF avec Artist - Title<br>
-            chemins fichiers : /Artist/Album/track.flac<br><br>
-            <strong>CSV (alternatif) :</strong><br>
-            Artist, Album Title, Year, Format, Genre
+            <strong>XML (recommandé) :</strong> Fichier → Bibliothèque → Exporter en XML<br>
+            Contient artiste, album, année, genre, format, note<br><br>
+            <strong>M3U (alternatif) :</strong> #EXTINF avec Artist - Title<br>
+            <strong>CSV (alternatif) :</strong> Artist, Album Title, Year, Format, Genre
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-accent" onclick="document.getElementById('file-musicbee-m3u').click()">📂 Charger M3U</button>
+            <button class="btn btn-accent" onclick="document.getElementById('file-musicbee-xml').click()">📂 Charger XML</button>
+            <button class="btn" onclick="document.getElementById('file-musicbee-m3u').click()">📂 Charger M3U</button>
             <button class="btn" onclick="document.getElementById('file-musicbee').click()">📂 Charger CSV</button>
           </div>
+          <input type="file" id="file-musicbee-xml" accept=".xml" onchange="importMusicBeeXML(this)">
           <input type="file" id="file-musicbee-m3u" accept=".m3u,.m3u8" onchange="importM3U(this)">
           <input type="file" id="file-musicbee" accept=".csv" onchange="importMusicBee(this)">
           <div class="status" id="status-musicbee"></div>
@@ -1205,9 +1207,11 @@ async function connectSupabase(anonKey) {
   }
   try {
     window._sb = supabase.createClient(SUPABASE_URL, key);
-    // Test : lire la table meta
+    // Test léger de connexion : on accepte not-found (PGRST116) et RLS (42501)
+    // car la table peut exister mais bloquer la lecture anonyme
     const { error } = await window._sb.from('meta').select('value').eq('key', 'next_id').single();
-    if (error && error.code !== 'PGRST116') throw error; // PGRST116 = not found = OK
+    const ignoredCodes = ['PGRST116', '42501', 'PGRST301'];
+    if (error && !ignoredCodes.includes(error.code)) throw error;
     localStorage.setItem(LS_ANON_KEY, key);
     localStorage.setItem(LS_CFG, 'supabase');
     const setupEl = document.getElementById('supabase-setup');
@@ -2092,6 +2096,204 @@ async function importDiscogs(input) {
     status.className = 'status err';
   }
   input.value = '';
+}
+
+// ===================== IMPORT: MUSICBEE XML (iTunes format) =====================
+async function importMusicBeeXML(input) {
+  const file = input.files[0]; if (!file) return;
+  const status = document.getElementById('status-musicbee');
+  status.textContent = 'Lecture…'; status.className = 'status';
+  try {
+    const text = await readFile(file);
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, 'application/xml');
+
+    // Vérifier que le XML est valide
+    if (doc.querySelector('parsererror')) throw new Error('Fichier XML invalide');
+
+    // Le format iTunes XML : <dict><key>Tracks</key><dict> contenant <key>ID</key><dict>...</dict>
+    // On cherche le dict enfant du key "Tracks"
+    const rootDict = doc.querySelector('plist > dict');
+    if (!rootDict) throw new Error('Structure plist introuvable');
+
+    // Trouver le dict des tracks : la key "Tracks" est suivie d'un dict
+    const tracksDict = getKeyValue(rootDict, 'Tracks');
+    if (!tracksDict || tracksDict.tagName !== 'dict') throw new Error('Section Tracks introuvable');
+
+    // Parser chaque piste : les enfants alternent <key>ID</key><dict>...</dict>
+    const trackDicts = [];
+    const children = Array.from(tracksDict.children);
+    for (let i = 0; i < children.length - 1; i += 2) {
+      if (children[i].tagName === 'key' && children[i+1].tagName === 'dict') {
+        trackDicts.push(children[i+1]);
+      }
+    }
+
+    // Helper : lire une valeur depuis un dict iTunes par sa key
+    function getVal(dict, key) {
+      const kids = Array.from(dict.children);
+      for (let i = 0; i < kids.length - 1; i++) {
+        if (kids[i].tagName === 'key' && kids[i].textContent === key) {
+          return kids[i+1];
+        }
+      }
+      return null;
+    }
+    function str(dict, key) { const n = getVal(dict, key); return n ? n.textContent.trim() : ''; }
+    function num(dict, key) { const n = getVal(dict, key); return n ? parseInt(n.textContent) || 0 : 0; }
+
+    // Convertir la note iTunes/MusicBee : 0-100 → 0-5 étoiles
+    // MusicBee : 20=1★, 40=2★, 60=3★, 80=4★, 100=5★
+    function parseRating(r) {
+      if (!r) return 0;
+      if (r <= 5) return r;           // déjà en étoiles
+      return Math.round(r / 20);      // % → étoiles
+    }
+
+    // Détecter le format depuis Kind ou Location
+    function detectFormat(kind, location) {
+      const k = (kind + location).toLowerCase();
+      if (k.includes('flac')) return { flac: true, mp3: false };
+      if (k.includes('mpeg') || k.includes('mp3')) return { flac: false, mp3: true };
+      return { flac: false, mp3: false };
+    }
+
+    // Détecter le dossier spécial depuis le chemin
+    function detectFolder(location) {
+      const p = decodeURIComponent(location).toLowerCase().replace(/\\/g, '/');
+      if (p.includes('!_00_stock') || p.includes('/stock/')) return 'stock';
+      if (p.includes('top titres') || p.includes('top-titres') || p.includes('top_titres')) return 'isolated';
+      if (p.includes('blind-test') || p.includes('blind_test')) return 'ignore';
+      return 'album';
+    }
+
+    // Grouper par album
+    const grouped = {};       // albums normaux
+    const isolatedTracks = []; // morceaux isolés
+    const stockAlbums = [];    // stock
+
+    trackDicts.forEach(d => {
+      const name    = str(d, 'Name');
+      const artist  = str(d, 'Artist');
+      const albumArtist = str(d, 'Album Artist');
+      const album   = str(d, 'Album');
+      const year    = String(num(d, 'Year') || '');
+      const genre   = str(d, 'Genre');
+      const rating  = parseRating(num(d, 'Rating'));
+      const kind    = str(d, 'Kind');
+      const location = str(d, 'Location');
+      const { flac, mp3 } = detectFormat(kind, location);
+      const folder  = detectFolder(location);
+
+      // Artiste effectif : préférer Album Artist si différent de "Various Artists"
+      const effectiveArtist = (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist;
+
+      if (folder === 'ignore') return;
+
+      if (folder === 'stock') {
+        if (!effectiveArtist && !album) return;
+        const key = normalizeKey(effectiveArtist, album);
+        if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
+          stockAlbums.push({ artist: effectiveArtist, album, year: year.slice(0,4), genre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre' });
+        }
+      } else if (folder === 'isolated') {
+        if (!name) return;
+        isolatedTracks.push({ title: name, artist, album, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre', rating });
+      } else {
+        // Album normal
+        if (!album) return;
+        const key = normalizeKey(effectiveArtist, album);
+        if (!grouped[key]) {
+          grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre, flac: false, mp3: false, digital: false, maxRating: 0 };
+        }
+        if (flac) grouped[key].flac = true;
+        else if (mp3) grouped[key].mp3 = true;
+        else grouped[key].digital = true;
+        if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
+        if (!grouped[key].genre && genre) grouped[key].genre = genre;
+        if (rating > grouped[key].maxRating) grouped[key].maxRating = rating;
+      }
+    });
+
+    let albumsAdded = 0, albumsUpdated = 0, tracksAdded = 0, tracksUpdated = 0, stockAdded = 0, stockUpdated = 0;
+
+    // Albums normaux
+    Object.values(grouped).forEach(g => {
+      if (!g.artist && !g.album) return;
+      const key = normalizeKey(g.artist, g.album);
+      const existing = albums.find(a =>
+        normalizeKey(a.artist, a.album) === key ||
+        normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key
+      );
+      if (existing) {
+        if (g.flac) existing.flac = true;
+        if (g.mp3)  existing.mp3  = true;
+        if (g.digital) existing.digital = true;
+        if (!existing.year  && g.year)  existing.year  = g.year;
+        if (!existing.genre && g.genre) existing.genre = g.genre;
+        if (g.maxRating && !existing.note) existing.note = g.maxRating;
+        albumsUpdated++;
+      } else {
+        albums.push({ id: uid(), artist: g.artist, album: g.album, year: g.year, genre: g.genre,
+          cd: false, flac: g.flac, mp3: g.mp3, digital: g.digital, note: g.maxRating || 0, plays: 0 });
+        albumsAdded++;
+      }
+    });
+
+    // Morceaux isolés
+    isolatedTracks.forEach(t => {
+      if (!t.title || !t.artist) return;
+      const existing = tracks.find(x =>
+        x.title.toLowerCase() === t.title.toLowerCase() &&
+        x.artist.toLowerCase() === t.artist.toLowerCase()
+      );
+      if (existing) {
+        if (t.rating && !existing.note) existing.note = t.rating;
+        tracksUpdated++;
+      } else {
+        tracks.push({ id: uid(), title: t.title, artist: t.artist, album: t.album,
+          format: t.format, duration: '', note: t.rating || 0 });
+        tracksAdded++;
+      }
+    });
+
+    // Stock
+    stockAlbums.forEach(s => {
+      const key = normalizeKey(s.artist, s.album);
+      const existing = stockItems.find(x => normalizeKey(x.artist, x.album) === key);
+      if (existing) { stockUpdated++; }
+      else {
+        stockItems.push({ id: uid(), artist: s.artist, album: s.album,
+          year: s.year, genre: s.genre, format: s.format, note: 0, notes: '' });
+        stockAdded++;
+      }
+    });
+
+    const parts = [];
+    if (albumsAdded || albumsUpdated) parts.push(`${albumsAdded} albums ajoutés, ${albumsUpdated} mis à jour`);
+    if (tracksAdded || tracksUpdated) parts.push(`${tracksAdded} morceaux isolés`);
+    if (stockAdded || stockUpdated)   parts.push(`${stockAdded} en stock`);
+    status.textContent = `✓ XML : ${parts.join(' — ') || 'aucune entrée'}`;
+    status.className = 'status ok';
+    invalidateCache();
+    renderAlbums(); renderTracks(); renderStock();
+    toast(`MusicBee XML : ${albumsAdded + tracksAdded + stockAdded} nouvelles entrées`);
+    saveToStorage();
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+    console.error('importMusicBeeXML:', e);
+  }
+  input.value = '';
+}
+
+// Helper : dans un dict iTunes, trouver l'élément suivant une <key>
+function getKeyValue(dict, key) {
+  const kids = Array.from(dict.children);
+  for (let i = 0; i < kids.length - 1; i++) {
+    if (kids[i].tagName === 'key' && kids[i].textContent === key) return kids[i+1];
+  }
+  return null;
 }
 
 // ===================== IMPORT: MUSICBEE =====================
@@ -3841,9 +4043,21 @@ async function initApp() {
   const savedKey = localStorage.getItem(LS_ANON_KEY);
 
   if (savedCfg === 'supabase' && savedKey) {
-    // Reconnexion automatique avec la clé sauvegardée
-    const ok = await connectSupabase(savedKey);
-    if (!ok) await initApp();
+    // Reconnexion automatique — en cas d'échec réseau, mode local sans re-demander la clé
+    try {
+      const ok = await connectSupabase(savedKey);
+      if (!ok) {
+        // Clé rejetée par Supabase → la supprimer et re-demander
+        localStorage.removeItem(LS_ANON_KEY);
+        localStorage.removeItem(LS_CFG);
+        loadDemo();
+        document.getElementById('supabase-setup').style.display = 'flex';
+      }
+    } catch(e) {
+      // Erreur réseau / timeout → continuer en mode local avec les données en cache
+      console.warn('Supabase indisponible au démarrage, mode local :', e);
+      await initApp();
+    }
   } else if (savedCfg === 'skip') {
     await initApp();
   } else {
