@@ -1410,15 +1410,32 @@ async function loadLastfmFromSupabase() {
     }
     lastfmData = all.map(d => ({ artist: d.artist, album: d.album, plays: d.plays }));
     invalidateCache();
-    // Mettre à jour les plays sur les albums existants sans recalculer tous les badges
-    lastfmData.forEach(d => {
-      const key = normalizeKey(d.artist, d.album);
-      const a = albums.find(x => normalizeKey(x.artist, x.album) === key);
-      if (a) a.plays = d.plays;
+    // Indexer les albums par clé normalisée une seule fois (O(n) au lieu de O(n²))
+    const albumIndex = new Map();
+    albums.forEach(a => {
+      albumIndex.set(normalizeKey(a.artist, a.album), a);
+      // Aussi indexer avec l'artiste nettoyé Discogs
+      const cleanKey = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
+      if (!albumIndex.has(cleanKey)) albumIndex.set(cleanKey, a);
     });
-    // Mettre à jour les badges une seule fois, en différé
-    _dataReady = true;
-    setTimeout(() => updateNavBadges(), 200);
+    // Appliquer les plays par lots pour ne pas bloquer le thread
+    const CHUNK = 2000;
+    async function applyPlaysChunked(i) {
+      const end = Math.min(i + CHUNK, lastfmData.length);
+      for (; i < end; i++) {
+        const d = lastfmData[i];
+        const a = albumIndex.get(normalizeKey(d.artist, d.album));
+        if (a) a.plays = d.plays;
+      }
+      if (i < lastfmData.length) {
+        await new Promise(r => setTimeout(r, 0)); // yield au navigateur
+        await applyPlaysChunked(i);
+      } else {
+        _dataReady = true;
+        updateNavBadges();
+      }
+    }
+    await applyPlaysChunked(0);
   } catch(e) { loadLastfmFromLocalStorage(); }
 }
 
