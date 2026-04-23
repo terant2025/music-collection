@@ -1247,12 +1247,26 @@ async function sbUpsert(table, rows, onConflict) {
   }
 }
 
+// Dédoublonner le tableau albums en mémoire (garde l'entrée avec l'id max)
+function deduplicateAlbums() {
+  const seen = new Map();
+  albums.forEach(a => {
+    const k = (a.artist + '|' + a.album).toLowerCase().trim();
+    const prev = seen.get(k);
+    if (!prev || a.id > prev.id) seen.set(k, a);
+  });
+  const before = albums.length;
+  albums = Array.from(seen.values());
+  if (albums.length < before) console.log(`Dédoublonnage : ${before - albums.length} doublons supprimés`);
+}
+
 async function saveToSupabase() {
   if (!window._sb) return;
+  deduplicateAlbums(); // toujours dédoublonner avant de sauvegarder
   setSaveIndicator('saving');
   const now = new Date().toISOString();
   try {
-    // Albums
+    // Albums — d'abord supprimer les ids absents de la liste locale (orphelins/doublons)
     const albumRows = albums.map(a => ({
       id: a.id, artist: a.artist, artist_raw: a.artistRaw || a.artist,
       album: a.album, year: a.year || null, genre: a.genre || null,
@@ -1262,6 +1276,11 @@ async function saveToSupabase() {
       updated_at: now
     }));
     await sbUpsert('albums', albumRows, 'id');
+    // Supprimer de Supabase les albums dont l'id n'est plus dans la liste locale
+    const localIds = albums.map(a => a.id);
+    if (localIds.length) {
+      await window._sb.from('albums').delete().not('id', 'in', `(${localIds.join(',')})`);
+    }
 
     // Tracks
     const trackRows = tracks.map(t => ({
@@ -1332,24 +1351,49 @@ async function loadFromSupabase() {
     }
     if (!alb.length) return false;
 
-    albums = alb.map(a => ({
+    const albMapped = alb.map(a => ({
       id: a.id, artist: a.artist, artistRaw: a.artist_raw, album: a.album,
       year: a.year || '', genre: a.genre || '',
       cd: !!a.cd, flac: !!a.flac, mp3: !!a.mp3, digital: !!a.digital,
       note: a.note || 0, plays: a.plays || 0, notes: a.notes || '',
       discogsId: a.discogs_id || undefined, label: a.label || undefined, catno: a.catno || undefined
     }));
+    // Dédoublonnage : garder l'entrée avec l'id le plus élevé en cas de doublon (artist+album)
+    const albDedup = new Map();
+    albMapped.forEach(a => {
+      const k = (a.artist + '|' + a.album).toLowerCase().trim();
+      const prev = albDedup.get(k);
+      if (!prev || a.id > prev.id) albDedup.set(k, a);
+    });
+    albums = Array.from(albDedup.values());
+    console.log(`Albums chargés : ${albMapped.length} total, ${albums.length} après dédoublonnage`);
 
-    // Tracks
-    const { data: trk } = await window._sb.from('tracks').select('*').order('id');
-    tracks = (trk || []).map(t => ({
+    // Tracks — paginé
+    let trkAll = [], trkPage = 0;
+    while (true) {
+      const { data: batch } = await window._sb.from('tracks').select('*').order('id')
+        .range(trkPage * 1000, (trkPage + 1) * 1000 - 1);
+      if (!batch || !batch.length) break;
+      trkAll = trkAll.concat(batch);
+      if (batch.length < 1000) break;
+      trkPage++;
+    }
+    tracks = trkAll.map(t => ({
       id: t.id, title: t.title, artist: t.artist, album: t.album || '',
       format: t.format, duration: t.duration || '', note: t.note || 0
     }));
 
-    // Stock
-    const { data: stk } = await window._sb.from('stock_items').select('*').order('id');
-    stockItems = (stk || []).map(s => ({
+    // Stock — paginé
+    let stkAll = [], stkPage = 0;
+    while (true) {
+      const { data: batch } = await window._sb.from('stock_items').select('*').order('id')
+        .range(stkPage * 1000, (stkPage + 1) * 1000 - 1);
+      if (!batch || !batch.length) break;
+      stkAll = stkAll.concat(batch);
+      if (batch.length < 1000) break;
+      stkPage++;
+    }
+    stockItems = stkAll.map(s => ({
       id: s.id, artist: s.artist, album: s.album, year: s.year || '',
       genre: s.genre || '', format: s.format || 'flac', note: s.note || 0, notes: s.notes || ''
     }));
