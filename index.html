@@ -516,8 +516,12 @@ input[type="file"] { display: none; }
 
   <div class="nav-section">last.fm</div>
   <div class="nav-item" onclick="nav('missing')">
-    <span class="nav-icon">🔍</span> Manquants
+    <span class="nav-icon">🔍</span> Albums manquants
     <span class="nav-badge warn" id="nav-missing-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('missing-tracks')">
+    <span class="nav-icon">🎵</span> Morceaux manquants
+    <span class="nav-badge warn" id="nav-missing-tracks-count">0</span>
   </div>
 
   <div class="nav-section">RateYourMusic</div>
@@ -803,6 +807,38 @@ input[type="file"] { display: none; }
         </div>
       </div>
       <div class="missing-grid" id="missing-grid"></div>
+    </div>
+
+    <!-- ==================== MISSING TRACKS ==================== -->
+    <div class="section" id="sec-missing-tracks">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Morceaux présents dans votre historique last.fm absents de vos morceaux isolés.</p>
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-mtrack-artist" type="text" placeholder="Artiste…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-mtrack-title" type="text" placeholder="Titre…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <select id="filter-mtrack-plays" onchange="renderMissingTracks()">
+          <option value="">Toutes écoutes</option>
+          <option value="5">≥ 5 écoutes</option>
+          <option value="10">≥ 10 écoutes</option>
+          <option value="25">≥ 25 écoutes</option>
+          <option value="50">≥ 50 écoutes</option>
+        </select>
+        <div class="toolbar-right">
+          <span id="mtrack-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Titre</th>
+              <th>Artiste</th>
+              <th>Écoutes</th>
+              <th style="width:80px"></th>
+            </tr>
+          </thead>
+          <tbody id="mtrack-tbody"></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- ==================== RYM ==================== -->
@@ -1212,6 +1248,25 @@ input[type="file"] { display: none; }
 </div>
 
 <!-- MODAL ASSOCIATION RYM -->
+<!-- Modal association last.fm album -->
+<div class="modal-overlay" id="modal-lastfm-assoc">
+  <div class="modal" style="width:520px">
+    <div class="modal-header">
+      <span>Associer un album last.fm</span>
+      <button class="modal-close" onclick="document.getElementById('modal-lastfm-assoc').classList.remove('open')">✕</button>
+    </div>
+    <div id="lastfm-assoc-info" style="font-size:13px;color:var(--text2);margin-bottom:12px;padding:10px;background:var(--bg3);border-radius:var(--radius)"></div>
+    <div class="form-group">
+      <label>Rechercher dans la collection</label>
+      <input type="text" id="lastfm-assoc-search" placeholder="Artiste ou album…" oninput="renderLastfmAssocList()" style="width:100%">
+    </div>
+    <div id="lastfm-assoc-list" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="document.getElementById('modal-lastfm-assoc').classList.remove('open')">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-wish">
   <div class="modal" style="width:420px">
     <div class="modal-header">
@@ -1825,7 +1880,7 @@ function initials(artist) {
 }
 
 // ===================== NAVIGATION =====================
-const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'rym', 'wishlist', 'assocreview', 'import'];
+const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'missing-tracks', 'rym', 'wishlist', 'assocreview', 'import'];
 function nav(id) {
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
@@ -1834,8 +1889,8 @@ function nav(id) {
       else el.classList.remove('active');
     });
   });
-  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Manquants last.fm', rym: 'RateYourMusic', wishlist: 'Wishlist', assocreview: 'Associations', import: 'Import / Export' };
-  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Écoutes non possédées', rym: 'Croisement collection & ratings', wishlist: 'Albums à acquérir', assocreview: 'Revue & correction des associations', import: 'Sources externes & sauvegarde' };
+  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Albums manquants', 'missing-tracks': 'Morceaux manquants', rym: 'RateYourMusic', wishlist: 'Wishlist', assocreview: 'Associations', import: 'Import / Export' };
+  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents des morceaux isolés', rym: 'Croisement collection & ratings', wishlist: 'Albums à acquérir', assocreview: 'Revue & correction des associations', import: 'Sources externes & sauvegarde' };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   document.getElementById('topbar-sub').textContent = subs[id] || '';
   document.getElementById('global-search').value = '';
@@ -1847,6 +1902,7 @@ function nav(id) {
   if (id === 'rym') renderRYM();
   if (id === 'wishlist') renderWishlist();
   if (id === 'assocreview') renderAssocReview();
+  if (id === 'missing-tracks') renderMissingTracks();
 }
 
 function onSearch() {
@@ -1859,6 +1915,7 @@ function onSearch() {
   if (active === 'rym') renderRYM();
   if (active === 'wishlist') renderWishlist();
   if (active === 'assocreview') renderAssocReview();
+  if (active === 'missing-tracks') renderMissingTracks();
 }
 
 // ===================== ALBUMS =====================
@@ -2145,6 +2202,8 @@ function updateNavBadges() {
     document.getElementById('nav-tracks-count').textContent = tracks.length;
     const wishBadge = document.getElementById('nav-wish-count');
     if (wishBadge) wishBadge.textContent = wishlist.length;
+    const missingTracksBadge = document.getElementById('nav-missing-tracks-count');
+    if (missingTracksBadge && _cache.missingTracks) missingTracksBadge.textContent = _cache.missingTracks.length;
     const assocBadge = document.getElementById('nav-assoc-count');
     if (assocBadge) {
       const total = associations.length + rymAssociations.length + albums.reduce((s, a) => s + (a.lastfmAliases?.length || 0), 0);
@@ -2206,40 +2265,131 @@ function renderMissing() {
         <div class="sub" style="font-size:11px">${esc(m.artist)} · <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span></div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
-        <button class="btn btn-sm" onclick="associateFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')" title="Associer à un album existant">🔗 Associer</button>
+        <button class="btn btn-sm" onclick="associateFromMissingIdx(${list.indexOf(m)})" title="Associer à un album existant">🔗 Associer</button>
         <button class="btn btn-sm" onclick="addToWishlistFromMissing(${list.indexOf(m)})" title="Ajouter à la wishlist">🎯</button>
         <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋ Ajouter</button>
       </div>
     </div>`).join('');
 }
 
-function associateFromMissing(encodedArtist, encodedAlbum) {
-  const artist = decodeURIComponent(encodedArtist);
-  const album  = decodeURIComponent(encodedAlbum);
-  // Chercher l'album le plus proche dans la collection
-  const q = (artist + ' ' + album).toLowerCase();
-  const candidates = albums
-    .map(a => ({ a, score: (a.artist + ' ' + a.album).toLowerCase().includes(artist.toLowerCase()) ? 1 : 0 }))
-    .filter(x => x.score > 0)
-    .map(x => x.a);
-  const match = candidates[0] || null;
-  if (match && confirm(`Associer "${artist} – ${album}" (last.fm) à "${match.artist} – ${match.album}" dans votre collection ?
+// Cible courante de l'association last.fm
+let _lastfmAssocTarget = null; // { artist, album } depuis lastfmData
 
-Cela supprimera cet album de la liste des manquants.`)) {
-    // Ajouter la clé last.fm comme alias dans l'album existant
-    if (!match.lastfmAliases) match.lastfmAliases = [];
-    match.lastfmAliases.push(normalizeKey(artist, album));
-    // Invalider le cache manquants
-    if (_cache) { delete _cache.missing; delete _cache.ownedKeys; }
-    invalidateCache();
-    saveToStorage();
-    renderMissing();
-    updateNavBadges();
-    toast(`Associé : ${match.artist} – ${match.album}`);
-  } else if (!match) {
-    // Pas de candidat évident : ouvrir modal édition pour choisir manuellement
-    alert('Aucun album correspondant trouvé dans votre collection. Utilisez "＋ Ajouter" pour créer l\'entrée.');
+function associateFromMissingIdx(idx) {
+  const m = _missingListCache[idx];
+  if (!m) return;
+  _lastfmAssocTarget = { artist: m.artist, album: m.album };
+  document.getElementById('lastfm-assoc-info').innerHTML =
+    `<strong>last.fm :</strong> ${esc(m.album)} — ${esc(m.artist)} <span style="color:var(--accent);margin-left:8px">${m.plays} écoutes</span>`;
+  document.getElementById('lastfm-assoc-search').value = m.artist;
+  renderLastfmAssocList();
+  document.getElementById('modal-lastfm-assoc').classList.add('open');
+}
+
+function renderLastfmAssocList() {
+  const q = (document.getElementById('lastfm-assoc-search').value || '').toLowerCase().trim();
+  const list = albums.filter(a => {
+    if (!q) return true;
+    return (a.artist + ' ' + a.album).toLowerCase().includes(q);
+  }).slice(0, 30);
+  const el = document.getElementById('lastfm-assoc-list');
+  if (!list.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun album trouvé</div>';
+    return;
   }
+  el.innerHTML = list.map(a => {
+    const badges = [
+      a.cd   ? '<span class="badge badge-cd">CD</span>'     : '',
+      a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
+      a.mp3  ? '<span class="badge badge-mp3">MP3</span>'   : '',
+    ].filter(Boolean).join(' ');
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg3);border-radius:var(--radius);cursor:pointer" onclick="applyLastfmAssoc(${a.id})">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div>
+        <div style="font-size:11px;color:var(--text2)">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0">${badges}</div>
+    </div>`;
+  }).join('');
+}
+
+function applyLastfmAssoc(albumId) {
+  if (!_lastfmAssocTarget) return;
+  const album = albums.find(a => a.id === albumId);
+  if (!album) return;
+  if (!album.lastfmAliases) album.lastfmAliases = [];
+  const key = normalizeKey(_lastfmAssocTarget.artist, _lastfmAssocTarget.album);
+  if (!album.lastfmAliases.includes(key)) album.lastfmAliases.push(key);
+  document.getElementById('modal-lastfm-assoc').classList.remove('open');
+  invalidateCache();
+  saveToStorage();
+  renderMissing();
+  updateNavBadges();
+  toast(`Associé : ${album.artist} — ${album.album}`);
+  _lastfmAssocTarget = null;
+}
+
+function computeMissingTracks() {
+  if (_cache.missingTracks) return _cache.missingTracks;
+  if (!Object.keys(_lastfmTrackCounts).length) return (_cache.missingTracks = []);
+  // Index des morceaux isolés déjà possédés
+  const ownedTracks = new Set(
+    tracks.map(t => normalizeKey(t.artist, t.title))
+  );
+  _cache.missingTracks = Object.values(_lastfmTrackCounts)
+    .filter(d => d.plays > 0 && !ownedTracks.has(normalizeKey(d.artist, d.track)))
+    .sort((a, b) => b.plays - a.plays);
+  return _cache.missingTracks;
+}
+
+function renderMissingTracks() {
+  const q     = document.getElementById('global-search').value.toLowerCase();
+  const af    = (document.getElementById('filter-mtrack-artist')?.value || '').toLowerCase().trim();
+  const tf    = (document.getElementById('filter-mtrack-title')?.value  || '').toLowerCase().trim();
+  const minP  = parseInt(document.getElementById('filter-mtrack-plays')?.value || '0') || 0;
+
+  const list = computeMissingTracks().filter(d => {
+    return (!q   || (d.artist + ' ' + d.track).toLowerCase().includes(q))
+        && (!af  || d.artist.toLowerCase().includes(af))
+        && (!tf  || d.track.toLowerCase().includes(tf))
+        && d.plays >= minP;
+  });
+
+  const ctr = document.getElementById('mtrack-counter');
+  if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' / ' + computeMissingTracks().length.toLocaleString('fr-FR') + ' morceaux';
+
+  const badge = document.getElementById('nav-missing-tracks-count');
+  if (badge) badge.textContent = computeMissingTracks().length;
+
+  const tbody = document.getElementById('mtrack-tbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🎵</div>' +
+      (Object.keys(_lastfmTrackCounts).length ? 'Aucun résultat avec ces filtres.' : 'Lancez la "Sync morceaux complète" dans Import pour charger les données.') +
+      '</div></td></tr>';
+    return;
+  }
+  // Afficher par tranches de 200 (liste potentiellement très longue)
+  const slice = list.slice(0, 200);
+  tbody.innerHTML = slice.map(d => `<tr>
+    <td style="font-weight:500">${esc(d.track)}</td>
+    <td style="color:var(--text2);font-size:13px">${esc(d.artist)}</td>
+    <td class="mono" style="color:var(--accent)">${d.plays}</td>
+    <td><button class="btn btn-sm btn-accent" onclick="addTrackFromMissing('${encodeURIComponent(d.artist)}','${encodeURIComponent(d.track)}')" title="Ajouter aux morceaux isolés">＋</button></td>
+  </tr>`).join('') + (list.length > 200 ? `<tr><td colspan="4" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length - 200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
+}
+
+function addTrackFromMissing(encodedArtist, encodedTitle) {
+  const artist = decodeURIComponent(encodedArtist);
+  const title  = decodeURIComponent(encodedTitle);
+  // Vérifier si déjà présent
+  if (tracks.find(t => normalizeKey(t.artist, t.title) === normalizeKey(artist, title))) {
+    toast('Déjà dans les morceaux isolés', 'warn'); return;
+  }
+  tracks.push({ id: uid(), title, artist, album: '', format: 'mp3', duration: '', note: 0 });
+  invalidateCache();
+  saveToStorage();
+  renderMissingTracks();
+  toast(`Ajouté : ${artist} — ${title}`);
 }
 
 function addFromMissing(artist, album) {
