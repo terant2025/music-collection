@@ -3098,7 +3098,7 @@ async function startTrackSync() {
 
   const apiKey = document.getElementById('lastfm-apikey').value.trim();
   const user   = document.getElementById('lastfm-user').value.trim();
-  if (!apiKey || !user) { status.textContent = 'Clé API et nom d'utilisateur requis.'; return; }
+  if (!apiKey || !user) { status.textContent = 'Clé API et nom d\'utilisateur requis.'; return; }
 
   if (!window._sb) {
     status.textContent = 'Supabase non connecté — la table lastfm_tracks ne sera pas remplie.';
