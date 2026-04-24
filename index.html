@@ -526,6 +526,11 @@ input[type="file"] { display: none; }
     <span class="nav-badge warn" id="nav-rym-count">0</span>
   </div>
 
+  <div class="nav-item" onclick="nav('wishlist')">
+    <span class="nav-icon">🎯</span> Wishlist
+    <span class="nav-badge" id="nav-wish-count">0</span>
+  </div>
+
   <div class="nav-section">Outils</div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
@@ -633,9 +638,8 @@ input[type="file"] { display: none; }
     <!-- ==================== TRACKS ==================== -->
     <div class="section" id="sec-tracks">
       <div class="toolbar">
-        <select id="filter-track-artist" onchange="renderTracks()">
-          <option value="">Tous artistes</option>
-        </select>
+        <input id="filter-track-artist" type="text" placeholder="Artiste…" oninput="renderTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-track-title" type="text" placeholder="Titre…" oninput="renderTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
         <select id="filter-track-format" onchange="renderTracks()">
           <option value="">Tous formats</option>
           <option value="flac">FLAC</option>
@@ -650,7 +654,13 @@ input[type="file"] { display: none; }
           <option value="3">★★★ et plus</option>
           <option value="0">Non notés</option>
         </select>
+        <select id="filter-track-lastfm" onchange="renderTracks()">
+          <option value="">Tous</option>
+          <option value="present">✅ Dans last.fm</option>
+          <option value="absent">🔍 Absents de last.fm</option>
+        </select>
         <div class="toolbar-right">
+          <span id="tracks-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-accent" onclick="openTrackModal()">＋ Morceau</button>
         </div>
       </div>
@@ -660,9 +670,8 @@ input[type="file"] { display: none; }
             <tr>
               <th>Titre</th>
               <th>Artiste</th>
-              <th>Album source</th>
               <th>Format</th>
-              <th>Durée</th>
+              <th>Écoutes last.fm</th>
               <th>Note</th>
               <th style="width:60px"></th>
             </tr>
@@ -841,6 +850,47 @@ input[type="file"] { display: none; }
           <div id="rym-unrated-list"></div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ==================== WISHLIST ==================== -->
+    <div class="section" id="sec-wishlist">
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-wish-artist" type="text" placeholder="Artiste…" oninput="renderWishlist()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-wish-album" type="text" placeholder="Album…" oninput="renderWishlist()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <select id="filter-wish-source" onchange="renderWishlist()">
+          <option value="">Toutes sources</option>
+          <option value="lastfm">last.fm</option>
+          <option value="stock">Stock</option>
+          <option value="rym">RYM</option>
+          <option value="manual">Manuel</option>
+        </select>
+        <select id="filter-wish-prio" onchange="renderWishlist()">
+          <option value="">Toutes priorités</option>
+          <option value="high">🔴 Haute</option>
+          <option value="mid">🟡 Moyenne</option>
+          <option value="low">🟢 Basse</option>
+        </select>
+        <div class="toolbar-right">
+          <span id="wish-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-accent" onclick="openWishModal()">＋ Ajouter</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Artiste / Album</th>
+              <th>Année</th>
+              <th>Source</th>
+              <th>Priorité</th>
+              <th>Écoutes</th>
+              <th>Note RYM</th>
+              <th style="width:120px"></th>
+            </tr>
+          </thead>
+          <tbody id="wish-tbody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -1119,6 +1169,46 @@ input[type="file"] { display: none; }
 </div>
 
 <!-- MODAL ASSOCIATION RYM -->
+<div class="modal-overlay" id="modal-wish">
+  <div class="modal" style="width:420px">
+    <div class="modal-header">
+      <span>Wishlist — album</span>
+      <button class="modal-close" onclick="document.getElementById('modal-wish').classList.remove('open')">✕</button>
+    </div>
+    <input type="hidden" id="wish-edit-id">
+    <div class="form-group">
+      <label>Artiste</label>
+      <input type="text" id="wish-f-artist" placeholder="Artiste…">
+    </div>
+    <div class="form-group">
+      <label>Album</label>
+      <input type="text" id="wish-f-album" placeholder="Album…">
+    </div>
+    <div style="display:flex;gap:10px">
+      <div class="form-group" style="flex:1">
+        <label>Année</label>
+        <input type="text" id="wish-f-year" placeholder="2024" maxlength="4">
+      </div>
+      <div class="form-group" style="flex:1">
+        <label>Priorité</label>
+        <select id="wish-f-prio">
+          <option value="high">🔴 Haute</option>
+          <option value="mid" selected>🟡 Moyenne</option>
+          <option value="low">🟢 Basse</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <input type="text" id="wish-f-notes" placeholder="Commentaire…">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="document.getElementById('modal-wish').classList.remove('open')">Annuler</button>
+      <button class="btn btn-accent" onclick="saveWish()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-rym-assoc">
   <div class="modal" style="width:540px">
     <h2>🔗 Associer un rating RYM</h2>
@@ -1167,7 +1257,7 @@ function _saveToStorageImpl() {
         await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, nextId, savedAt: now };
+        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -1197,6 +1287,7 @@ function loadFromStorage() {
     rymData = data.rymData || []; // rétrocompat anciens saves
     associations = data.associations || [];
     rymAssociations = data.rymAssociations || [];
+    wishlist = data.wishlist || [];
     nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
@@ -1454,7 +1545,7 @@ async function loadFromSupabase() {
 async function loadLastfmFromSupabase() {
   if (!window._sb) return;
   try {
-    // Charger par pages de 1000 pour gérer les 41000+ entrées
+    // Charger lastfm_data (albums) par pages de 1000
     let all = [], page = 0;
     const pageSize = 1000;
     while (true) {
@@ -1467,6 +1558,27 @@ async function loadLastfmFromSupabase() {
       page++;
     }
     lastfmData = all.map(d => ({ artist: d.artist, album: d.album, plays: d.plays }));
+
+    // Charger lastfm_tracks (morceaux) en arrière-plan
+    (async () => {
+      let trackAll = [], tp = 0;
+      while (true) {
+        const { data } = await window._sb
+          .from('lastfm_tracks').select('artist,track,plays')
+          .range(tp * pageSize, (tp + 1) * pageSize - 1);
+        if (!data || !data.length) break;
+        trackAll = trackAll.concat(data);
+        if (data.length < pageSize) break;
+        tp++;
+      }
+      _lastfmTrackCounts = {};
+      trackAll.forEach(d => {
+        _lastfmTrackCounts[normalizeKey(d.artist, d.track)] = { artist: d.artist, track: d.track, plays: d.plays };
+      });
+      console.log(`lastfm_tracks chargés : ${trackAll.length} morceaux`);
+      // Re-render tracks si l'onglet est actif
+      if (document.getElementById('sec-tracks')?.style.display !== 'none') renderTracks();
+    })();
     invalidateCache();
     // Indexer les albums par clé normalisée une seule fois (O(n) au lieu de O(n²))
     const albumIndex = new Map();
@@ -1638,7 +1750,7 @@ function initials(artist) {
 }
 
 // ===================== NAVIGATION =====================
-const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'rym', 'import'];
+const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'rym', 'wishlist', 'import'];
 function nav(id) {
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
@@ -1647,8 +1759,8 @@ function nav(id) {
       else el.classList.remove('active');
     });
   });
-  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Manquants last.fm', rym: 'RateYourMusic', import: 'Import / Export' };
-  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Écoutes non possédées', rym: 'Croisement collection & ratings', import: 'Sources externes & sauvegarde' };
+  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Manquants last.fm', rym: 'RateYourMusic', wishlist: 'Wishlist', import: 'Import / Export' };
+  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Écoutes non possédées', rym: 'Croisement collection & ratings', wishlist: 'Albums à acquérir', import: 'Sources externes & sauvegarde' };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   document.getElementById('topbar-sub').textContent = subs[id] || '';
   document.getElementById('global-search').value = '';
@@ -1658,6 +1770,7 @@ function nav(id) {
   if (id === 'stock') renderStock();
   if (id === 'missing') renderMissing();
   if (id === 'rym') renderRYM();
+  if (id === 'wishlist') renderWishlist();
 }
 
 function onSearch() {
@@ -1668,6 +1781,7 @@ function onSearch() {
   if (active === 'stock') renderStock();
   if (active === 'missing') renderMissing();
   if (active === 'rym') renderRYM();
+  if (active === 'wishlist') renderWishlist();
 }
 
 // ===================== ALBUMS =====================
@@ -1837,38 +1951,67 @@ function nextPage() {
 
 // ===================== TRACKS =====================
 function renderTracks() {
-  // updateNavBadges called by saveToStorage
-  const q = document.getElementById('global-search').value.toLowerCase();
-  const af = document.getElementById('filter-track-artist')?.value || '';
+  // Dédoublonner (titre+artiste)
+  const seen = new Map();
+  tracks.forEach(t => {
+    const k = (t.title+'|'+t.artist).toLowerCase().trim();
+    const prev = seen.get(k);
+    if (!prev || t.id > prev.id) seen.set(k, t);
+  });
+  if (seen.size < tracks.length) { tracks = Array.from(seen.values()); saveToStorage(); }
+
+  // Index last.fm tracks
+  const lfExact = new Map();
+  Object.values(_lastfmTrackCounts).forEach(d => {
+    lfExact.set(normalizeKey(d.artist, d.track), d.plays || 0);
+  });
+
+  const q  = document.getElementById('global-search').value.toLowerCase();
+  const af = (document.getElementById('filter-track-artist')?.value || '').toLowerCase().trim();
+  const tf = (document.getElementById('filter-track-title')?.value  || '').toLowerCase().trim();
   const ff = document.getElementById('filter-track-format').value;
   const nf = document.getElementById('filter-track-note')?.value || '';
+  const lf = document.getElementById('filter-track-lastfm')?.value || '';
+
   const list = tracks.filter(t => {
-    const m = !q || (t.title + ' ' + t.artist).toLowerCase().includes(q);
-    const am = !af || t.artist === af;
+    const m  = !q  || (t.title+' '+t.artist).toLowerCase().includes(q);
+    const am = !af || t.artist.toLowerCase().includes(af);
+    const tm = !tf || t.title.toLowerCase().includes(tf);
     const fm = !ff || t.format === ff;
     let nm = true;
-    if (nf === '5') nm = t.note === 5;
-    else if (nf === '4') nm = t.note >= 4;
-    else if (nf === '3') nm = t.note >= 3;
-    else if (nf === '0') nm = !t.note;
-    return m && am && fm && nm;
+    if (nf==='5') nm = t.note===5;
+    else if (nf==='4') nm = t.note>=4;
+    else if (nf==='3') nm = t.note>=3;
+    else if (nf==='0') nm = !t.note;
+    const hasLf = lfExact.has(normalizeKey(t.artist, t.title));
+    let lfm = true;
+    if (lf==='present') lfm = hasLf;
+    else if (lf==='absent') lfm = !hasLf;
+    return m && am && tm && fm && nm && lfm;
   });
+
+  const ctr = document.getElementById('tracks-counter');
+  if (ctr) ctr.textContent = list.length+' / '+tracks.length+' morceaux';
+
   const tbody = document.getElementById('tracks-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
     return;
   }
-  const fmtBadge = { flac: 'badge-flac', mp3: 'badge-mp3', aac: 'badge-digital', autre: 'badge-digital' };
+  const fmtBadge = { flac:'badge-flac', mp3:'badge-mp3', aac:'badge-digital', autre:'badge-digital' };
   tbody.innerHTML = list.map(t => {
     const stars = [1,2,3,4,5].map(i =>
       `<button class="star ${(t.note||0)>=i?'on':''}" onclick="rateTrack(${t.id},${i});event.stopPropagation()">★</button>`
     ).join('');
+    const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
+    const playsHtml = plays
+      ? `<span class="mono" style="font-size:12px;color:var(--accent)">${plays}</span>`
+      : `<span style="color:var(--text3);font-size:11px">–</span>`;
     return `<tr>
       <td style="font-weight:500">${esc(t.title)}</td>
       <td style="color:var(--text2);font-size:13px">${esc(t.artist)}</td>
-      <td style="color:var(--text3);font-size:12px">${esc(t.album||'–')}</td>
-      <td><span class="badge ${fmtBadge[t.format]||'badge-digital'}">${t.format.toUpperCase()}</span></td>
-      <td class="mono">${t.duration||'–'}</td>
+      <td><span class="badge ${fmtBadge[t.format]||'badge-digital'}">${(t.format||'?').toUpperCase()}</span></td>
+      <td>${playsHtml}</td>
       <td><div class="stars">${stars}</div></td>
       <td><button class="btn btn-sm btn-danger" onclick="deleteTrack(${t.id})">✕</button></td>
     </tr>`;
@@ -1923,6 +2066,8 @@ function updateNavBadges() {
   _navBadgeTimer = setTimeout(() => {
     document.getElementById('nav-albums-count').textContent = albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length;
     document.getElementById('nav-tracks-count').textContent = tracks.length;
+    const wishBadge = document.getElementById('nav-wish-count');
+    if (wishBadge) wishBadge.textContent = wishlist.length;
     const stockBadge = document.getElementById('nav-stock-count');
     if (stockBadge) stockBadge.textContent = stockItems.length;
     // Calculs coûteux uniquement si données chargées
@@ -1971,6 +2116,7 @@ function renderMissing() {
     el.innerHTML = '<div class="empty"><div class="empty-icon">✅</div>Aucun manquant avec ces filtres.</div>';
     return;
   }
+  _missingListCache = filtered;
   el.innerHTML = filtered.map(m => `
     <div class="missing-card" style="padding:10px 14px;gap:10px">
       <div class="missing-info" style="min-width:0">
@@ -1979,6 +2125,7 @@ function renderMissing() {
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button class="btn btn-sm" onclick="associateFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')" title="Associer à un album existant">🔗 Associer</button>
+        <button class="btn btn-sm" onclick="addToWishlistFromMissing(${list.indexOf(m)})" title="Ajouter à la wishlist">🎯</button>
         <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋ Ajouter</button>
       </div>
     </div>`).join('');
@@ -2951,20 +3098,26 @@ async function fetchLastfmIncremental(fromTs) {
 
 // Clés localStorage pour la sauvegarde progressive
 const LASTFM_CHECKPOINT_KEY = 'lastfm_checkpoint';
+const LASTFM_TRACK_CHECKPOINT_KEY = 'lastfm_track_checkpoint';
+let _lastfmTrackCounts = {}; // { normalizeKey(artist,track): { artist, track, plays } }
 
 function saveLastfmCheckpoint(currentPage, totalPages) {
-  // Sauvegarde légère : juste les counts agrégés + position
   const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays }));
   try {
     localStorage.setItem(LASTFM_CHECKPOINT_KEY, JSON.stringify({
-      page: currentPage,
-      totalPages,
-      counts: compact,
-      savedAt: Date.now()
+      page: currentPage, totalPages, counts: compact, savedAt: Date.now()
+    }));
+  } catch(e) { console.warn('Checkpoint albums non sauvegardé (localStorage plein)'); }
+  // Checkpoint tracks séparé (peut être volumineux)
+  const compactTracks = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, p: d.plays }));
+  try {
+    localStorage.setItem(LASTFM_TRACK_CHECKPOINT_KEY, JSON.stringify({
+      page: currentPage, totalPages, counts: compactTracks, savedAt: Date.now()
     }));
   } catch(e) {
-    // localStorage plein — on continue sans checkpoint
-    console.warn('Checkpoint last.fm non sauvegardé (localStorage plein)');
+    // localStorage plein — sauvegarder dans Supabase à la place
+    console.warn('Checkpoint tracks non sauvegardé localement, flush vers Supabase');
+    flushTrackCountsToSupabase();
   }
 }
 
@@ -2973,17 +3126,44 @@ function loadLastfmCheckpoint() {
     const raw = localStorage.getItem(LASTFM_CHECKPOINT_KEY);
     if (!raw) return null;
     const cp = JSON.parse(raw);
-    // Ignorer les checkpoints de plus de 48h (les plays auront changé)
     if (Date.now() - cp.savedAt > 48 * 3600 * 1000) {
       localStorage.removeItem(LASTFM_CHECKPOINT_KEY);
+      localStorage.removeItem(LASTFM_TRACK_CHECKPOINT_KEY);
       return null;
     }
+    // Restaurer aussi les tracks
+    try {
+      const rawT = localStorage.getItem(LASTFM_TRACK_CHECKPOINT_KEY);
+      if (rawT) {
+        const cpT = JSON.parse(rawT);
+        _lastfmTrackCounts = {};
+        cpT.counts.forEach(d => {
+          _lastfmTrackCounts[normalizeKey(d.a, d.t)] = { artist: d.a, track: d.t, plays: d.p };
+        });
+      }
+    } catch(e) {}
     return cp;
   } catch(e) { return null; }
 }
 
 function clearLastfmCheckpoint() {
   localStorage.removeItem(LASTFM_CHECKPOINT_KEY);
+  localStorage.removeItem(LASTFM_TRACK_CHECKPOINT_KEY);
+}
+
+// Flush partiel vers Supabase — appelé toutes les 50 pages et en fin de sync
+async function flushTrackCountsToSupabase() {
+  if (!window._sb || !Object.keys(_lastfmTrackCounts).length) return;
+  try {
+    const rows = Object.values(_lastfmTrackCounts).map(d => ({
+      artist: d.artist, track: d.track, plays: d.plays, updated_at: new Date().toISOString()
+    }));
+    // Upsert par tranches de 400
+    for (let i = 0; i < rows.length; i += 400) {
+      await window._sb.from('lastfm_tracks').upsert(rows.slice(i, i + 400), { onConflict: 'artist,track' });
+    }
+    console.log(`lastfm_tracks : ${rows.length} morceaux sauvegardés dans Supabase`);
+  } catch(e) { console.warn('Erreur flush lastfm_tracks:', e); }
 }
 
 async function fetchLastfmPage(page) {
@@ -3055,19 +3235,31 @@ async function fetchLastfmPage(page) {
       tracks.forEach(t => {
         if (t['@attr']?.nowplaying) return;
         const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
-        const album = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
-        if (!artist || !album) return;
-        const k = normalizeKey(artist, album);
-        if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0 };
-        _lastfmCounts[k].plays++;
+        const album  = String(t.album?.['#text']  || t.album?.name  || t.album  || '').trim();
+        const track  = String(t.name || '').trim();
+        const ts = parseInt(t.date?.uts || 0);
+        if (!artist) return;
+        // Index albums
+        if (album) {
+          const k = normalizeKey(artist, album);
+          if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0 };
+          _lastfmCounts[k].plays++;
+        }
+        // Index morceaux (track)
+        if (track) {
+          const kt = normalizeKey(artist, track);
+          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, plays: 0 };
+          _lastfmTrackCounts[kt].plays++;
+        }
       });
 
       const pct = Math.round((currentPage / _lastfmTotalPages) * 100);
       bar.style.width = pct + '%';
       const scrobblesLoaded = Math.min(currentPage * LASTFM_PAGE_SIZE, totalTracks);
-      progressLabel.textContent = `Page ${currentPage}/${_lastfmTotalPages} — ${scrobblesLoaded.toLocaleString('fr-FR')} / ${totalTracks.toLocaleString('fr-FR')} scrobbles — ${Object.keys(_lastfmCounts).length} albums`;
+      const nTracks = Object.keys(_lastfmTrackCounts).length;
+      progressLabel.textContent = `Page ${currentPage}/${_lastfmTotalPages} — ${scrobblesLoaded.toLocaleString('fr-FR')} / ${totalTracks.toLocaleString('fr-FR')} scrobbles — ${Object.keys(_lastfmCounts).length} albums · ${nTracks.toLocaleString('fr-FR')} morceaux`;
 
-      // Checkpoint + mise à jour plays toutes les 10 pages
+      // Checkpoint albums + tracks toutes les 10 pages
       if (currentPage % 10 === 0) {
         lastfmData = Object.values(_lastfmCounts);
         lastfmData.forEach(d => {
@@ -3076,6 +3268,11 @@ async function fetchLastfmPage(page) {
         });
         saveLastfmCheckpoint(currentPage + 1, _lastfmTotalPages);
         updateNavBadges();
+      }
+      // Flush Supabase toutes les 50 pages (sauvegarde partielle morceaux)
+      if (currentPage % 50 === 0) {
+        progressLabel.textContent += ' — sauvegarde partielle…';
+        await flushTrackCountsToSupabase();
       }
 
       currentPage++;
@@ -3107,6 +3304,9 @@ async function fetchLastfmPage(page) {
     btnMore.textContent = '▶ Reprendre';
     btnMore.style.display = 'inline-flex';
   } else {
+    // Flush final des morceaux dans Supabase
+    progressLabel.textContent = 'Sauvegarde des morceaux dans Supabase…';
+    await flushTrackCountsToSupabase();
     clearLastfmCheckpoint();
     const syncTs = String(Math.floor(Date.now() / 1000));
     localStorage.setItem(LASTFM_SYNC_KEY, syncTs);
@@ -3114,12 +3314,13 @@ async function fetchLastfmPage(page) {
     if (window._sb) {
       window._sb.from('meta').upsert({ key: 'lastfm_sync_ts', value: syncTs }, { onConflict: 'key' }).then(() => {});
     }
-    status.textContent = `✓ Complet — ${lastfmData.length} albums distincts chargés`;
+    const nT = Object.keys(_lastfmTrackCounts).length;
+    status.textContent = `✓ Complet — ${lastfmData.length} albums · ${nT.toLocaleString('fr-FR')} morceaux distincts`;
     status.className = 'status ok';
     bar.style.width = '100%';
     progress.style.display = 'none';
     btnMore.style.display = 'none';
-    toast(`last.fm : ${lastfmData.length} albums synchronisés`);
+    toast(`last.fm : ${lastfmData.length} albums · ${nT.toLocaleString('fr-FR')} morceaux synchronisés`);
   }
 
   renderAlbums();
@@ -3148,6 +3349,158 @@ async function loadMoreLastfm() {
   }
 }
 
+
+// ===================== WISHLIST =====================
+let wishlist = []; // [{ id, artist, album, year, source, prio, plays, rymRating, notes, addedAt }]
+
+function wishlistOwnedSet() {
+  // Albums déjà possédés (numérique ou discogs) — à exclure de la wishlist auto
+  const s = new Set();
+  albums.forEach(a => {
+    if (a.flac || a.mp3 || a.digital || a.cd) s.add(normalizeKey(a.artist, a.album));
+  });
+  return s;
+}
+
+function addToWishlist(artist, album, year, source, plays, rymRating, notes) {
+  const key = normalizeKey(artist, album);
+  if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
+    toast('Déjà dans la wishlist', 'warn'); return;
+  }
+  // Priorité auto selon écoutes / note RYM
+  let prio = 'low';
+  if (plays >= 50 || rymRating >= 4) prio = 'high';
+  else if (plays >= 10 || rymRating >= 3.5) prio = 'mid';
+  wishlist.push({ id: uid(), artist, album, year: year || '', source: source || 'manual',
+    prio, plays: plays || 0, rymRating: rymRating || 0, notes: notes || '', addedAt: Date.now() });
+  updateNavBadges();
+  saveToStorage();
+  toast(`Ajouté à la wishlist : ${artist} — ${album}`);
+}
+
+function openWishModal(id) {
+  const w = id ? wishlist.find(x => x.id === id) : null;
+  document.getElementById('wish-edit-id').value = id || '';
+  document.getElementById('wish-f-artist').value = w?.artist || '';
+  document.getElementById('wish-f-album').value  = w?.album  || '';
+  document.getElementById('wish-f-year').value   = w?.year   || '';
+  document.getElementById('wish-f-prio').value   = w?.prio   || 'mid';
+  document.getElementById('wish-f-notes').value  = w?.notes  || '';
+  document.getElementById('modal-wish').classList.add('open');
+}
+
+function saveWish() {
+  const id    = document.getElementById('wish-edit-id').value;
+  const artist = document.getElementById('wish-f-artist').value.trim();
+  const album  = document.getElementById('wish-f-album').value.trim();
+  if (!artist || !album) { toast('Artiste et album requis', 'error'); return; }
+  const year  = document.getElementById('wish-f-year').value.trim();
+  const prio  = document.getElementById('wish-f-prio').value;
+  const notes = document.getElementById('wish-f-notes').value.trim();
+  if (id) {
+    const w = wishlist.find(x => x.id == id);
+    if (w) Object.assign(w, { artist, album, year, prio, notes });
+  } else {
+    const key = normalizeKey(artist, album);
+    if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
+      toast('Déjà dans la wishlist', 'warn'); return;
+    }
+    wishlist.push({ id: uid(), artist, album, year, source: 'manual', prio, plays: 0, rymRating: 0, notes, addedAt: Date.now() });
+  }
+  document.getElementById('modal-wish').classList.remove('open');
+  renderWishlist(); updateNavBadges(); saveToStorage();
+}
+
+function deleteWish(id) {
+  if (!confirm('Retirer de la wishlist ?')) return;
+  wishlist = wishlist.filter(w => w.id !== id);
+  renderWishlist(); updateNavBadges(); saveToStorage();
+}
+
+function markWishAcquired(id) {
+  const w = wishlist.find(x => x.id === id);
+  if (!w) return;
+  // Ouvrir le modal d'ajout album pré-rempli
+  document.getElementById('f-artist').value = w.artist;
+  document.getElementById('f-album').value  = w.album;
+  document.getElementById('f-year').value   = w.year || '';
+  document.getElementById('edit-id').value  = '';
+  setModalNote(0);
+  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
+  document.getElementById('modal-album').classList.add('open');
+  nav('albums');
+  // Retirer de la wishlist après confirmation dans le modal
+  wishlist = wishlist.filter(x => x.id !== id);
+  saveToStorage();
+}
+
+let _missingListCache = [];
+
+function addToWishlistFromMissing(idx) {
+  const m = _missingListCache[idx];
+  if (!m) return;
+  addToWishlist(m.artist, m.album, '', 'lastfm', m.plays, 0, '');
+}
+function addToWishlistFromRYMIdx(idx) {
+  const r = _rymMissingCache[idx];
+  if (!r) return;
+  const plays = (lastfmData.find(d => normalizeKey(d.artist, d.album) === normalizeKey(r.artist, r.album)) || {}).plays || 0;
+  addToWishlist(r.artist, r.album, r.year || '', 'rym', plays, r.rating || 0, '');
+}
+function addToWishlistFromStock(stockId) {
+  const s = stockItems.find(x => x.id === stockId);
+  if (!s) return;
+  addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, 0, s.notes || '');
+}
+
+function renderWishlist() {
+  const q    = document.getElementById('global-search').value.toLowerCase();
+  const af   = (document.getElementById('filter-wish-artist')?.value || '').toLowerCase().trim();
+  const albf = (document.getElementById('filter-wish-album')?.value  || '').toLowerCase().trim();
+  const sf   = document.getElementById('filter-wish-source')?.value || '';
+  const pf   = document.getElementById('filter-wish-prio')?.value   || '';
+
+  const list = wishlist.filter(w => {
+    return (!q    || (w.artist+' '+w.album).toLowerCase().includes(q))
+        && (!af   || w.artist.toLowerCase().includes(af))
+        && (!albf || w.album.toLowerCase().includes(albf))
+        && (!sf   || w.source === sf)
+        && (!pf   || w.prio   === pf);
+  }).sort((a, b) => {
+    const po = { high: 0, mid: 1, low: 2 };
+    if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
+    return (b.plays || 0) - (a.plays || 0);
+  });
+
+  const ctr = document.getElementById('wish-counter');
+  if (ctr) ctr.textContent = list.length + ' / ' + wishlist.length + ' entrées';
+
+  const tbody = document.getElementById('wish-tbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎯</div>' +
+      (wishlist.length ? 'Aucun résultat avec ces filtres.' : 'La wishlist est vide. Ajoutez des albums depuis last.fm, RYM ou le stock.') +
+      '</div></td></tr>';
+    return;
+  }
+  const prioLabel = { high: '🔴 Haute', mid: '🟡 Moyenne', low: '🟢 Basse' };
+  const srcLabel  = { lastfm: '🎵 last.fm', stock: '📦 Stock', rym: '⭐ RYM', manual: '✍️ Manuel' };
+  tbody.innerHTML = list.map(w => `<tr>
+    <td>
+      <div style="font-weight:500">${esc(w.album)}</div>
+      <div style="font-size:12px;color:var(--text2)">${esc(w.artist)}</div>
+    </td>
+    <td class="mono">${w.year || '–'}</td>
+    <td style="font-size:12px">${srcLabel[w.source] || w.source}</td>
+    <td><span style="font-size:12px">${prioLabel[w.prio] || w.prio}</span></td>
+    <td class="mono" style="color:var(--accent)">${w.plays || '–'}</td>
+    <td class="mono" style="color:var(--amber)">${w.rymRating ? w.rymRating.toFixed(2) + '★' : '–'}</td>
+    <td style="display:flex;gap:4px">
+      <button class="btn btn-sm" onclick="markWishAcquired(${w.id})" title="Acquis">✓</button>
+      <button class="btn btn-sm" onclick="openWishModal(${w.id})" title="Modifier">✎</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteWish(${w.id})" title="Supprimer">✕</button>
+    </td>
+  </tr>`).join('');
+}
 
 // ===================== STOCK =====================
 let _stockNote = 0;
@@ -3288,6 +3641,7 @@ function renderStock() {
       <td><div class="stars">${stars(s)}</div></td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px">
         <button class="btn btn-sm" onclick="moveStockToCollection(${s.id})" title="Déplacer vers la collection">→ Collecter</button>
+        <button class="btn btn-sm" onclick="addToWishlistFromStock(${s.id})" title="Ajouter à la wishlist">🎯</button>
         <button class="btn btn-sm btn-danger" onclick="deleteStockItem(${s.id})">✕</button>
       </td>
     </tr>`).join('');
@@ -3576,6 +3930,19 @@ document.getElementById('modal-assoc').addEventListener('click', function(e) {
 
 // ===================== RYM ASSOCIATIONS =====================
 let _rymAssocTarget = null;
+let _rymMissingCache = []; // référence au tableau missing actuel pour éviter encodage
+
+function openRYMAssocModalIdx(idx) {
+  const r = _rymMissingCache[idx];
+  if (!r) return;
+  openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating);
+}
+
+function addFromRYMIdx(idx) {
+  const r = _rymMissingCache[idx];
+  if (!r) return;
+  addFromRYM(r.artist, r.album, r.year || '', r.genre || '');
+}
 
 function openRYMAssocModal(rymKey, artist, album, rating) {
   _rymAssocTarget = rymKey;
@@ -3783,6 +4150,7 @@ function renderRYM() {
   if (!missing.length) {
     missingEl.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-icon">✅</div>Aucun manquant au-dessus du seuil !</div>';
   } else {
+    _rymMissingCache = missing;
     missingEl.innerHTML = missing.map(r => {
       const rymKey = normalizeKey(r.artist, r.album);
       const assoc = rymAssociations.find(a => a.rymKey === rymKey);
@@ -3797,8 +4165,9 @@ function renderRYM() {
             </div>
           </div>
           ${rymStars(r.rating)}
-          <button class="btn btn-sm" onclick="openRYMAssocModal('${rymKey}','${encodeURIComponent(r.artist)}','${encodeURIComponent(r.album)}',${r.rating})" title="Associer à un album de la collection">🔗 Associer</button>
-          <button class="btn btn-sm" onclick="addFromRYM('${encodeURIComponent(r.artist)}','${encodeURIComponent(r.album)}','${r.year||''}','${encodeURIComponent(r.genre||'')}')">＋ Ajouter</button>
+          <button class="btn btn-sm" onclick="openRYMAssocModalIdx(${missing.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
+          <button class="btn btn-sm" onclick="addToWishlistFromRYMIdx(${missing.indexOf(r)})" title="Ajouter à la wishlist">🎯</button>
+          <button class="btn btn-sm" onclick="addFromRYMIdx(${missing.indexOf(r)})">＋ Ajouter</button>
         </div>
         ${r.genre ? `<div style="font-size:11px;color:var(--text3)">${esc(r.genre)}</div>` : ''}
       </div>`;
@@ -3836,8 +4205,8 @@ function renderRYM() {
 }
 
 function addFromRYM(artist, album, year, genre) {
-  document.getElementById('f-artist').value = decodeURIComponent(artist);
-  document.getElementById('f-album').value = decodeURIComponent(album);
+  document.getElementById('f-artist').value = artist;
+  document.getElementById('f-album').value = album;
   document.getElementById('f-year').value = year || '';
   document.getElementById('f-genre').value = decodeURIComponent(genre);
   document.getElementById('edit-id').value = '';
