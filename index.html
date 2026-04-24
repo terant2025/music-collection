@@ -530,6 +530,10 @@ input[type="file"] { display: none; }
     <span class="nav-icon">🎯</span> Wishlist
     <span class="nav-badge" id="nav-wish-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('assocreview')">
+    <span class="nav-icon">🔗</span> Associations
+    <span class="nav-badge" id="nav-assoc-count">0</span>
+  </div>
 
   <div class="nav-section">Outils</div>
   <div class="nav-item" onclick="nav('import')">
@@ -840,14 +844,23 @@ input[type="file"] { display: none; }
           <div id="rym-missing-list"></div>
         </div>
 
-        <!-- Dans Discogs mais absents de RYM -->
+        <!-- Colonne droite : non notés + ownership orphelins -->
         <div>
+          <!-- 1. Non notés sur RYM -->
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div style="font-size:13px;font-weight:500;color:var(--text)">Dans votre collection — non notés sur RYM</div>
+            <div style="font-size:13px;font-weight:500;color:var(--text)">Non notés sur RYM</div>
             <span class="nav-badge" id="rym-unrated-count">0</span>
           </div>
-          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Albums de votre collection CD ou numérique absents de vos ratings RYM.</p>
-          <div id="rym-unrated-list"></div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Entrées RYM sans note (rating = 0 ou absent).</p>
+          <div id="rym-unrated-list" style="margin-bottom:24px"></div>
+
+          <!-- 2. Ownership renseigné mais introuvable -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;border-top:1px solid var(--border);padding-top:16px">
+            <div style="font-size:13px;font-weight:500;color:var(--text)">Ownership renseigné — introuvable</div>
+            <span class="nav-badge warn" id="rym-orphan-count">0</span>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Entrées RYM avec ownership non retrouvées dans Discogs ou Discographie.</p>
+          <div id="rym-orphan-list"></div>
         </div>
 
       </div>
@@ -890,6 +903,35 @@ input[type="file"] { display: none; }
             </tr>
           </thead>
           <tbody id="wish-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ==================== ASSOC REVIEW ==================== -->
+    <div class="section" id="sec-assocreview">
+      <div class="toolbar" style="margin-bottom:12px">
+        <select id="filter-assoc-type" onchange="renderAssocReview()">
+          <option value="">Tous types</option>
+          <option value="discogs-num">Discogs ↔ Numérique</option>
+          <option value="rym">RYM ↔ Album</option>
+          <option value="lastfm">last.fm aliases</option>
+        </select>
+        <input id="filter-assoc-q" type="text" placeholder="Artiste / Album…" oninput="renderAssocReview()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:200px"/>
+        <div class="toolbar-right">
+          <span id="assoc-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Source (A)</th>
+              <th>Cible (B)</th>
+              <th style="width:100px"></th>
+            </tr>
+          </thead>
+          <tbody id="assoc-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -1423,7 +1465,8 @@ async function saveToSupabase() {
     // Associations Discogs/MusicBee
     if (associations.length) {
       await window._sb.from('associations').delete().neq('cd_id', -1);
-      await sbUpsert('associations', associations.map(a => ({ cd_id: a.cdId, num_id: a.numId })), 'cd_id');
+      // Upsert sur (cd_id, num_id) pour autoriser les associations multiples
+      await sbUpsert('associations', associations.map(a => ({ cd_id: a.cdId, num_id: a.numId })), 'cd_id,num_id');
     }
 
     // Associations RYM
@@ -1781,7 +1824,7 @@ function initials(artist) {
 }
 
 // ===================== NAVIGATION =====================
-const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'rym', 'wishlist', 'import'];
+const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'rym', 'wishlist', 'assocreview', 'import'];
 function nav(id) {
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
@@ -1790,8 +1833,8 @@ function nav(id) {
       else el.classList.remove('active');
     });
   });
-  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Manquants last.fm', rym: 'RateYourMusic', wishlist: 'Wishlist', import: 'Import / Export' };
-  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Écoutes non possédées', rym: 'Croisement collection & ratings', wishlist: 'Albums à acquérir', import: 'Sources externes & sauvegarde' };
+  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Manquants last.fm', rym: 'RateYourMusic', wishlist: 'Wishlist', assocreview: 'Associations', import: 'Import / Export' };
+  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Écoutes non possédées', rym: 'Croisement collection & ratings', wishlist: 'Albums à acquérir', assocreview: 'Revue & correction des associations', import: 'Sources externes & sauvegarde' };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   document.getElementById('topbar-sub').textContent = subs[id] || '';
   document.getElementById('global-search').value = '';
@@ -1802,6 +1845,7 @@ function nav(id) {
   if (id === 'missing') renderMissing();
   if (id === 'rym') renderRYM();
   if (id === 'wishlist') renderWishlist();
+  if (id === 'assocreview') renderAssocReview();
 }
 
 function onSearch() {
@@ -1813,6 +1857,7 @@ function onSearch() {
   if (active === 'missing') renderMissing();
   if (active === 'rym') renderRYM();
   if (active === 'wishlist') renderWishlist();
+  if (active === 'assocreview') renderAssocReview();
 }
 
 // ===================== ALBUMS =====================
@@ -2099,6 +2144,11 @@ function updateNavBadges() {
     document.getElementById('nav-tracks-count').textContent = tracks.length;
     const wishBadge = document.getElementById('nav-wish-count');
     if (wishBadge) wishBadge.textContent = wishlist.length;
+    const assocBadge = document.getElementById('nav-assoc-count');
+    if (assocBadge) {
+      const total = associations.length + rymAssociations.length + albums.reduce((s, a) => s + (a.lastfmAliases?.length || 0), 0);
+      assocBadge.textContent = total;
+    }
     const stockBadge = document.getElementById('nav-stock-count');
     if (stockBadge) stockBadge.textContent = stockItems.length;
     // Calculs coûteux uniquement si données chargées
@@ -3465,6 +3515,135 @@ function markWishAcquired(id) {
   saveToStorage();
 }
 
+// ===================== ASSOCIATIONS REVIEW =====================
+
+function renderAssocReview() {
+  const typeF = document.getElementById('filter-assoc-type')?.value || '';
+  const q = (document.getElementById('filter-assoc-q')?.value || '').toLowerCase().trim();
+
+  const rows = [];
+
+  // 1. Associations Discogs ↔ Numérique
+  if (!typeF || typeF === 'discogs-num') {
+    associations.forEach((assoc, idx) => {
+      const cdAlbum  = albums.find(a => a.id === assoc.cdId);
+      const numAlbum = albums.find(a => a.id === assoc.numId);
+      if (!cdAlbum && !numAlbum) return;
+      const label = `${cdAlbum ? cdAlbum.artist + ' — ' + cdAlbum.album : '?'} ↔ ${numAlbum ? numAlbum.artist + ' — ' + numAlbum.album : '?'}`;
+      if (q && !label.toLowerCase().includes(q)) return;
+      rows.push({
+        type: 'discogs-num',
+        typeLabel: '💿 Discogs ↔ Numérique',
+        a: cdAlbum  ? `<strong>${esc(cdAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(cdAlbum.artist)}</span><br><span class="badge badge-cd">CD</span>` : '<span style="color:var(--text3)">Introuvable</span>',
+        b: numAlbum ? `<strong>${esc(numAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(numAlbum.artist)}</span><br>${numAlbum.flac ? '<span class="badge badge-flac">FLAC</span>' : ''} ${numAlbum.mp3 ? '<span class="badge badge-mp3">MP3</span>' : ''}` : '<span style="color:var(--text3)">Introuvable</span>',
+        actions: `<button class="btn btn-sm btn-danger" onclick="removeDiscogsAssoc(${assoc.cdId},${assoc.numId})" title="Supprimer">✕</button>
+                  <button class="btn btn-sm" onclick="addDiscogsAssocFrom(${assoc.cdId})" title="Ajouter une 2e cible numérique">＋</button>`
+      });
+    });
+  }
+
+  // 2. Associations RYM ↔ Album
+  if (!typeF || typeF === 'rym') {
+    rymAssociations.forEach(assoc => {
+      const rymEntry = rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey);
+      const album    = albums.find(a => a.id === assoc.albumId);
+      const label = `${rymEntry ? rymEntry.artist + ' ' + rymEntry.album : assoc.rymKey} ${album ? album.artist + ' ' + album.album : ''}`;
+      if (q && !label.toLowerCase().includes(q)) return;
+      rows.push({
+        type: 'rym',
+        typeLabel: '⭐ RYM ↔ Album',
+        a: rymEntry
+          ? `<strong>${esc(rymEntry.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(rymEntry.artist)}</span><br><span style="font-size:11px;color:var(--amber)">${rymEntry.rating ? rymEntry.rating.toFixed(2) + '★' : 'Non noté'}</span>`
+          : `<span style="font-size:11px;color:var(--text3)">${esc(assoc.rymKey)}</span>`,
+        b: album
+          ? `<strong>${esc(album.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(album.artist)}</span>`
+          : '<span style="color:var(--text3)">Album introuvable (id: ' + assoc.albumId + ')</span>',
+        actions: `<button class="btn btn-sm btn-danger" onclick="removeRYMAssoc('${assoc.rymKey}')" title="Supprimer">✕</button>
+                  <button class="btn btn-sm" onclick="reassociateRYM('${assoc.rymKey}')" title="Ré-associer">✎</button>`
+      });
+    });
+  }
+
+  // 3. Aliases last.fm
+  if (!typeF || typeF === 'lastfm') {
+    albums.forEach(album => {
+      if (!album.lastfmAliases || !album.lastfmAliases.length) return;
+      album.lastfmAliases.forEach((alias, ai) => {
+        const label = album.artist + ' ' + album.album + ' ' + alias;
+        if (q && !label.toLowerCase().includes(q)) return;
+        rows.push({
+          type: 'lastfm',
+          typeLabel: '🎵 last.fm alias',
+          a: `<span style="font-size:12px;color:var(--text3);font-family:var(--mono)">${esc(alias)}</span>`,
+          b: `<strong>${esc(album.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(album.artist)}</span>`,
+          actions: `<button class="btn btn-sm btn-danger" onclick="removeLastfmAlias(${album.id},${ai})" title="Supprimer">✕</button>`
+        });
+      });
+    });
+  }
+
+  const ctr = document.getElementById('assoc-counter');
+  if (ctr) ctr.textContent = rows.length + ' association' + (rows.length > 1 ? 's' : '');
+
+  // Badge nav
+  const total = associations.length + rymAssociations.length + albums.reduce((s, a) => s + (a.lastfmAliases?.length || 0), 0);
+  const badge = document.getElementById('nav-assoc-count');
+  if (badge) badge.textContent = total;
+
+  const tbody = document.getElementById('assoc-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🔗</div>Aucune association' + (q || typeF ? ' avec ces filtres' : ' enregistrée') + '.</div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `<tr>
+    <td style="font-size:12px;color:var(--text2);white-space:nowrap">${r.typeLabel}</td>
+    <td style="font-size:13px;line-height:1.5">${r.a}</td>
+    <td style="font-size:13px;line-height:1.5">${r.b}</td>
+    <td style="white-space:nowrap">${r.actions}</td>
+  </tr>`).join('');
+}
+
+function removeDiscogsAssoc(cdId, numId) {
+  if (!confirm('Supprimer cette association Discogs ↔ Numérique ?')) return;
+  associations = associations.filter(a => !(a.cdId === cdId && a.numId === numId));
+  invalidateCache(); saveToStorage(); renderAssocReview(); updateNavBadges();
+  toast('Association supprimée');
+}
+
+function addDiscogsAssocFrom(cdId) {
+  // Ouvrir le modal d'association numérique pour un cdId donné
+  const cdAlbum = albums.find(a => a.id === cdId);
+  if (!cdAlbum) return;
+  _assocTargetId = cdId;
+  document.getElementById('assoc-target-title').textContent = cdAlbum.artist + ' — ' + cdAlbum.album;
+  renderAssocList();
+  document.getElementById('modal-assoc').classList.add('open');
+}
+
+function removeRYMAssoc(rymKey) {
+  if (!confirm('Supprimer cette association RYM ?')) return;
+  rymAssociations = rymAssociations.filter(a => a.rymKey !== rymKey);
+  invalidateCache(); saveToStorage(); renderAssocReview(); renderRYM(); updateNavBadges();
+  toast('Association RYM supprimée');
+}
+
+function reassociateRYM(rymKey) {
+  const entry = rymData.find(r => normalizeKey(r.artist, r.album) === rymKey);
+  if (!entry) return;
+  // Supprimer l'ancienne et ouvrir le modal pour ré-associer
+  rymAssociations = rymAssociations.filter(a => a.rymKey !== rymKey);
+  openRYMAssocModal(rymKey, entry.artist, entry.album, entry.rating || 0);
+}
+
+function removeLastfmAlias(albumId, aliasIndex) {
+  if (!confirm('Supprimer cet alias last.fm ?')) return;
+  const album = albums.find(a => a.id === albumId);
+  if (!album || !album.lastfmAliases) return;
+  album.lastfmAliases.splice(aliasIndex, 1);
+  invalidateCache(); saveToStorage(); renderAssocReview(); updateNavBadges();
+  toast('Alias last.fm supprimé');
+}
+
 let _missingListCache = [];
 
 function addToWishlistFromMissing(idx) {
@@ -3696,11 +3875,14 @@ document.getElementById('modal-stock').addEventListener('click', function(e) {
 
 // ===================== DISCOGRAPHIE =====================
 
-// Retourne l'id numérique lié à un cdId (via association manuelle ou auto-match)
+// Retourne tous les ids numériques liés à un cdId (association multiple possible)
+function getLinkedNumIds(cdId) {
+  return associations.filter(a => a.cdId === cdId).map(a => a.numId);
+}
+// Compat ancienne signature
 function getLinkedNumId(cdId) {
-  const manual = associations.find(a => a.cdId === cdId);
-  if (manual) return manual.numId;
-  return null;
+  const ids = getLinkedNumIds(cdId);
+  return ids.length ? ids[0] : null;
 }
 
 // Un album a une sauvegarde numérique si :
@@ -3728,9 +3910,9 @@ function getCDKeysSet() {
 
 function hasDigitalBackup(album) {
   if (album.flac || album.mp3 || album.digital) return true;
-  const linkedId = getLinkedNumId(album.id);
-  if (linkedId) {
-    const linked = albums.find(a => a.id === linkedId);
+  const linkedIds = getLinkedNumIds(album.id);
+  for (const lid of linkedIds) {
+    const linked = albums.find(a => a.id === lid);
     if (linked && (linked.flac || linked.mp3 || linked.digital)) return true;
   }
   const key = normalizeKey(album.artist, album.album);
@@ -3961,14 +4143,30 @@ document.getElementById('modal-assoc').addEventListener('click', function(e) {
 
 // ===================== RYM ASSOCIATIONS =====================
 let _rymAssocTarget = null;
-let _rymMissingCache = []; // référence au tableau missing actuel pour éviter encodage
+let _rymMissingCache  = [];
+let _rymUnratedCache  = [];
+let _rymOrphansCache  = [];
 
 function openRYMAssocModalIdx(idx) {
   const r = _rymMissingCache[idx];
   if (!r) return;
   openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating);
 }
-
+function openRYMUnratedAssocIdx(idx) {
+  const r = _rymUnratedCache[idx];
+  if (!r) return;
+  openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
+}
+function openRYMOrphanAssocIdx(idx) {
+  const r = _rymOrphansCache[idx];
+  if (!r) return;
+  openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
+}
+function addFromRYMOrphanIdx(idx) {
+  const r = _rymOrphansCache[idx];
+  if (!r) return;
+  addFromRYM(r.artist, r.album, r.year || '', r.genre || '');
+}
 function addFromRYMIdx(idx) {
   const r = _rymMissingCache[idx];
   if (!r) return;
@@ -4135,17 +4333,45 @@ function computeRYMMissing() {
   return _cache.rymMissing;
 }
 
-// Albums de la collection (CD ou numérique) absents de RYM
-function computeCollectionNotOnRYM() {
+// Entrées RYM sans note (rating absent ou 0)
+function computeRYMUnrated() {
   if (_cache.rymUnrated) return _cache.rymUnrated;
   if (!rymData.length) return (_cache.rymUnrated = []);
-  const rymKeys = new Set(rymData.map(r => normalizeKey(r.artist, r.album)));
-  const associatedAlbumIds = new Set(rymAssociations.map(a => a.albumId));
-  _cache.rymUnrated = albums
-    .filter(a => (a.cd || a.flac || a.mp3 || a.digital))
-    .filter(a => !rymKeys.has(normalizeKey(a.artist, a.album)) && !associatedAlbumIds.has(a.id))
+  const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
+  _cache.rymUnrated = rymData
+    .filter(r => !r.rating || r.rating === 0)
+    .filter(r => !associatedRymKeys.has(normalizeKey(r.artist, r.album)))
     .sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album, 'fr'));
   return _cache.rymUnrated;
+}
+
+// Entrées RYM avec ownership renseigné mais introuvables dans albums (Discogs/Discographie)
+function computeRYMOrphans() {
+  if (_cache.rymOrphans) return _cache.rymOrphans;
+  if (!rymData.length) return (_cache.rymOrphans = []);
+  // Index des albums possédés (cd/discogs) par clé normalisée
+  const ownedKeys = new Set();
+  albums.forEach(a => {
+    if (a.cd || a.discogsId) {
+      ownedKeys.add(normalizeKey(a.artist, a.album));
+      ownedKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+    }
+  });
+  // Index des associations manuelles déjà faites
+  const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
+  _cache.rymOrphans = rymData
+    .filter(r => {
+      const own = (r.ownership || '').trim().toLowerCase();
+      if (!own) return false; // pas d'ownership → on n'inclut pas
+      const key = normalizeKey(r.artist, r.album);
+      // Déjà associé manuellement → OK, pas orphelin
+      if (associatedRymKeys.has(key)) return false;
+      // Retrouvé dans la collection → pas orphelin
+      if (ownedKeys.has(key)) return false;
+      return true;
+    })
+    .sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album, 'fr'));
+  return _cache.rymOrphans;
 }
 
 function rymStars(rating) {
@@ -4205,29 +4431,57 @@ function renderRYM() {
     }).join('');
   }
 
-  // --- Dans la collection mais absents de RYM ---
-  let unrated = computeCollectionNotOnRYM();
-  if (q) unrated = unrated.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
+  // --- Non notés sur RYM ---
+  let unrated = computeRYMUnrated();
+  if (q) unrated = unrated.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
   document.getElementById('rym-unrated-count').textContent = unrated.length;
   const unratedEl = document.getElementById('rym-unrated-list');
   if (!unrated.length) {
-    unratedEl.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-icon">✅</div>Tous vos albums sont sur RYM !</div>';
+    unratedEl.innerHTML = '<div class="empty" style="padding:16px"><div class="empty-icon">✅</div>Aucune entrée non notée !</div>';
   } else {
-    unratedEl.innerHTML = unrated.map(a => {
-      const badges = [
-        a.cd ? '<span class="badge badge-cd">CD</span>' : '',
-        a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
-        a.mp3 ? '<span class="badge badge-mp3">MP3</span>' : '',
-      ].filter(Boolean).join('');
+    unratedEl.innerHTML = unrated.map(r => {
+      const rymKey = normalizeKey(r.artist, r.album);
+      const own = r.ownership ? `<span class="badge badge-cd" style="font-size:10px">${esc(r.ownership)}</span>` : '';
       return `
-        <div class="missing-card">
-          <div class="artist-avatar">${initials(a.artist)}</div>
-          <div class="missing-info">
-            <div class="title">${esc(a.album)}</div>
-            <div class="sub">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
-            <div style="display:flex;gap:4px;margin-top:4px">${badges}</div>
+        <div class="missing-card" style="padding:10px 14px;gap:10px">
+          <div class="missing-info" style="min-width:0;flex:1">
+            <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.album)}</div>
+            <div class="sub" style="font-size:11px">${esc(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
           </div>
-          <span class="badge badge-missing">Non noté</span>
+          <div style="display:flex;gap:5px;flex-shrink:0">
+            <button class="btn btn-sm" onclick="openRYMUnratedAssocIdx(${unrated.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  _rymUnratedCache = unrated;
+
+  // --- Ownership renseigné mais introuvable ---
+  let orphans = computeRYMOrphans();
+  if (q) orphans = orphans.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  document.getElementById('rym-orphan-count').textContent = orphans.length;
+  const orphanEl = document.getElementById('rym-orphan-list');
+  if (!orphanEl) { updateNavBadges(); return; }
+  if (!orphans.length) {
+    orphanEl.innerHTML = '<div class="empty" style="padding:16px"><div class="empty-icon">✅</div>Aucun orphelin !</div>';
+  } else {
+    _rymOrphansCache = orphans;
+  orphanEl.innerHTML = orphans.map(r => {
+      const rymKey = normalizeKey(r.artist, r.album);
+      const own = r.ownership ? `<span class="badge badge-cd" style="font-size:10px">${esc(r.ownership)}</span>` : '';
+      const ratingHtml = r.rating ? rymStars(r.rating) : '<span style="color:var(--text3);font-size:11px">Non noté</span>';
+      return `
+        <div class="missing-card" style="padding:10px 14px;gap:10px">
+          <div class="missing-info" style="min-width:0;flex:1">
+            <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.album)}</div>
+            <div class="sub" style="font-size:11px">${esc(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
+            <div style="margin-top:4px">${ratingHtml}</div>
+          </div>
+          <div style="display:flex;gap:5px;flex-shrink:0">
+            <button class="btn btn-sm" onclick="openRYMOrphanAssocIdx(${orphans.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
+            <button class="btn btn-sm btn-accent" onclick="addFromRYMOrphanIdx(${orphans.indexOf(r)})">＋ Ajouter</button>
+          </div>
         </div>`;
     }).join('');
   }
