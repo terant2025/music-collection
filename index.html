@@ -995,6 +995,7 @@ input[type="file"] { display: none; }
             <button class="btn btn-accent" onclick="connectLastfm()">🔗 Synchroniser last.fm</button>
             <button class="btn btn-sm" onclick="loadMoreLastfm()" id="btn-lastfm-more" style="display:none">⏸ Pause</button>
             <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
+            <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux complète</button>
           </div>
           <div class="status" id="status-lastfm"></div>
           <div id="lastfm-progress" style="margin-top:8px;display:none">
@@ -3073,6 +3074,150 @@ async function connectLastfm() {
   } catch(e) {
     status.textContent = 'Erreur réseau : ' + e.message;
     status.className = 'status err';
+  }
+}
+
+// ===================== SYNC TRACKS UNIQUEMENT =====================
+let _trackSyncAbort = false;
+
+async function startTrackSync() {
+  const btn   = document.getElementById('btn-tracks-sync');
+  const status = document.getElementById('status-lastfm');
+  const progress = document.getElementById('lastfm-progress');
+  const bar = document.getElementById('lastfm-bar');
+  const progressLabel = document.getElementById('lastfm-progress-label');
+
+  // Pause si déjà en cours
+  if (btn.dataset.running === '1') {
+    _trackSyncAbort = true;
+    btn.dataset.running = '0';
+    btn.textContent = '🎵 Sync morceaux complète';
+    status.textContent = 'Sync morceaux interrompue.';
+    return;
+  }
+
+  const apiKey = document.getElementById('lastfm-apikey').value.trim();
+  const user   = document.getElementById('lastfm-user').value.trim();
+  if (!apiKey || !user) { status.textContent = 'Clé API et nom d'utilisateur requis.'; return; }
+
+  if (!window._sb) {
+    status.textContent = 'Supabase non connecté — la table lastfm_tracks ne sera pas remplie.';
+    status.className = 'status err';
+    return;
+  }
+
+  _trackSyncAbort = false;
+  btn.dataset.running = '1';
+  btn.textContent = '⏸ Pause morceaux';
+  status.textContent = 'Récupération du nombre de scrobbles…';
+  status.className = 'status';
+  progress.style.display = 'block';
+  bar.style.width = '0%';
+
+  try {
+    // Total scrobbles
+    const infoUrl = `${LASTFM_BASE}?method=user.getinfo&user=${encodeURIComponent(user)}&api_key=${apiKey}&format=json`;
+    const infoData = await (await fetch(infoUrl)).json();
+    if (infoData.error) { status.textContent = 'Erreur last.fm : ' + infoData.message; status.className = 'status err'; return; }
+    const totalScrobbles = parseInt(infoData.user?.playcount || 0);
+    const totalPages = Math.ceil(totalScrobbles / LASTFM_PAGE_SIZE);
+
+    // Checkpoint léger (localStorage) pour reprendre si pause
+    const TRACK_CP_KEY = 'lastfm_track_sync_page';
+    let startPage = 1;
+    try {
+      const cp = JSON.parse(localStorage.getItem(TRACK_CP_KEY) || 'null');
+      if (cp && cp.totalPages === totalPages && cp.page > 1) {
+        if (confirm(`Reprendre la sync morceaux depuis la page ${cp.page} / ${totalPages} ?`)) {
+          startPage = cp.page;
+          // Restaurer les counts déjà accumulés
+          if (cp.counts) {
+            _lastfmTrackCounts = {};
+            cp.counts.forEach(d => { _lastfmTrackCounts[normalizeKey(d.a, d.t)] = { artist: d.a, track: d.t, plays: d.p }; });
+          }
+        }
+      }
+    } catch(e) {}
+
+    status.textContent = `Sync morceaux : ${totalScrobbles.toLocaleString('fr-FR')} scrobbles, ${totalPages} pages — page ${startPage} →`;
+    status.className = 'status';
+
+    for (let page = startPage; page <= totalPages && !_trackSyncAbort; page++) {
+      // Délai respectueux du rate-limit last.fm
+      if (page > startPage) await new Promise(r => setTimeout(r, 220));
+
+      let data, retries = 0;
+      while (retries < 3) {
+        try {
+          const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(user)}&api_key=${apiKey}&format=json&limit=${LASTFM_PAGE_SIZE}&page=${page}&extended=0`;
+          const res = await fetch(url);
+          data = await res.json();
+          if (data.error === 11 || data.error === 16) {
+            progressLabel.textContent = `Limite API, pause 15s… (page ${page}/${totalPages})`;
+            await new Promise(r => setTimeout(r, 15000));
+            retries++; continue;
+          }
+          break;
+        } catch(e) { retries++; await new Promise(r => setTimeout(r, 3000)); }
+      }
+      if (!data?.recenttracks?.track) continue;
+
+      const tracks = Array.isArray(data.recenttracks.track)
+        ? data.recenttracks.track
+        : [data.recenttracks.track];
+
+      tracks.forEach(t => {
+        if (t['@attr']?.nowplaying) return;
+        const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+        const track  = String(t.name || '').trim();
+        if (!artist || !track) return;
+        const kt = normalizeKey(artist, track);
+        if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, plays: 0 };
+        _lastfmTrackCounts[kt].plays++;
+      });
+
+      const pct = Math.round((page / totalPages) * 100);
+      bar.style.width = pct + '%';
+      const nT = Object.keys(_lastfmTrackCounts).length;
+      progressLabel.textContent = `Page ${page}/${totalPages} — ${(page * LASTFM_PAGE_SIZE).toLocaleString('fr-FR')} scrobbles traités — ${nT.toLocaleString('fr-FR')} morceaux distincts`;
+
+      // Checkpoint toutes les 10 pages
+      if (page % 10 === 0) {
+        const compact = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, p: d.plays }));
+        try { localStorage.setItem(TRACK_CP_KEY, JSON.stringify({ page: page + 1, totalPages, counts: compact, savedAt: Date.now() })); } catch(e) {}
+      }
+
+      // Flush Supabase toutes les 50 pages
+      if (page % 50 === 0) {
+        progressLabel.textContent += ' — flush Supabase…';
+        await flushTrackCountsToSupabase();
+      }
+    }
+
+    if (!_trackSyncAbort) {
+      // Flush final
+      progressLabel.textContent = 'Flush final vers Supabase…';
+      await flushTrackCountsToSupabase();
+      localStorage.removeItem(TRACK_CP_KEY);
+      const nT = Object.keys(_lastfmTrackCounts).length;
+      status.textContent = `✓ Sync morceaux terminée — ${nT.toLocaleString('fr-FR')} morceaux distincts dans lastfm_tracks`;
+      status.className = 'status ok';
+      bar.style.width = '100%';
+      toast(`lastfm_tracks : ${nT.toLocaleString('fr-FR')} morceaux synchronisés`);
+      // Re-render si onglet tracks actif
+      if (document.getElementById('sec-tracks')?.style.display !== 'none') renderTracks();
+    } else {
+      status.textContent = 'Sync morceaux interrompue — les données partielles sont sauvegardées.';
+      status.className = 'status';
+    }
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+    console.error('startTrackSync:', e);
+  } finally {
+    btn.dataset.running = '0';
+    btn.textContent = '🎵 Sync morceaux complète';
+    progress.style.display = 'none';
   }
 }
 
