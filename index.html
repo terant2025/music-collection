@@ -2420,12 +2420,37 @@ function computeMissingTracks() {
   if (_cache.missingTracks) return _cache.missingTracks;
   // Ne pas mettre en cache si lastfm_tracks pas encore chargé — évite de bloquer sur []
   if (!Object.keys(_lastfmTrackCounts).length) return [];
-  // Index des morceaux isolés déjà possédés
+
+  // 1. Morceaux isolés possédés
   const ownedTracks = new Set(
     tracks.map(t => normalizeKey(t.artist, t.title))
   );
+
+  // 2. Pistes des albums MusicBee dans album_tracks
+  // Index par normalizeKey(artist, title) — on cherche artiste de l'album + titre de la piste
+  const ownedAlbumTracks = new Set();
+  albums.forEach(a => {
+    const albumTracks = albumTracksCache[a.id] || [];
+    albumTracks.filter(t => t.source === 'musicbee').forEach(t => {
+      if (t.title) {
+        // Clé artiste album + titre piste
+        ownedAlbumTracks.add(normalizeKey(a.artist, t.title));
+        // Aussi sans artiste (pour les compilations)
+        ownedAlbumTracks.add(normalizeKey('', t.title));
+      }
+    });
+  });
+
+  // 3. Exclure les morceaux déjà possédés (isolés OU dans un album MusicBee)
   _cache.missingTracks = Object.values(_lastfmTrackCounts)
-    .filter(d => d.plays > 0 && !ownedTracks.has(normalizeKey(d.artist, d.track)))
+    .filter(d => {
+      if (!d.plays) return false;
+      const keyTrack = normalizeKey(d.artist, d.track);
+      if (ownedTracks.has(keyTrack)) return false;
+      // Chercher dans les pistes d'album : artiste last.fm + titre
+      if (ownedAlbumTracks.has(normalizeKey(d.artist, d.track))) return false;
+      return true;
+    })
     .sort((a, b) => b.plays - a.plays);
   return _cache.missingTracks;
 }
