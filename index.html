@@ -3347,6 +3347,7 @@ async function startTrackSync() {
         if (t['@attr']?.nowplaying) return;
         const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
         const track  = String(t.name || '').trim();
+        const album  = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
         if (!artist || !track) return;
         const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
         if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
