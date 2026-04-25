@@ -1429,21 +1429,46 @@ function loadFromStorage() {
   }
 }
 
+// ===================== SUPABASE =====================
+const SUPABASE_URL = 'https://mjedlmumiljdrmjobefm.supabase.co';
+const LS_ANON_KEY = 'supabase_anon_key';
+window._sb = null; // client Supabase
+
+async function initSupabase() {
+  try {
+    const anonKey = localStorage.getItem("supabase_anon_key");
+
+    if (!anonKey) return false;
+
+    window._sb = supabase.createClient(
+      SUPABASE_URL,
+      anonKey
+    );
+
+    console.log("Supabase connecté");
+    return true;
+
+  } catch (err) {
+    console.error("Erreur Supabase", err);
+    return false;
+  }
+}
+
+
 document.addEventListener("DOMContentLoaded", async () => {
   loadFromStorage();
+
   await initSupabase();
+
   renderAlbums();
   updateNavBadges();
 
   const input = document.getElementById("discogs-token");
   if (input) {
-    input.value = localStorage.getItem("discogs_token") || "";
+    input.value =
+      localStorage.getItem("discogs_token") || "";
   }
 });
-// ===================== SUPABASE =====================
-const SUPABASE_URL = 'https://mjedlmumiljdrmjobefm.supabase.co';
-const LS_ANON_KEY = 'supabase_anon_key';
-window._sb = null; // client Supabase
 
 async function connectSupabase(anonKey) {
   const errEl = document.getElementById('setup-error');
