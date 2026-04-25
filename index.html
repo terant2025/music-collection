@@ -803,6 +803,19 @@ input[type="file"] { display: none; }
           <option value="50">≥ 50 écoutes</option>
           <option value="100">≥ 100 écoutes</option>
         </select>
+        <select id="filter-missing-genre" onchange="renderMissing()">
+          <option value="">Tous genres</option>
+        </select>
+        <select id="filter-missing-rym" onchange="renderMissing()">
+          <option value="">Tous</option>
+          <option value="rym">Noté sur RYM</option>
+          <option value="norym">Non noté RYM</option>
+        </select>
+        <select id="filter-missing-sort" onchange="renderMissing()">
+          <option value="plays">Tri : Écoutes ↓</option>
+          <option value="artist">Tri : Artiste A→Z</option>
+          <option value="album">Tri : Album A→Z</option>
+        </select>
         <div class="toolbar-right">
           <span id="missing-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
         </div>
@@ -816,12 +829,20 @@ input[type="file"] { display: none; }
       <div class="toolbar" style="margin-bottom:12px">
         <input id="filter-mtrack-artist" type="text" placeholder="Artiste…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
         <input id="filter-mtrack-title" type="text" placeholder="Titre…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-mtrack-album" type="text" placeholder="Album…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
         <select id="filter-mtrack-plays" onchange="renderMissingTracks()">
           <option value="">Toutes écoutes</option>
           <option value="5">≥ 5 écoutes</option>
           <option value="10">≥ 10 écoutes</option>
           <option value="25">≥ 25 écoutes</option>
           <option value="50">≥ 50 écoutes</option>
+          <option value="100">≥ 100 écoutes</option>
+        </select>
+        <select id="filter-mtrack-sort" onchange="renderMissingTracks()">
+          <option value="plays">Tri : Écoutes ↓</option>
+          <option value="artist">Tri : Artiste A→Z</option>
+          <option value="title">Tri : Titre A→Z</option>
+          <option value="album">Tri : Album A→Z</option>
         </select>
         <div class="toolbar-right">
           <span id="mtrack-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
@@ -833,6 +854,7 @@ input[type="file"] { display: none; }
             <tr>
               <th>Titre</th>
               <th>Artiste</th>
+              <th>Album</th>
               <th>Écoutes</th>
               <th style="width:80px"></th>
             </tr>
@@ -1400,75 +1422,26 @@ function loadFromStorage() {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return false;
-
     const data = JSON.parse(raw);
-
     albums = data.albums || [];
     tracks = data.tracks || [];
     stockItems = data.stockItems || [];
-    rymData = data.rymData || [];
+    rymData = data.rymData || []; // rétrocompat anciens saves
     associations = data.associations || [];
     rymAssociations = data.rymAssociations || [];
     wishlist = data.wishlist || [];
-    nextId = data.nextId || (
-      Math.max(
-        0,
-        ...albums.map(a => a.id || 0),
-        ...tracks.map(t => t.id || 0)
-      ) + 1
-    );
-
+    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
-    loadRymFromLocalStorage();
-
+    loadRymFromLocalStorage(); // écrase rymData si clé dédiée présente
     return true;
-
-  } catch(e) {
-    return false;
-  }
+  } catch(e) { return false; }
 }
 
 // ===================== SUPABASE =====================
 const SUPABASE_URL = 'https://mjedlmumiljdrmjobefm.supabase.co';
 const LS_ANON_KEY = 'supabase_anon_key';
 window._sb = null; // client Supabase
-
-async function initSupabase() {
-  try {
-    const anonKey = localStorage.getItem("supabase_anon_key");
-
-    if (!anonKey) return false;
-
-    window._sb = supabase.createClient(
-      SUPABASE_URL,
-      anonKey
-    );
-
-    console.log("Supabase connecté");
-    return true;
-
-  } catch (err) {
-    console.error("Erreur Supabase", err);
-    return false;
-  }
-}
-
-
-document.addEventListener("DOMContentLoaded", async () => {
-  loadFromStorage();
-
-  await initSupabase();
-
-  renderAlbums();
-  updateNavBadges();
-
-  const input = document.getElementById("discogs-token");
-  if (input) {
-    input.value =
-      localStorage.getItem("discogs_token") || "";
-  }
-});
 
 async function connectSupabase(anonKey) {
   const errEl = document.getElementById('setup-error');
@@ -2310,18 +2283,41 @@ function saveToStorage() {
 
 function renderMissing() {
   const list = computeMissing();
-  const q = document.getElementById('global-search').value.toLowerCase();
-  const af = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
-  const albf = (document.getElementById('filter-missing-album')?.value || '').toLowerCase().trim();
-  const minPlays = parseInt(document.getElementById('filter-missing-plays')?.value || '0') || 0;
+  const q      = document.getElementById('global-search').value.toLowerCase();
+  const af     = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
+  const albf   = (document.getElementById('filter-missing-album')?.value  || '').toLowerCase().trim();
+  const minP   = parseInt(document.getElementById('filter-missing-plays')?.value || '0') || 0;
+  const genreF = (document.getElementById('filter-missing-genre')?.value  || '').toLowerCase().trim();
+  const rymF   = document.getElementById('filter-missing-rym')?.value || '';
+  const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
 
-  const filtered = list.filter(m => {
-    const qm = !q || (m.artist + ' ' + m.album).toLowerCase().includes(q);
-    const am = !af || m.artist.toLowerCase().includes(af);
-    const albm = !albf || m.album.toLowerCase().includes(albf);
-    const pm = m.plays >= minPlays;
-    return qm && am && albm && pm;
+  // Index RYM pour le filtre et l'affichage
+  const rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+
+  // Remplir le select genre dynamiquement (une seule fois)
+  const genreSel = document.getElementById('filter-missing-genre');
+  if (genreSel && genreSel.options.length <= 1) {
+    const genres = [...new Set(list.flatMap(m => (m.genre||'').split(',').map(g => g.trim()).filter(Boolean)))].sort();
+    genres.forEach(g => { const o = document.createElement('option'); o.value = g.toLowerCase(); o.textContent = g; genreSel.appendChild(o); });
+  }
+
+  let filtered = list.filter(m => {
+    const key = normalizeKey(m.artist, m.album);
+    const hasRym = rymIndex.has(key);
+    const genre = (m.genre || '').toLowerCase();
+    return (!q      || (m.artist+' '+m.album).toLowerCase().includes(q))
+        && (!af     || m.artist.toLowerCase().includes(af))
+        && (!albf   || m.album.toLowerCase().includes(albf))
+        && (!genreF || genre.includes(genreF))
+        && m.plays >= minP
+        && (!rymF || (rymF === 'rym' ? hasRym : !hasRym));
   });
+
+  if (sortF === 'artist') filtered.sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
+  else if (sortF === 'album') filtered.sort((a,b) => a.album.localeCompare(b.album,'fr'));
+  // 'plays' = déjà trié desc par computeMissing
+
+  _missingListCache = filtered;
 
   const ctr = document.getElementById('missing-counter');
   if (ctr) ctr.textContent = filtered.length + ' / ' + list.length + ' manquants';
@@ -2335,19 +2331,31 @@ function renderMissing() {
     el.innerHTML = '<div class="empty"><div class="empty-icon">✅</div>Aucun manquant avec ces filtres.</div>';
     return;
   }
-  _missingListCache = filtered;
-  el.innerHTML = filtered.map(m => `
+  el.innerHTML = filtered.map((m, i) => {
+    const rymEntry = rymIndex.get(normalizeKey(m.artist, m.album));
+    const rymBadge = rymEntry
+      ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
+      : '';
+    const genreBadge = m.genre
+      ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(m.genre.split(',')[0].trim())}</span>`
+      : '';
+    return `
     <div class="missing-card" style="padding:10px 14px;gap:10px">
-      <div class="missing-info" style="min-width:0">
+      <div class="missing-info" style="min-width:0;flex:1">
         <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)}</div>
-        <div class="sub" style="font-size:11px">${esc(m.artist)} · <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span></div>
+        <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+          <span>${esc(m.artist)}</span>
+          <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span>
+          ${rymBadge}${genreBadge}
+        </div>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <button class="btn btn-sm" onclick="associateFromMissingIdx(${list.indexOf(m)})" title="Associer à un album existant">🔗 Associer</button>
-        <button class="btn btn-sm" onclick="addToWishlistFromMissing(${list.indexOf(m)})" title="Ajouter à la wishlist">🎯</button>
-        <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋ Ajouter</button>
+      <div style="display:flex;gap:5px;flex-shrink:0">
+        <button class="btn btn-sm" onclick="associateFromMissingIdx(${i})" title="Associer">🔗</button>
+        <button class="btn btn-sm" onclick="addToWishlistFromMissing(${i})" title="Wishlist">🎯</button>
+        <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 // Cible courante de l'association last.fm
@@ -2422,45 +2430,81 @@ function computeMissingTracks() {
 }
 
 function renderMissingTracks() {
-  const q     = document.getElementById('global-search').value.toLowerCase();
-  const af    = (document.getElementById('filter-mtrack-artist')?.value || '').toLowerCase().trim();
-  const tf    = (document.getElementById('filter-mtrack-title')?.value  || '').toLowerCase().trim();
-  const minP  = parseInt(document.getElementById('filter-mtrack-plays')?.value || '0') || 0;
+  const q      = document.getElementById('global-search').value.toLowerCase();
+  const af     = (document.getElementById('filter-mtrack-artist')?.value || '').toLowerCase().trim();
+  const tf     = (document.getElementById('filter-mtrack-title')?.value  || '').toLowerCase().trim();
+  const albf   = (document.getElementById('filter-mtrack-album')?.value  || '').toLowerCase().trim();
+  const minP   = parseInt(document.getElementById('filter-mtrack-plays')?.value || '0') || 0;
+  const sortF  = document.getElementById('filter-mtrack-sort')?.value || 'plays';
 
-  const list = computeMissingTracks().filter(d => {
-    return (!q   || (d.artist + ' ' + d.track).toLowerCase().includes(q))
-        && (!af  || d.artist.toLowerCase().includes(af))
-        && (!tf  || d.track.toLowerCase().includes(tf))
+  const all = computeMissingTracks();
+  let list = all.filter(d => {
+    return (!q    || (d.artist+' '+d.track+' '+(d.album||'')).toLowerCase().includes(q))
+        && (!af   || d.artist.toLowerCase().includes(af))
+        && (!tf   || d.track.toLowerCase().includes(tf))
+        && (!albf || (d.album||'').toLowerCase().includes(albf))
         && d.plays >= minP;
   });
 
+  // Tri
+  if      (sortF === 'artist') list.sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
+  else if (sortF === 'title')  list.sort((a,b) => a.track.localeCompare(b.track,'fr'));
+  else if (sortF === 'album')  list.sort((a,b) => (a.album||'').localeCompare(b.album||'','fr'));
+  // plays = déjà trié desc
+
   const ctr = document.getElementById('mtrack-counter');
-  if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' / ' + computeMissingTracks().length.toLocaleString('fr-FR') + ' morceaux';
+  if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' / ' + all.length.toLocaleString('fr-FR') + ' morceaux';
 
   const badge = document.getElementById('nav-missing-tracks-count');
-  if (badge) badge.textContent = computeMissingTracks().length;
+  if (badge) badge.textContent = all.length;
 
   const tbody = document.getElementById('mtrack-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🎵</div>' +
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🎵</div>' +
       (Object.keys(_lastfmTrackCounts).length ? 'Aucun résultat avec ces filtres.' : 'Lancez la "Sync morceaux complète" dans Import pour charger les données.') +
       '</div></td></tr>';
     return;
   }
-  // Afficher par tranches de 200 (liste potentiellement très longue)
   const slice = list.slice(0, 200);
-  tbody.innerHTML = slice.map(d => `<tr>
+  tbody.innerHTML = slice.map((d, i) => `<tr>
     <td style="font-weight:500">${esc(d.track)}</td>
     <td style="color:var(--text2);font-size:13px">${esc(d.artist)}</td>
+    <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
-    <td><button class="btn btn-sm btn-accent" onclick="addTrackFromMissing('${encodeURIComponent(d.artist)}','${encodeURIComponent(d.track)}')" title="Ajouter aux morceaux isolés">＋</button></td>
-  </tr>`).join('') + (list.length > 200 ? `<tr><td colspan="4" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length - 200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
+    <td style="display:flex;gap:4px">
+      <button class="btn btn-sm" onclick="addToWishlistFromMissingTrack(${i})" title="Wishlist">🎯</button>
+      <button class="btn btn-sm btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋</button>
+    </td>
+  </tr>`).join('') + (list.length > 200 ? `<tr><td colspan="5" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
+
+  // Cache pour les boutons idx
+  renderMissingTracks._cache = slice;
 }
 
+function addTrackFromMissingIdx(idx) {
+  const d = renderMissingTracks._cache?.[idx];
+  if (!d) return;
+  if (tracks.find(t => normalizeKey(t.artist, t.title) === normalizeKey(d.artist, d.track))) {
+    toast('Déjà dans les morceaux isolés', 'warn'); return;
+  }
+  tracks.push({ id: uid(), title: d.track, artist: d.artist, album: d.album || '', format: 'mp3', duration: '', note: 0 });
+  invalidateCache();
+  saveToStorage();
+  renderMissingTracks();
+  toast(`Ajouté : ${d.artist} — ${d.track}`);
+}
+
+function addToWishlistFromMissingTrack(idx) {
+  const d = renderMissingTracks._cache?.[idx];
+  if (!d) return;
+  // Pour un morceau, on cherche l'album correspondant dans la wishlist ou on l'ajoute
+  addToWishlist(d.artist, d.album || d.track, '', 'lastfm', d.plays, 0, `Morceau : ${d.track}`);
+}
+
+// Compat ancienne signature
 function addTrackFromMissing(encodedArtist, encodedTitle) {
   const artist = decodeURIComponent(encodedArtist);
   const title  = decodeURIComponent(encodedTitle);
-  // Vérifier si déjà présent
   if (tracks.find(t => normalizeKey(t.artist, t.title) === normalizeKey(artist, title))) {
     toast('Déjà dans les morceaux isolés', 'warn'); return;
   }
@@ -3878,194 +3922,48 @@ async function saveTracklist(albumId, tracks_) {
 }
 
 // Charger toutes les tracklists Discogs pour les albums avec discogsId
-// ======================================================
-// ULTIMATE DISCOGS TRACKLIST SYNC
-// Reprise automatique + anti-429 + progression persistante
-// ======================================================
+async function fetchAllTracklists(onlyMissing = true) {
+  const token = getDiscogsToken();
+  const btn = document.getElementById('btn-fetch-tracklists');
+  const status = document.getElementById('status-tracklists');
 
-const DISCOGS_SYNC_KEY = "discogs_tracklist_sync_state";
-
-// ------------------------------------------------------
-// Lancer depuis le bouton : fetchAllTracklistsUltimate()
-// ------------------------------------------------------
-async function fetchAllTracklistsUltimate() {
-  const btn = document.getElementById("btn-fetch-tracklists");
-  const status = document.getElementById("status-tracklists");
-
-  if (!albums?.length) {
-    status.innerText = "Aucun album Discogs trouvé.";
-    return;
-  }
-
-  const token = localStorage.getItem("discogs_token") || "";
-
-  if (!token) {
-    status.innerText = "Ajoute ton token Discogs.";
+  // Albums avec Discogs ID
+  const targets = albums.filter(a => a.discogsId && (!onlyMissing || !albumTracksCache[a.id]?.some(t => t.source === 'discogs')));
+  if (!targets.length) {
+    status.textContent = 'Aucun album Discogs à mettre à jour.';
+    status.className = 'status ok';
     return;
   }
 
   btn.disabled = true;
-  btn.innerText = "Synchronisation...";
+  status.className = 'status';
+  let done = 0, errors = 0;
 
-  // Albums à traiter
-  const queue = albums.filter(a =>
-    a.discogs_id &&
-    (!a.tracklist || !a.tracklist.length)
-  );
-
-  if (!queue.length) {
-    status.innerText = "Toutes les tracklists sont déjà récupérées.";
-    btn.disabled = false;
-    btn.innerText = "🎵 Charger tracklists";
-    return;
-  }
-
-  // Reprise session précédente
-  let state = loadDiscogsSyncState();
-
-  if (!state || state.total !== queue.length) {
-    state = {
-      index: 0,
-      ok: 0,
-      fail: 0,
-      total: queue.length,
-      startedAt: Date.now()
-    };
-  }
-
-  for (let i = state.index; i < queue.length; i++) {
-    const album = queue[i];
-
-    status.innerText =
-      `${i + 1}/${queue.length} • ${album.artist} - ${album.album}`;
-
-    const result = await fetchTracklistSafeUltimate(
-      album.discogs_id,
-      token
-    );
-
-    if (result !== null) {
-      album.tracklist = result;
-      state.ok++;
-    } else {
-      state.fail++;
+  for (const album of targets) {
+    status.textContent = `Discogs tracklists : ${done}/${targets.length} — ${album.artist} — ${album.album}`;
+    try {
+      // Rate limit : 1 req/s sans token, 1 req/600ms avec token
+      await new Promise(r => setTimeout(r, token ? 650 : 1100));
+      const tracks_ = await fetchDiscogsTracklist(album.discogsId, token);
+      if (tracks_.length) {
+        albumTracksCache[album.id] = albumTracksCache[album.id] || [];
+        // Remplacer les tracks discogs
+        albumTracksCache[album.id] = albumTracksCache[album.id].filter(t => t.source !== 'discogs').concat(tracks_);
+        await saveTracklist(album.id, tracks_);
+      }
+      done++;
+    } catch(e) {
+      console.warn(`Tracklist Discogs ${album.discogsId}:`, e.message);
+      errors++;
     }
-
-    state.index = i + 1;
-
-    saveDiscogsSyncState(state);
-
-    if (typeof saveToStorage === "function") {
-      saveToStorage();
-    }
-
-    await sleep(randomDelay(1400, 2200));
   }
-
-  clearDiscogsSyncState();
 
   btn.disabled = false;
-  btn.innerText = "🎵 Charger tracklists";
-
-  const mins = Math.round((Date.now() - state.startedAt) / 60000);
-
-  status.innerText =
-    `Terminé : ${state.ok} OK / ${state.fail} erreurs • ${mins} min`;
-}
-
-
-// ======================================================
-// FETCH SAFE ULTIMATE
-// ======================================================
-
-async function fetchTracklistSafeUltimate(id, token) {
-  const url = `https://api.discogs.com/releases/${id}`;
-
-  for (let attempt = 1; attempt <= 6; attempt++) {
-    try {
-      const controller = new AbortController();
-
-      const timer = setTimeout(() => {
-        controller.abort();
-      }, 12000);
-
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "TerantMusicCollection/2.0",
-          "Accept": "application/json",
-          "Authorization": `Discogs token=${token}`
-        }
-      });
-
-      clearTimeout(timer);
-
-      // RATE LIMIT
-      if (res.status === 429) {
-        await sleep(6000 * attempt);
-        continue;
-      }
-
-      if (!res.ok) {
-        await sleep(2500);
-        continue;
-      }
-
-      const data = await res.json();
-
-      return (data.tracklist || []).map(t => ({
-        position: t.position || "",
-        title: t.title || "",
-        duration: t.duration || ""
-      }));
-
-    } catch (err) {
-      await sleep(3000 * attempt);
-    }
-  }
-
-  return null;
-}
-
-
-// ======================================================
-// STATE PERSISTENCE
-// ======================================================
-
-function saveDiscogsSyncState(state) {
-  localStorage.setItem(
-    DISCOGS_SYNC_KEY,
-    JSON.stringify(state)
-  );
-}
-
-function loadDiscogsSyncState() {
-  try {
-    return JSON.parse(
-      localStorage.getItem(DISCOGS_SYNC_KEY)
-    );
-  } catch (e) {
-    return null;
-  }
-}
-
-function clearDiscogsSyncState() {
-  localStorage.removeItem(DISCOGS_SYNC_KEY);
-}
-
-
-// ======================================================
-// HELPERS
-// ======================================================
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-function randomDelay(min, max) {
-  return Math.floor(
-    Math.random() * (max - min + 1)
-  ) + min;
+  status.textContent = `✓ Tracklists Discogs : ${done} récupérées${errors ? ', ' + errors + ' erreurs' : ''}`;
+  status.className = 'status ok';
+  toast(`Tracklists : ${done} albums mis à jour`);
+  // Invalider le cache comparaison
+  invalidateCache();
 }
 
 // Charger les tracklists MusicBee depuis le XML (appelé lors de l'import XML)
