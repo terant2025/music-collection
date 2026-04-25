@@ -1730,7 +1730,11 @@ async function loadLastfmFromSupabase() {
             _lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays };
           });
           console.log(`lastfm_tracks chargés : ${trackAll.length} morceaux`);
+          // Invalider le cache et mettre à jour les onglets qui dépendent des tracks
+          invalidateCache();
+          updateNavBadges();
           if (document.getElementById('sec-tracks')?.style.display !== 'none') renderTracks();
+          if (document.getElementById('sec-missing-tracks')?.style.display !== 'none') renderMissingTracks();
         }
       } catch(e) { console.warn('lastfm_tracks (ignoré):', e); }
     })();
@@ -2356,7 +2360,8 @@ function applyLastfmAssoc(albumId) {
 
 function computeMissingTracks() {
   if (_cache.missingTracks) return _cache.missingTracks;
-  if (!Object.keys(_lastfmTrackCounts).length) return (_cache.missingTracks = []);
+  // Ne pas mettre en cache si lastfm_tracks pas encore chargé — évite de bloquer sur []
+  if (!Object.keys(_lastfmTrackCounts).length) return [];
   // Index des morceaux isolés déjà possédés
   const ownedTracks = new Set(
     tracks.map(t => normalizeKey(t.artist, t.title))
