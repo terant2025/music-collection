@@ -596,7 +596,7 @@ input[type="file"] { display: none; }
           <option value="flac">FLAC</option>
           <option value="mp3">MP3</option>
           <option value="digital">Numérique</option>
-          <option value="stock">📦 Stock</option>
+          <option value="stock">📦 À écouter (stock)</option>
         </select>
         <select id="filter-genre" onchange="renderAlbums()">
           <option value="">Tous genres</option>
@@ -666,6 +666,19 @@ input[type="file"] { display: none; }
           <option value="">Tous</option>
           <option value="present">✅ Dans last.fm</option>
           <option value="absent">🔍 Absents de last.fm</option>
+        </select>
+        <select id="filter-track-min-plays" onchange="renderTracks()">
+          <option value="">Toutes écoutes</option>
+          <option value="1">≥ 1 écoute</option>
+          <option value="5">≥ 5 écoutes</option>
+          <option value="10">≥ 10 écoutes</option>
+          <option value="25">≥ 25 écoutes</option>
+        </select>
+        <select id="filter-track-sort" onchange="renderTracks()">
+          <option value="artist">Tri : Artiste A→Z</option>
+          <option value="title">Tri : Titre A→Z</option>
+          <option value="plays">Tri : Écoutes ↓</option>
+          <option value="note">Tri : Note ↓</option>
         </select>
         <div class="toolbar-right">
           <span id="tracks-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
@@ -751,7 +764,7 @@ input[type="file"] { display: none; }
         <div id="assoc-cd-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:13px"></div>
         <div class="form-row">
           <label>Rechercher l'entrée numérique</label>
-          <input type="text" id="assoc-search" placeholder="Artiste ou album…" oninput="renderAssocList()">
+          <input type="text" id="assoc-search" placeholder="Artiste ou album…" oninput="_assocReverseNumId ? renderAssocListReverse() : renderAssocList()">
         </div>
         <div id="assoc-list" style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px"></div>
         <div class="modal-footer">
@@ -1625,12 +1638,35 @@ async function loadFromSupabase() {
       note: a.note || 0, plays: a.plays || 0, notes: a.notes || '',
       discogsId: a.discogs_id || undefined, label: a.label || undefined, catno: a.catno || undefined
     }));
-    // Dédoublonnage : garder l'entrée avec l'id le plus élevé en cas de doublon (artist+album)
+    // Dédoublonnage : utiliser cleanDiscogsArtist pour fusionner ex. "Husky (5)" et "Husky"
+    // Garder l'entrée avec l'id le plus élevé en cas de doublon
     const albDedup = new Map();
     albMapped.forEach(a => {
-      const k = (a.artist + '|' + a.album).toLowerCase().trim();
+      // Clé primaire : artiste nettoyé + album
+      const cleanedArtist = (a.artist || '').replace(/\s*\(\d+\)\s*$/, '').trim().toLowerCase();
+      const k = cleanedArtist + '|' + (a.album || '').toLowerCase().trim();
       const prev = albDedup.get(k);
-      if (!prev || a.id > prev.id) albDedup.set(k, a);
+      if (!prev) {
+        albDedup.set(k, a);
+      } else if (a.id > prev.id) {
+        // Garder l'entrée la plus récente mais fusionner les formats
+        const merged = { ...a };
+        merged.cd    = a.cd    || prev.cd;
+        merged.flac  = a.flac  || prev.flac;
+        merged.mp3   = a.mp3   || prev.mp3;
+        merged.digital = a.digital || prev.digital;
+        if (!merged.discogsId && prev.discogsId) merged.discogsId = prev.discogsId;
+        if (!merged.year && prev.year) merged.year = prev.year;
+        if (!merged.genre && prev.genre) merged.genre = prev.genre;
+        albDedup.set(k, merged);
+      } else {
+        // Garder la précédente mais fusionner les formats
+        prev.cd    = prev.cd    || a.cd;
+        prev.flac  = prev.flac  || a.flac;
+        prev.mp3   = prev.mp3   || a.mp3;
+        prev.digital = prev.digital || a.digital;
+        if (!prev.discogsId && a.discogsId) prev.discogsId = a.discogsId;
+      }
     });
     albums = Array.from(albDedup.values());
     console.log(`Albums chargés : ${albMapped.length} total, ${albums.length} après dédoublonnage`);
@@ -2152,14 +2188,16 @@ function renderTracks() {
     lfExact.set(normalizeKey(d.artist, d.track), d.plays || 0);
   });
 
-  const q  = document.getElementById('global-search').value.toLowerCase();
-  const af = (document.getElementById('filter-track-artist')?.value || '').toLowerCase().trim();
-  const tf = (document.getElementById('filter-track-title')?.value  || '').toLowerCase().trim();
-  const ff = document.getElementById('filter-track-format').value;
-  const nf = document.getElementById('filter-track-note')?.value || '';
-  const lf = document.getElementById('filter-track-lastfm')?.value || '';
+  const q      = document.getElementById('global-search').value.toLowerCase();
+  const af     = (document.getElementById('filter-track-artist')?.value || '').toLowerCase().trim();
+  const tf     = (document.getElementById('filter-track-title')?.value  || '').toLowerCase().trim();
+  const ff     = document.getElementById('filter-track-format').value;
+  const nf     = document.getElementById('filter-track-note')?.value || '';
+  const lf     = document.getElementById('filter-track-lastfm')?.value || '';
+  const minPlf = parseInt(document.getElementById('filter-track-min-plays')?.value || '0') || 0;
+  const sortF  = document.getElementById('filter-track-sort')?.value || 'artist';
 
-  const list = tracks.filter(t => {
+  let list = tracks.filter(t => {
     const m  = !q  || (t.title+' '+t.artist).toLowerCase().includes(q);
     const am = !af || t.artist.toLowerCase().includes(af);
     const tm = !tf || t.title.toLowerCase().includes(tf);
@@ -2169,12 +2207,20 @@ function renderTracks() {
     else if (nf==='4') nm = t.note>=4;
     else if (nf==='3') nm = t.note>=3;
     else if (nf==='0') nm = !t.note;
-    const hasLf = lfExact.has(normalizeKey(t.artist, t.title));
+    const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
+    const hasLf = plays > 0;
     let lfm = true;
     if (lf==='present') lfm = hasLf;
     else if (lf==='absent') lfm = !hasLf;
-    return m && am && tm && fm && nm && lfm;
+    const plm = plays >= minPlf;
+    return m && am && tm && fm && nm && lfm && plm;
   });
+
+  // Tri
+  if (sortF === 'plays')  list.sort((a,b) => (lfExact.get(normalizeKey(b.artist,b.title))||0) - (lfExact.get(normalizeKey(a.artist,a.title))||0));
+  else if (sortF === 'title')  list.sort((a,b) => a.title.localeCompare(b.title,'fr'));
+  else if (sortF === 'note')   list.sort((a,b) => (b.note||0) - (a.note||0));
+  else list.sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
 
   const ctr = document.getElementById('tracks-counter');
   if (ctr) ctr.textContent = list.length+' / '+tracks.length+' morceaux';
@@ -2226,7 +2272,12 @@ function invalidateCache() {
 
 function getOwnedKeysSet() {
   if (_cache.ownedKeys) return _cache.ownedKeys;
-  _cache.ownedKeys = new Set(albums.map(a => normalizeKey(a.artist, a.album)));
+  _cache.ownedKeys = new Set();
+  albums.forEach(a => {
+    _cache.ownedKeys.add(normalizeKey(a.artist, a.album));
+    _cache.ownedKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+    if (a.lastfmAliases) a.lastfmAliases.forEach(k => _cache.ownedKeys.add(k));
+  });
   return _cache.ownedKeys;
 }
 
@@ -2846,26 +2897,86 @@ async function importMusicBeeXML(input) {
       const { flac, mp3 } = detectFormat(kind, location);
       const folder  = detectFolder(location);
 
-      // Artiste effectif : préférer Album Artist si différent de "Various Artists"
-      const effectiveArtist = (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist;
+      // Artiste effectif : préférer Album Artist
+      // Pour les compilations (Various Artists), garder "Various Artists" comme artiste de l'album
+      const isCompilation = albumArtist === 'Various Artists';
+      const effectiveArtist = isCompilation ? 'Various Artists'
+        : (albumArtist || artist);
 
       if (folder === 'ignore') return;
 
       if (folder === 'stock') {
-        if (!effectiveArtist && !album) return;
-        const key = normalizeKey(effectiveArtist, album);
+        // Parser chemin : .../!_00_stock/Artist/Album (Year)/fichier.flac
+        const pathParts = decodeURIComponent(location).replace(/\\/g, '/').split('/');
+        const stockIdx = pathParts.findIndex(p => p.toLowerCase().includes('stock'));
+
+        // Artiste : depuis métadonnées si valide, sinon depuis le chemin
+        let stockArtist = effectiveArtist;
+        if (!stockArtist || stockArtist.includes('\\') || stockArtist.includes('/') || !stockArtist.trim()) {
+          stockArtist = stockIdx >= 0 && pathParts[stockIdx + 1] ? pathParts[stockIdx + 1] : '';
+        }
+
+        // Album : depuis métadonnées si valide, sinon depuis le chemin
+        let stockAlbum = album;
+        if (!stockAlbum || stockAlbum.includes('\\') || stockAlbum.includes('/')) {
+          stockAlbum = stockIdx >= 0 && pathParts[stockIdx + 2] ? pathParts[stockIdx + 2] : '';
+        }
+
+        // Extraire année depuis l'album (format "Album (Year)") ou les métadonnées
+        let stockYear = year.slice(0,4);
+        if (!stockYear && stockAlbum) {
+          const ymatch = stockAlbum.match(/\((\d{4})\)/);
+          if (ymatch) { stockYear = ymatch[1]; }
+        }
+        // Nettoyer l'année du nom d'album
+        if (stockAlbum) stockAlbum = stockAlbum.replace(/\s*\(\d{4}\)\s*/, '').trim();
+
+        // Genre depuis les métadonnées
+        const stockGenre = genre || '';
+
+        if (!stockArtist && !stockAlbum) return;
+        const key = normalizeKey(stockArtist, stockAlbum);
         if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
-          stockAlbums.push({ artist: effectiveArtist, album, year: year.slice(0,4), genre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre' });
+          stockAlbums.push({ artist: stockArtist, album: stockAlbum, year: stockYear, genre: stockGenre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre' });
         }
       } else if (folder === 'isolated') {
         if (!name) return;
-        isolatedTracks.push({ title: name, artist, album, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre', rating });
+        let trackArtist = artist;
+        let trackTitle  = name;
+
+        // Si artiste manquant, ressemble à un chemin, ou vient d'un répertoire
+        const artistLooksLikePath = !trackArtist
+          || trackArtist.includes('\\') || trackArtist.includes('/')
+          || /^[A-Z]:\\/.test(trackArtist);
+
+        if (artistLooksLikePath) {
+          // Essayer de parser "Artiste - Titre" ou "Artiste - Titre (Année)" depuis Name
+          const m = name.match(/^(.+?)\s+[-–]\s+(.+?)(?:\s*\(\d{4}\))?$/);
+          if (m) {
+            trackArtist = m[1].trim();
+            trackTitle  = m[2].trim();
+          } else {
+            // Essayer depuis le chemin : .../top titres/Artiste/fichier
+            const pathParts = decodeURIComponent(location).replace(/\\/g, '/').split('/');
+            const topIdx = pathParts.findIndex(p => /top.?ti/i.test(p));
+            if (topIdx >= 0 && pathParts[topIdx + 1]) trackArtist = pathParts[topIdx + 1];
+          }
+        }
+        // Nettoyer l'année en fin de titre
+        trackTitle = trackTitle.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+        // Nettoyer artiste Discogs (N)
+        trackArtist = cleanDiscogsArtist(trackArtist);
+
+        if (!trackTitle) return;
+        isolatedTracks.push({ title: trackTitle, artist: trackArtist, album, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre', rating });
       } else {
         // Album normal
         if (!album) return;
         const key = normalizeKey(effectiveArtist, album);
         if (!grouped[key]) {
-          grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre, flac: false, mp3: false, digital: false, maxRating: 0 };
+          grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
+            flac: false, mp3: false, digital: false, maxRating: 0,
+            isCompilation: isCompilation, trackArtists: [] };
         }
         if (flac) grouped[key].flac = true;
         else if (mp3) grouped[key].mp3 = true;
@@ -2873,6 +2984,14 @@ async function importMusicBeeXML(input) {
         if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
         if (!grouped[key].genre && genre) grouped[key].genre = genre;
         if (rating > grouped[key].maxRating) grouped[key].maxRating = rating;
+        if (isCompilation && artist && artist !== 'Various Artists') {
+          if (!grouped[key].trackArtists) grouped[key].trackArtists = new Set();
+          grouped[key].trackArtists.add(artist);
+        }
+        // Pour les compilations : collecter les artistes individuels
+        if (isCompilation && artist && !grouped[key].trackArtists.includes(artist)) {
+          grouped[key].trackArtists.push(artist);
+        }
       }
     });
 
@@ -2896,7 +3015,9 @@ async function importMusicBeeXML(input) {
         albumsUpdated++;
       } else {
         albums.push({ id: uid(), artist: g.artist, album: g.album, year: g.year, genre: g.genre,
-          cd: false, flac: g.flac, mp3: g.mp3, digital: g.digital, note: g.maxRating || 0, plays: 0 });
+          cd: false, flac: g.flac, mp3: g.mp3, digital: g.digital, note: g.maxRating || 0, plays: 0,
+          isCompilation: g.isCompilation || false,
+          trackArtists: g.trackArtists ? [...g.trackArtists].slice(0,20) : [] });
         albumsAdded++;
       }
     });
@@ -4910,7 +5031,9 @@ function renderDiscographie() {
     // Bouton associer (seulement pour CDs sans backup ou backup partiel)
     const assocBtn = isCD
       ? `<button class="btn btn-sm" onclick="openAssocModal(${a.id})" title="Associer à une entrée numérique">🔗 Associer</button>`
-      : '';
+      : (isDigital && !linkedId)
+        ? `<button class="btn btn-sm" onclick="openAssocModalReverse(${a.id})" title="Associer à un CD Discogs">💿 Lier CD</button>`
+        : '';
     const unlinkBtn = linkedId
       ? `<button class="btn btn-sm btn-danger" onclick="removeAssociation(${a.id})" title="Supprimer l'association">✕</button>`
       : '';
@@ -4958,6 +5081,7 @@ function openAssocModal(cdId) {
   document.getElementById('assoc-cd-info').innerHTML =
     `<strong>CD :</strong> ${esc(a?.album)} — ${esc(a?.artist)} ${a?.year ? '(' + a.year + ')' : ''}`;
   document.getElementById('assoc-search').value = a?.artist || '';
+  _assocReverseNumId = null; // mode normal
   renderAssocList();
   document.getElementById('modal-assoc').classList.add('open');
 }
@@ -4965,6 +5089,82 @@ function openAssocModal(cdId) {
 function closeAssocModal() {
   document.getElementById('modal-assoc').classList.remove('open');
   _assocTargetId = null;
+}
+
+// Version inverse : un album numérique cherche son CD Discogs
+function openAssocModalReverse(numId) {
+  const a = albums.find(x => x.id === numId);
+  if (!a) return;
+  // Chercher le CD le plus proche automatiquement (avec cleanDiscogsArtist)
+  const numKey = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
+  const cdCandidates = albums
+    .filter(x => x.cd)
+    .map(x => ({ x, key: normalizeKey(cleanDiscogsArtist(x.artist), x.album) }))
+    .filter(({ key }) => key === numKey);
+  
+  if (cdCandidates.length === 1) {
+    // Match direct — associer sans modal
+    const cdAlbum = cdCandidates[0].x;
+    if (confirm(`Associer "${a.artist} — ${a.album}" (numérique) au CD "${cdAlbum.artist} — ${cdAlbum.album}" ?`)) {
+      associations.push({ cdId: cdAlbum.id, numId });
+      invalidateCache();
+      saveToStorage();
+      renderDiscographie();
+      toast(`Association créée : ${cdAlbum.artist} — ${cdAlbum.album}`);
+    }
+  } else {
+    // Pas de match direct → ouvrir le modal CD avec recherche pré-remplie
+    // On réutilise le modal existant en mode inversé
+    _assocTargetId = null;
+    _assocReverseNumId = numId;
+    document.getElementById('assoc-cd-info').innerHTML =
+      `<strong>Numérique :</strong> ${esc(a.album)} — ${esc(a.artist)} — chercher le CD correspondant`;
+    document.getElementById('assoc-search').value = cleanDiscogsArtist(a.artist);
+    renderAssocListReverse();
+    document.getElementById('modal-assoc').classList.add('open');
+  }
+}
+
+let _assocReverseNumId = null;
+
+function renderAssocListReverse() {
+  const q = document.getElementById('assoc-search').value.toLowerCase();
+  const numAlbum = albums.find(a => a.id === _assocReverseNumId);
+  const usedCdIds = new Set(associations.map(a => a.cdId)); // on autorise multi donc pas filtré
+  const candidates = albums
+    .filter(a => a.cd)
+    .filter(a => !q || (cleanDiscogsArtist(a.artist) + ' ' + a.album).toLowerCase().includes(q))
+    .sort((a, b) => cleanDiscogsArtist(a.artist).localeCompare(cleanDiscogsArtist(b.artist), 'fr'));
+  const el = document.getElementById('assoc-list');
+  if (!candidates.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:12px">Aucun CD trouvé</div>';
+    return;
+  }
+  const numKey = normalizeKey(cleanDiscogsArtist(numAlbum?.artist||''), numAlbum?.album||'');
+  el.innerHTML = candidates.map(a => {
+    const cdKey = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
+    const similar = cdKey === numKey;
+    return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociationReverse(${a.id})">
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:500">${esc(a.album)}</div>
+        <div style="font-size:11px;color:var(--text2)">${esc(a.artist)} ${a.year ? '· '+a.year : ''}</div>
+      </div>
+      <span class="badge badge-cd">CD</span>
+    </div>`;
+  }).join('');
+}
+
+function applyAssociationReverse(cdId) {
+  const numId = _assocReverseNumId;
+  if (!numId) return;
+  associations.push({ cdId, numId });
+  _assocReverseNumId = null;
+  document.getElementById('modal-assoc').classList.remove('open');
+  invalidateCache();
+  saveToStorage();
+  renderDiscographie();
+  const cdA = albums.find(a => a.id === cdId);
+  toast(`Association créée : ${cdA?.artist} — ${cdA?.album}`);
 }
 
 function renderAssocList() {
@@ -4993,7 +5193,8 @@ function renderAssocList() {
     // Score de similarité pour affichage visuel
     const cdKey = normalizeKey(cdAlbum?.artist || '', cdAlbum?.album || '');
     const aKey = normalizeKey(a.artist, a.album);
-    const similar = cdKey === aKey;
+    const similar = cdKey === aKey
+      || normalizeKey(cleanDiscogsArtist(cdAlbum?.artist||''), cdAlbum?.album||'') === normalizeKey(cleanDiscogsArtist(a.artist), a.album);
     return `<div style="background:${similar ? 'var(--accent-dim)' : 'var(--bg3)'};border:1px solid ${similar ? 'rgba(200,240,100,0.3)' : 'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociation(${a.id})">
       <div style="flex:1">
         <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(a.album)}</div>
