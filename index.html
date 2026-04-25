@@ -2984,13 +2984,10 @@ async function importMusicBeeXML(input) {
         if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
         if (!grouped[key].genre && genre) grouped[key].genre = genre;
         if (rating > grouped[key].maxRating) grouped[key].maxRating = rating;
+        // Pour les compilations : collecter les artistes individuels (Array, pas de doublon)
         if (isCompilation && artist && artist !== 'Various Artists') {
-          if (!grouped[key].trackArtists) grouped[key].trackArtists = new Set();
-          grouped[key].trackArtists.add(artist);
-        }
-        // Pour les compilations : collecter les artistes individuels
-        if (isCompilation && artist && !grouped[key].trackArtists.includes(artist)) {
-          grouped[key].trackArtists.push(artist);
+          if (!Array.isArray(grouped[key].trackArtists)) grouped[key].trackArtists = [];
+          if (!grouped[key].trackArtists.includes(artist)) grouped[key].trackArtists.push(artist);
         }
       }
     });
@@ -3017,7 +3014,7 @@ async function importMusicBeeXML(input) {
         albums.push({ id: uid(), artist: g.artist, album: g.album, year: g.year, genre: g.genre,
           cd: false, flac: g.flac, mp3: g.mp3, digital: g.digital, note: g.maxRating || 0, plays: 0,
           isCompilation: g.isCompilation || false,
-          trackArtists: g.trackArtists ? [...g.trackArtists].slice(0,20) : [] });
+          trackArtists: Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : g.trackArtists ? [...g.trackArtists].slice(0,20) : [] });
         albumsAdded++;
       }
     });
