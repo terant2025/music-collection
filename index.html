@@ -1707,7 +1707,7 @@ async function loadLastfmFromSupabase() {
         let trackAll = [], tp = 0;
         while (true) {
           const { data, error } = await window._sb
-            .from('lastfm_tracks').select('artist,track,plays')
+            .from('lastfm_tracks').select('artist,track,album,plays')
             .range(tp * pageSize, (tp + 1) * pageSize - 1);
           // 404 / PGRST205 = table inexistante → arrêter sans erreur
           if (error) {
@@ -1726,7 +1726,8 @@ async function loadLastfmFromSupabase() {
         if (trackAll.length) {
           _lastfmTrackCounts = {};
           trackAll.forEach(d => {
-            _lastfmTrackCounts[normalizeKey(d.artist, d.track)] = { artist: d.artist, track: d.track, plays: d.plays };
+            const kt = normalizeKey(d.artist, d.track) + '|' + normalizeKey('', d.album || '');
+            _lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays };
           });
           console.log(`lastfm_tracks chargés : ${trackAll.length} morceaux`);
           if (document.getElementById('sec-tracks')?.style.display !== 'none') renderTracks();
@@ -3347,8 +3348,8 @@ async function startTrackSync() {
         const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
         const track  = String(t.name || '').trim();
         if (!artist || !track) return;
-        const kt = normalizeKey(artist, track);
-        if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, plays: 0 };
+        const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+        if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
         _lastfmTrackCounts[kt].plays++;
       });
 
@@ -3511,7 +3512,7 @@ function saveLastfmCheckpoint(currentPage, totalPages) {
     }));
   } catch(e) { console.warn('Checkpoint albums non sauvegardé (localStorage plein)'); }
   // Checkpoint tracks séparé (peut être volumineux)
-  const compactTracks = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, p: d.plays }));
+  const compactTracks = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, b: d.album || '', p: d.plays }));
   try {
     localStorage.setItem(LASTFM_TRACK_CHECKPOINT_KEY, JSON.stringify({
       page: currentPage, totalPages, counts: compactTracks, savedAt: Date.now()
@@ -3540,7 +3541,8 @@ function loadLastfmCheckpoint() {
         const cpT = JSON.parse(rawT);
         _lastfmTrackCounts = {};
         cpT.counts.forEach(d => {
-          _lastfmTrackCounts[normalizeKey(d.a, d.t)] = { artist: d.a, track: d.t, plays: d.p };
+          const kt = normalizeKey(d.a, d.t) + '|' + normalizeKey('', d.b || '');
+          _lastfmTrackCounts[kt] = { artist: d.a, track: d.t, album: d.b || '', plays: d.p };
         });
       }
     } catch(e) {}
@@ -3558,11 +3560,14 @@ async function flushTrackCountsToSupabase() {
   if (!window._sb || !Object.keys(_lastfmTrackCounts).length) return;
   try {
     const rows = Object.values(_lastfmTrackCounts).map(d => ({
-      artist: d.artist, track: d.track, plays: d.plays, updated_at: new Date().toISOString()
+      artist: d.artist, track: d.track, album: d.album || '',
+      plays: d.plays, updated_at: new Date().toISOString()
     }));
-    // Upsert par tranches de 400
+    // Upsert par tranches de 400 — clé (artist, track, album)
     for (let i = 0; i < rows.length; i += 400) {
-      await window._sb.from('lastfm_tracks').upsert(rows.slice(i, i + 400), { onConflict: 'artist,track' });
+      const { error } = await window._sb.from('lastfm_tracks')
+        .upsert(rows.slice(i, i + 400), { onConflict: 'artist,track,album' });
+      if (error) console.warn('flush chunk error:', error);
     }
     console.log(`lastfm_tracks : ${rows.length} morceaux sauvegardés dans Supabase`);
   } catch(e) { console.warn('Erreur flush lastfm_tracks:', e); }
@@ -3647,10 +3652,10 @@ async function fetchLastfmPage(page) {
           if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0 };
           _lastfmCounts[k].plays++;
         }
-        // Index morceaux (track)
+        // Index morceaux (track + album)
         if (track) {
-          const kt = normalizeKey(artist, track);
-          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, plays: 0 };
+          const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
           _lastfmTrackCounts[kt].plays++;
         }
       });
