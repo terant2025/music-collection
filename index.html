@@ -728,8 +728,9 @@ input[type="file"] { display: none; }
               <th>Année</th>
               <th>Statut</th>
               <th>Supports liés</th>
+              <th>Tracklist</th>
               <th>Note</th>
-              <th style="width:100px"></th>
+              <th style="width:120px"></th>
             </tr>
           </thead>
           <tbody id="disco-tbody"></tbody>
@@ -986,9 +987,16 @@ input[type="file"] { display: none; }
             Artist, Title, Label, Catno, Format,<br>
             Rating, Released, release_id
           </div>
-          <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 Charger CSV Discogs</button>
+          <div style="margin-bottom:8px">
+            <input type="text" id="discogs-token" placeholder="Token Discogs (optionnel, pour tracklists)" style="font-family:var(--mono);font-size:11px;width:100%" oninput="localStorage.setItem('discogs_token',this.value)">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 Charger CSV Discogs</button>
+            <button class="btn btn-sm" onclick="fetchAllTracklists()" id="btn-fetch-tracklists">🎵 Charger tracklists</button>
+          </div>
           <input type="file" id="file-discogs" accept=".csv" onchange="importDiscogs(this)">
           <div class="status" id="status-discogs"></div>
+          <div class="status" id="status-tracklists"></div>
         </div>
 
         <!-- MUSICBEE -->
@@ -1248,6 +1256,20 @@ input[type="file"] { display: none; }
 </div>
 
 <!-- MODAL ASSOCIATION RYM -->
+<!-- Modal diff tracklist -->
+<div class="modal-overlay" id="modal-tracklist-diff">
+  <div class="modal" style="width:700px;max-height:80vh;overflow-y:auto">
+    <div class="modal-header">
+      <span id="tracklist-diff-title">Comparaison tracklists</span>
+      <button class="modal-close" onclick="document.getElementById('modal-tracklist-diff').classList.remove('open')">✕</button>
+    </div>
+    <div id="tracklist-diff-body" style="font-size:13px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="document.getElementById('modal-tracklist-diff').classList.remove('open')">Fermer</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal association last.fm album -->
 <div class="modal-overlay" id="modal-lastfm-assoc">
   <div class="modal" style="width:520px">
@@ -1649,6 +1671,8 @@ async function loadFromSupabase() {
     }
     // Mettre à jour le label de dernière sync après chargement
     setTimeout(() => updateLastSyncLabel(), 100);
+    // Charger les tracklists en arrière-plan
+    loadAlbumTracks();
     nextId = Math.max(nextId, ...albums.map(a => a.id || 0), ...tracks.map(t => t.id || 0)) + 1;
 
     setSaveIndicator('saved');
@@ -2600,6 +2624,8 @@ async function importDiscogs(input) {
     renderAlbums();
     toast(`Discogs : ${added} ajoutés, ${updated} mis à jour`);
     saveToStorage();
+    // Charger les tracklists Discogs manquantes en arrière-plan
+    setTimeout(() => fetchAllTracklists(true), 1500);
   } catch (e) {
     status.textContent = 'Erreur : ' + e.message;
     status.className = 'status err';
@@ -3726,6 +3752,273 @@ async function loadMoreLastfm() {
 }
 
 
+// ===================== ALBUM TRACKS =====================
+let albumTracksCache = {}; // { albumId: [{ position, title, duration, source }] }
+
+function getDiscogsToken() {
+  return (document.getElementById('discogs-token')?.value || localStorage.getItem('discogs_token') || '').trim();
+}
+
+// Formater la durée en mm:ss depuis millisecondes (MusicBee) ou string Discogs
+function formatDuration(val) {
+  if (!val) return '';
+  if (typeof val === 'number') {
+    const s = Math.round(val / 1000);
+    return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  }
+  return String(val);
+}
+
+// Récupérer tracklist Discogs pour un release_id
+async function fetchDiscogsTracklist(discogsId, token) {
+  const headers = { 'User-Agent': 'MusicCollectionApp/1.0' };
+  if (token) headers['Authorization'] = `Discogs token=${token}`;
+  const url = `https://api.discogs.com/releases/${discogsId}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`Discogs ${res.status} pour ${discogsId}`);
+  const data = await res.json();
+  return (data.tracklist || [])
+    .filter(t => t.type_ === 'track' || !t.type_)
+    .map(t => ({
+      position: t.position || '',
+      title: t.title || '',
+      duration: t.duration || '',
+      source: 'discogs'
+    }));
+}
+
+// Sauvegarder tracklist dans Supabase
+async function saveTracklist(albumId, tracks_) {
+  if (!window._sb || !tracks_.length) return;
+  // Supprimer les anciennes entrées pour cette source
+  await window._sb.from('album_tracks').delete()
+    .eq('album_id', albumId).eq('source', 'discogs');
+  // Insérer les nouvelles par tranches
+  const rows = tracks_.map(t => ({
+    album_id: albumId, position: t.position, title: t.title,
+    duration: t.duration, source: t.source
+  }));
+  for (let i = 0; i < rows.length; i += 100) {
+    await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
+  }
+  albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
+    .filter(t => t.source !== 'discogs').concat(tracks_);
+}
+
+// Charger toutes les tracklists Discogs pour les albums avec discogsId
+async function fetchAllTracklists(onlyMissing = true) {
+  const token = getDiscogsToken();
+  const btn = document.getElementById('btn-fetch-tracklists');
+  const status = document.getElementById('status-tracklists');
+
+  // Albums avec Discogs ID
+  const targets = albums.filter(a => a.discogsId && (!onlyMissing || !albumTracksCache[a.id]?.some(t => t.source === 'discogs')));
+  if (!targets.length) {
+    status.textContent = 'Aucun album Discogs à mettre à jour.';
+    status.className = 'status ok';
+    return;
+  }
+
+  btn.disabled = true;
+  status.className = 'status';
+  let done = 0, errors = 0;
+
+  for (const album of targets) {
+    status.textContent = `Discogs tracklists : ${done}/${targets.length} — ${album.artist} — ${album.album}`;
+    try {
+      // Rate limit : 1 req/s sans token, 1 req/600ms avec token
+      await new Promise(r => setTimeout(r, token ? 650 : 1100));
+      const tracks_ = await fetchDiscogsTracklist(album.discogsId, token);
+      if (tracks_.length) {
+        albumTracksCache[album.id] = albumTracksCache[album.id] || [];
+        // Remplacer les tracks discogs
+        albumTracksCache[album.id] = albumTracksCache[album.id].filter(t => t.source !== 'discogs').concat(tracks_);
+        await saveTracklist(album.id, tracks_);
+      }
+      done++;
+    } catch(e) {
+      console.warn(`Tracklist Discogs ${album.discogsId}:`, e.message);
+      errors++;
+    }
+  }
+
+  btn.disabled = false;
+  status.textContent = `✓ Tracklists Discogs : ${done} récupérées${errors ? ', ' + errors + ' erreurs' : ''}`;
+  status.className = 'status ok';
+  toast(`Tracklists : ${done} albums mis à jour`);
+  // Invalider le cache comparaison
+  invalidateCache();
+}
+
+// Charger les tracklists MusicBee depuis le XML (appelé lors de l'import XML)
+function importMusicBeeTracklists(trackDicts, str, num) {
+  // Grouper par album
+  const byAlbum = {};
+  trackDicts.forEach(d => {
+    const artist = (() => {
+      const albumArtist = str(d, 'Album Artist');
+      const artist_ = str(d, 'Artist');
+      return (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist_;
+    })();
+    const album = str(d, 'Album');
+    if (!artist || !album) return;
+    const location = str(d, 'Location').toLowerCase();
+    if (location.includes('blind-test') || location.includes('blind_test')) return;
+    const key = normalizeKey(artist, album);
+    if (!byAlbum[key]) byAlbum[key] = { artist, album, tracks: [] };
+    byAlbum[key].tracks.push({
+      position: String(num(d, 'Track Number') || ''),
+      title: str(d, 'Name'),
+      duration: formatDuration(num(d, 'Total Time')),
+      source: 'musicbee'
+    });
+  });
+
+  // Pour chaque groupe, trouver l'album dans la collection et sauvegarder
+  const toSave = [];
+  Object.values(byAlbum).forEach(g => {
+    const albumObj = albums.find(a => normalizeKey(a.artist, a.album) === g.key ||
+      normalizeKey(cleanDiscogsArtist(a.artist), a.album) === normalizeKey(g.artist, g.album));
+    if (!albumObj) return;
+    // Trier par position
+    g.tracks.sort((a, b) => {
+      const na = parseInt(a.position) || 999, nb = parseInt(b.position) || 999;
+      return na - nb;
+    });
+    albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
+      .filter(t => t.source !== 'musicbee').concat(g.tracks);
+    toSave.push({ albumId: albumObj.id, tracks: g.tracks });
+  });
+
+  // Sauvegarder en arrière-plan
+  if (window._sb && toSave.length) {
+    (async () => {
+      for (const { albumId, tracks } of toSave) {
+        await window._sb.from('album_tracks').delete()
+          .eq('album_id', albumId).eq('source', 'musicbee');
+        const rows = tracks.map(t => ({
+          album_id: albumId, position: t.position, title: t.title,
+          duration: t.duration, source: 'musicbee'
+        }));
+        for (let i = 0; i < rows.length; i += 100)
+          await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
+      }
+      console.log(`MusicBee tracklists : ${toSave.length} albums sauvegardés`);
+    })();
+  }
+  return toSave.length;
+}
+
+// Charger les tracklists depuis Supabase au démarrage
+async function loadAlbumTracks() {
+  if (!window._sb) return;
+  try {
+    let all = [], page = 0;
+    while (true) {
+      const { data } = await window._sb.from('album_tracks').select('album_id,position,title,duration,source')
+        .range(page * 1000, (page + 1) * 1000 - 1);
+      if (!data || !data.length) break;
+      all = all.concat(data);
+      if (data.length < 1000) break;
+      page++;
+    }
+    albumTracksCache = {};
+    all.forEach(t => {
+      if (!albumTracksCache[t.album_id]) albumTracksCache[t.album_id] = [];
+      albumTracksCache[t.album_id].push({ position: t.position, title: t.title, duration: t.duration, source: t.source });
+    });
+    console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
+  } catch(e) { console.warn('loadAlbumTracks:', e); }
+}
+
+// Comparer tracklists Discogs vs MusicBee pour un album
+function compareTracklists(albumId) {
+  const tracks_ = albumTracksCache[albumId] || [];
+  const discogs   = tracks_.filter(t => t.source === 'discogs');
+  const musicbee  = tracks_.filter(t => t.source === 'musicbee');
+  if (!discogs.length && !musicbee.length) return null;
+
+  const mbTitles = new Set(musicbee.map(t => normalizeKey('', t.title)));
+  const dgTitles = new Set(discogs.map(t => normalizeKey('', t.title)));
+
+  return {
+    discogs,
+    musicbee,
+    onlyInDiscogs:  discogs.filter(t => !mbTitles.has(normalizeKey('', t.title))),
+    onlyInMusicBee: musicbee.filter(t => !dgTitles.has(normalizeKey('', t.title))),
+    matched: discogs.filter(t => mbTitles.has(normalizeKey('', t.title))).length
+  };
+}
+
+function showTracklistDiff(albumId) {
+  const album = albums.find(a => a.id === albumId);
+  const cmp = compareTracklists(albumId);
+  if (!cmp || !album) return;
+
+  document.getElementById('tracklist-diff-title').textContent = `${album.artist} — ${album.album}`;
+
+  const renderList = (tracks_, color, label) => {
+    if (!tracks_.length) return '';
+    return `<div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:${color};margin-bottom:8px">${label} (${tracks_.length})</div>
+      <table style="width:100%;border-collapse:collapse">
+        ${tracks_.map(t => `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:4px 8px;color:var(--text3);font-size:11px;width:40px">${esc(t.position)}</td>
+          <td style="padding:4px 8px">${esc(t.title)}</td>
+          <td style="padding:4px 8px;color:var(--text3);font-size:11px;text-align:right">${esc(t.duration)}</td>
+        </tr>`).join('')}
+      </table>
+    </div>`;
+  };
+
+  const renderFull = (tracks_, label) => {
+    if (!tracks_.length) return `<div style="color:var(--text3);font-size:12px;margin-bottom:16px">${label} : aucune piste</div>`;
+    return `<div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">${label} — ${tracks_.length} pistes</div>
+      <table style="width:100%;border-collapse:collapse">
+        ${tracks_.map(t => {
+          const inOther = label.includes('Discogs')
+            ? new Set(cmp.musicbee.map(x => normalizeKey('',x.title))).has(normalizeKey('',t.title))
+            : new Set(cmp.discogs.map(x => normalizeKey('',x.title))).has(normalizeKey('',t.title));
+          const bg = inOther ? '' : 'background:rgba(255,100,100,0.08)';
+          return `<tr style="border-bottom:1px solid var(--border);${bg}">
+            <td style="padding:4px 8px;color:var(--text3);font-size:11px;width:40px">${esc(t.position)}</td>
+            <td style="padding:4px 8px">${esc(t.title)} ${inOther ? '' : '<span style="font-size:10px;color:var(--red)">✗</span>'}</td>
+            <td style="padding:4px 8px;color:var(--text3);font-size:11px;text-align:right">${esc(t.duration)}</td>
+          </tr>`;
+        }).join('')}
+      </table>
+    </div>`;
+  };
+
+  const hasEcarts = cmp.onlyInDiscogs.length || cmp.onlyInMusicBee.length;
+  let html = '';
+
+  if (hasEcarts) {
+    html += `<div style="padding:10px;background:rgba(255,180,0,0.08);border:1px solid rgba(255,180,0,0.2);border-radius:var(--radius);margin-bottom:16px;font-size:12px">
+      ⚠️ <strong>${cmp.onlyInDiscogs.length}</strong> piste${cmp.onlyInDiscogs.length>1?'s':''} Discogs absentes de MusicBee —
+      <strong>${cmp.onlyInMusicBee.length}</strong> piste${cmp.onlyInMusicBee.length>1?'s':''} MusicBee absentes de Discogs —
+      <strong>${cmp.matched}</strong> piste${cmp.matched>1?'s':''} communes
+    </div>`;
+    html += renderList(cmp.onlyInDiscogs, 'var(--red)', '🔴 Dans Discogs uniquement (fichiers manquants ?)');
+    html += renderList(cmp.onlyInMusicBee, 'var(--amber)', '🟡 Dans MusicBee uniquement (bonus tracks ?)');
+    html += '<div style="border-top:1px solid var(--border);margin:16px 0"></div>';
+  } else {
+    html += `<div style="padding:10px;background:rgba(100,220,100,0.08);border:1px solid rgba(100,220,100,0.2);border-radius:var(--radius);margin-bottom:16px;font-size:12px">
+      ✅ Tracklists cohérentes — ${cmp.matched} pistes communes
+    </div>`;
+  }
+
+  // Affichage côte à côte
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    ${renderFull(cmp.discogs, '💿 Discogs')}
+    ${renderFull(cmp.musicbee, '🎵 MusicBee')}
+  </div>`;
+
+  document.getElementById('tracklist-diff-body').innerHTML = html;
+  document.getElementById('modal-tracklist-diff').classList.add('open');
+}
+
 // ===================== WISHLIST =====================
 let wishlist = []; // [{ id, artist, album, year, source, prio, plays, rymRating, notes, addedAt }]
 
@@ -4284,7 +4577,7 @@ function renderDiscographie() {
 
   const tbody = document.getElementById('disco-tbody');
   if (!slice.length) {
-    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
     document.getElementById('disco-page-info').textContent = '';
   // updateNavBadges called by saveToStorage
     return;
@@ -5116,6 +5409,15 @@ async function initApp() {
   renderTracks();
   updateNavBadges();
 }
+
+// Restaurer token Discogs (valeur par défaut si absent)
+(function() {
+  const DEFAULT_DISCOGS_TOKEN = 'qlBzWMRIfyKQXysUTObLlPWRSZjFvrcjjyRnmFTC';
+  const t = localStorage.getItem('discogs_token') || DEFAULT_DISCOGS_TOKEN;
+  if (!localStorage.getItem('discogs_token')) localStorage.setItem('discogs_token', DEFAULT_DISCOGS_TOKEN);
+  const el = document.getElementById('discogs-token');
+  if (el) el.value = t;
+})();
 
 (async function startup() {
   const savedCfg = localStorage.getItem(LS_CFG);
