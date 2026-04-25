@@ -4050,8 +4050,9 @@ async function fetchAllTracklists(onlyMissing = true) {
         if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; saveToStorage(); }
         if (!album.cover_url   && rel.cover_url)    { album.cover_url   = rel.cover_url;   saveToStorage(); }
       } else {
-        // Recherche — prendre le meilleur résultat (score ≥ 90)
-        const results = await searchMusicBrainz(album.artist, album.album);
+        // Recherche — nettoyer le nom Discogs avant MusicBrainz
+        const cleanArtist = cleanDiscogsArtist(album.artist);
+        const results = await searchMusicBrainz(cleanArtist, album.album);
         const best = results[0];
         if (best && best.score >= 90) {
           album.mb_release_id = best.mb_release_id;
