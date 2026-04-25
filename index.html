@@ -3369,6 +3369,15 @@ async function startTrackSync() {
       if (page % 50 === 0) {
         progressLabel.textContent += ' — flush Supabase…';
         await flushTrackCountsToSupabase();
+        // Mise à jour badge nav morceaux manquants
+        invalidateCache();
+        const mtBadge = document.getElementById('nav-missing-tracks-count');
+        if (mtBadge) {
+          const ownedT = new Set(tracks.map(t => normalizeKey(t.artist, t.title)));
+          const missingCnt = Object.values(_lastfmTrackCounts)
+            .filter(d => !ownedT.has(normalizeKey(d.artist, d.track))).length;
+          mtBadge.textContent = missingCnt;
+        }
       }
     }
 
@@ -3382,8 +3391,11 @@ async function startTrackSync() {
       status.className = 'status ok';
       bar.style.width = '100%';
       toast(`lastfm_tracks : ${nT.toLocaleString('fr-FR')} morceaux synchronisés`);
-      // Re-render si onglet tracks actif
+      // Invalider le cache et actualiser les onglets concernés
+      invalidateCache();
       if (document.getElementById('sec-tracks')?.style.display !== 'none') renderTracks();
+      if (document.getElementById('sec-missing-tracks')?.style.display !== 'none') renderMissingTracks();
+      updateNavBadges();
     } else {
       status.textContent = 'Sync morceaux interrompue — les données partielles sont sauvegardées.';
       status.className = 'status';
@@ -3921,19 +3933,31 @@ async function loadAlbumTracks() {
   try {
     let all = [], page = 0;
     while (true) {
-      const { data } = await window._sb.from('album_tracks').select('album_id,position,title,duration,source')
+      const { data, error } = await window._sb.from('album_tracks').select('album_id,position,title,duration,source')
         .range(page * 1000, (page + 1) * 1000 - 1);
+      if (error) {
+        // Table absente ou RLS non configurée — ignorer silencieusement
+        const ignorable = ['PGRST205', '42501', 'PGRST301'];
+        if (ignorable.includes(error.code) || error.message?.includes('does not exist') || error.status === 400) {
+          console.info('album_tracks : table non accessible — vérifiez les policies RLS dans Supabase');
+        } else {
+          console.warn('loadAlbumTracks:', error);
+        }
+        break;
+      }
       if (!data || !data.length) break;
       all = all.concat(data);
       if (data.length < 1000) break;
       page++;
     }
-    albumTracksCache = {};
-    all.forEach(t => {
-      if (!albumTracksCache[t.album_id]) albumTracksCache[t.album_id] = [];
-      albumTracksCache[t.album_id].push({ position: t.position, title: t.title, duration: t.duration, source: t.source });
-    });
-    console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
+    if (all.length) {
+      albumTracksCache = {};
+      all.forEach(t => {
+        if (!albumTracksCache[t.album_id]) albumTracksCache[t.album_id] = [];
+        albumTracksCache[t.album_id].push({ position: t.position, title: t.title, duration: t.duration, source: t.source });
+      });
+      console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
+    }
   } catch(e) { console.warn('loadAlbumTracks:', e); }
 }
 
