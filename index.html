@@ -1400,22 +1400,46 @@ function loadFromStorage() {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return false;
+
     const data = JSON.parse(raw);
+
     albums = data.albums || [];
     tracks = data.tracks || [];
     stockItems = data.stockItems || [];
-    rymData = data.rymData || []; // rétrocompat anciens saves
+    rymData = data.rymData || [];
     associations = data.associations || [];
     rymAssociations = data.rymAssociations || [];
     wishlist = data.wishlist || [];
-    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+    nextId = data.nextId || (
+      Math.max(
+        0,
+        ...albums.map(a => a.id || 0),
+        ...tracks.map(t => t.id || 0)
+      ) + 1
+    );
+
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
-    loadRymFromLocalStorage(); // écrase rymData si clé dédiée présente
+    loadRymFromLocalStorage();
+
     return true;
-  } catch(e) { return false; }
+
+  } catch(e) {
+    return false;
+  }
 }
 
+document.addEventListener("DOMContentLoaded", async () => {
+  loadFromStorage();
+  await initSupabase();
+  renderAlbums();
+  updateNavBadges();
+
+  const input = document.getElementById("discogs-token");
+  if (input) {
+    input.value = localStorage.getItem("discogs_token") || "";
+  }
+});
 // ===================== SUPABASE =====================
 const SUPABASE_URL = 'https://mjedlmumiljdrmjobefm.supabase.co';
 const LS_ANON_KEY = 'supabase_anon_key';
@@ -3829,48 +3853,194 @@ async function saveTracklist(albumId, tracks_) {
 }
 
 // Charger toutes les tracklists Discogs pour les albums avec discogsId
-async function fetchAllTracklists(onlyMissing = true) {
-  const token = getDiscogsToken();
-  const btn = document.getElementById('btn-fetch-tracklists');
-  const status = document.getElementById('status-tracklists');
+// ======================================================
+// ULTIMATE DISCOGS TRACKLIST SYNC
+// Reprise automatique + anti-429 + progression persistante
+// ======================================================
 
-  // Albums avec Discogs ID
-  const targets = albums.filter(a => a.discogsId && (!onlyMissing || !albumTracksCache[a.id]?.some(t => t.source === 'discogs')));
-  if (!targets.length) {
-    status.textContent = 'Aucun album Discogs à mettre à jour.';
-    status.className = 'status ok';
+const DISCOGS_SYNC_KEY = "discogs_tracklist_sync_state";
+
+// ------------------------------------------------------
+// Lancer depuis le bouton : fetchAllTracklistsUltimate()
+// ------------------------------------------------------
+async function fetchAllTracklistsUltimate() {
+  const btn = document.getElementById("btn-fetch-tracklists");
+  const status = document.getElementById("status-tracklists");
+
+  if (!albums?.length) {
+    status.innerText = "Aucun album Discogs trouvé.";
+    return;
+  }
+
+  const token = localStorage.getItem("discogs_token") || "";
+
+  if (!token) {
+    status.innerText = "Ajoute ton token Discogs.";
     return;
   }
 
   btn.disabled = true;
-  status.className = 'status';
-  let done = 0, errors = 0;
+  btn.innerText = "Synchronisation...";
 
-  for (const album of targets) {
-    status.textContent = `Discogs tracklists : ${done}/${targets.length} — ${album.artist} — ${album.album}`;
+  // Albums à traiter
+  const queue = albums.filter(a =>
+    a.discogs_id &&
+    (!a.tracklist || !a.tracklist.length)
+  );
+
+  if (!queue.length) {
+    status.innerText = "Toutes les tracklists sont déjà récupérées.";
+    btn.disabled = false;
+    btn.innerText = "🎵 Charger tracklists";
+    return;
+  }
+
+  // Reprise session précédente
+  let state = loadDiscogsSyncState();
+
+  if (!state || state.total !== queue.length) {
+    state = {
+      index: 0,
+      ok: 0,
+      fail: 0,
+      total: queue.length,
+      startedAt: Date.now()
+    };
+  }
+
+  for (let i = state.index; i < queue.length; i++) {
+    const album = queue[i];
+
+    status.innerText =
+      `${i + 1}/${queue.length} • ${album.artist} - ${album.album}`;
+
+    const result = await fetchTracklistSafeUltimate(
+      album.discogs_id,
+      token
+    );
+
+    if (result !== null) {
+      album.tracklist = result;
+      state.ok++;
+    } else {
+      state.fail++;
+    }
+
+    state.index = i + 1;
+
+    saveDiscogsSyncState(state);
+
+    if (typeof saveToStorage === "function") {
+      saveToStorage();
+    }
+
+    await sleep(randomDelay(1400, 2200));
+  }
+
+  clearDiscogsSyncState();
+
+  btn.disabled = false;
+  btn.innerText = "🎵 Charger tracklists";
+
+  const mins = Math.round((Date.now() - state.startedAt) / 60000);
+
+  status.innerText =
+    `Terminé : ${state.ok} OK / ${state.fail} erreurs • ${mins} min`;
+}
+
+
+// ======================================================
+// FETCH SAFE ULTIMATE
+// ======================================================
+
+async function fetchTracklistSafeUltimate(id, token) {
+  const url = `https://api.discogs.com/releases/${id}`;
+
+  for (let attempt = 1; attempt <= 6; attempt++) {
     try {
-      // Rate limit : 1 req/s sans token, 1 req/600ms avec token
-      await new Promise(r => setTimeout(r, token ? 650 : 1100));
-      const tracks_ = await fetchDiscogsTracklist(album.discogsId, token);
-      if (tracks_.length) {
-        albumTracksCache[album.id] = albumTracksCache[album.id] || [];
-        // Remplacer les tracks discogs
-        albumTracksCache[album.id] = albumTracksCache[album.id].filter(t => t.source !== 'discogs').concat(tracks_);
-        await saveTracklist(album.id, tracks_);
+      const controller = new AbortController();
+
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, 12000);
+
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "TerantMusicCollection/2.0",
+          "Accept": "application/json",
+          "Authorization": `Discogs token=${token}`
+        }
+      });
+
+      clearTimeout(timer);
+
+      // RATE LIMIT
+      if (res.status === 429) {
+        await sleep(6000 * attempt);
+        continue;
       }
-      done++;
-    } catch(e) {
-      console.warn(`Tracklist Discogs ${album.discogsId}:`, e.message);
-      errors++;
+
+      if (!res.ok) {
+        await sleep(2500);
+        continue;
+      }
+
+      const data = await res.json();
+
+      return (data.tracklist || []).map(t => ({
+        position: t.position || "",
+        title: t.title || "",
+        duration: t.duration || ""
+      }));
+
+    } catch (err) {
+      await sleep(3000 * attempt);
     }
   }
 
-  btn.disabled = false;
-  status.textContent = `✓ Tracklists Discogs : ${done} récupérées${errors ? ', ' + errors + ' erreurs' : ''}`;
-  status.className = 'status ok';
-  toast(`Tracklists : ${done} albums mis à jour`);
-  // Invalider le cache comparaison
-  invalidateCache();
+  return null;
+}
+
+
+// ======================================================
+// STATE PERSISTENCE
+// ======================================================
+
+function saveDiscogsSyncState(state) {
+  localStorage.setItem(
+    DISCOGS_SYNC_KEY,
+    JSON.stringify(state)
+  );
+}
+
+function loadDiscogsSyncState() {
+  try {
+    return JSON.parse(
+      localStorage.getItem(DISCOGS_SYNC_KEY)
+    );
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearDiscogsSyncState() {
+  localStorage.removeItem(DISCOGS_SYNC_KEY);
+}
+
+
+// ======================================================
+// HELPERS
+// ======================================================
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function randomDelay(min, max) {
+  return Math.floor(
+    Math.random() * (max - min + 1)
+  ) + min;
 }
 
 // Charger les tracklists MusicBee depuis le XML (appelé lors de l'import XML)
