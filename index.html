@@ -2992,9 +2992,15 @@ async function importMusicBeeXML(input) {
       }
     });
 
-    let albumsAdded = 0, albumsUpdated = 0, tracksAdded = 0, tracksUpdated = 0, stockAdded = 0, stockUpdated = 0;
+    let albumsAdded = 0, albumsUpdated = 0;
 
-    // Albums normaux
+    // ── Albums numériques : merge (on ne supprime pas les CDs Discogs) ──
+    // Réinitialiser les flags numériques des albums existants issus de MusicBee
+    // avant de les remettre à jour depuis le nouveau XML
+    albums.forEach(a => {
+      if (!a.cd) { a.flac = false; a.mp3 = false; a.digital = false; }
+    });
+
     Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
       const key = normalizeKey(g.artist, g.album);
@@ -3003,12 +3009,14 @@ async function importMusicBeeXML(input) {
         normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key
       );
       if (existing) {
-        if (g.flac) existing.flac = true;
-        if (g.mp3)  existing.mp3  = true;
+        if (g.flac)    existing.flac    = true;
+        if (g.mp3)     existing.mp3     = true;
         if (g.digital) existing.digital = true;
         if (!existing.year  && g.year)  existing.year  = g.year;
         if (!existing.genre && g.genre) existing.genre = g.genre;
         if (g.maxRating && !existing.note) existing.note = g.maxRating;
+        existing.isCompilation = g.isCompilation || existing.isCompilation;
+        if (g.trackArtists?.length) existing.trackArtists = Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : [...g.trackArtists].slice(0,20);
         albumsUpdated++;
       } else {
         albums.push({ id: uid(), artist: g.artist, album: g.album, year: g.year, genre: g.genre,
@@ -3019,44 +3027,55 @@ async function importMusicBeeXML(input) {
       }
     });
 
-    // Morceaux isolés
-    isolatedTracks.forEach(t => {
-      if (!t.title || !t.artist) return;
-      const existing = tracks.find(x =>
-        x.title.toLowerCase() === t.title.toLowerCase() &&
-        x.artist.toLowerCase() === t.artist.toLowerCase()
-      );
-      if (existing) {
-        if (t.rating && !existing.note) existing.note = t.rating;
-        tracksUpdated++;
-      } else {
-        tracks.push({ id: uid(), title: t.title, artist: t.artist, album: t.album,
-          format: t.format, duration: '', note: t.rating || 0 });
-        tracksAdded++;
-      }
+    // ── Morceaux isolés : REMPLACEMENT COMPLET depuis MusicBee ──
+    // Conserver les morceaux ajoutés manuellement (pas issus de MusicBee)
+    const manualTracks = tracks.filter(t => t.manual === true);
+    const xmlIsolatedKeys = new Set(isolatedTracks.map(t => normalizeKey(t.artist, t.title)));
+    // Conserver les notes des morceaux existants
+    const existingTrackNotes = {};
+    tracks.forEach(t => { existingTrackNotes[normalizeKey(t.artist, t.title)] = t.note || 0; });
+
+    tracks = [
+      ...manualTracks,
+      ...isolatedTracks
+        .filter(t => t.title && t.artist)
+        .map(t => {
+          const key = normalizeKey(t.artist, t.title);
+          return {
+            id: uid(), title: t.title, artist: t.artist, album: t.album,
+            format: t.format, duration: '', note: existingTrackNotes[key] || t.rating || 0
+          };
+        })
+    ];
+
+    // ── Stock : REMPLACEMENT COMPLET depuis MusicBee ──
+    // Conserver les notes et remarques des entrées stock existantes
+    const existingStockMeta = {};
+    stockItems.forEach(s => {
+      const k = normalizeKey(s.artist, s.album);
+      existingStockMeta[k] = { note: s.note || 0, notes: s.notes || '' };
     });
 
-    // Stock
-    stockAlbums.forEach(s => {
-      const key = normalizeKey(s.artist, s.album);
-      const existing = stockItems.find(x => normalizeKey(x.artist, x.album) === key);
-      if (existing) { stockUpdated++; }
-      else {
-        stockItems.push({ id: uid(), artist: s.artist, album: s.album,
-          year: s.year, genre: s.genre, format: s.format, note: 0, notes: '' });
-        stockAdded++;
-      }
+    stockItems = stockAlbums.map(s => {
+      const k = normalizeKey(s.artist, s.album);
+      const meta = existingStockMeta[k] || { note: 0, notes: '' };
+      return { id: uid(), artist: s.artist, album: s.album,
+        year: s.year, genre: s.genre, format: s.format,
+        note: meta.note, notes: meta.notes };
     });
+
+    const stockDelta = stockAlbums.length;
+    const trackDelta = isolatedTracks.length;
 
     const parts = [];
     if (albumsAdded || albumsUpdated) parts.push(`${albumsAdded} albums ajoutés, ${albumsUpdated} mis à jour`);
-    if (tracksAdded || tracksUpdated) parts.push(`${tracksAdded} morceaux isolés`);
-    if (stockAdded || stockUpdated)   parts.push(`${stockAdded} en stock`);
-    status.textContent = `✓ XML : ${parts.join(' — ') || 'aucune entrée'}`;
+    parts.push(`${trackDelta} morceaux isolés`);
+    parts.push(`${stockDelta} en stock`);
+    status.textContent = `✓ XML : ${parts.join(' — ')}`;
     status.className = 'status ok';
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
-    toast(`MusicBee XML : ${albumsAdded + tracksAdded + stockAdded} nouvelles entrées`);
+    toast(`MusicBee XML : ${albumsAdded} nouveaux albums, ${trackDelta} morceaux, ${stockDelta} stock`);
     saveToStorage();
   } catch(e) {
     status.textContent = 'Erreur : ' + e.message;
