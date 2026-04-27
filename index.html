@@ -496,50 +496,67 @@ input[type="file"] { display: none; }
     <span>v2.0</span>
   </div>
 
-  <div class="nav-section">Collection</div>
+  <div class="nav-section">Albums</div>
   <div class="nav-item active" onclick="nav('albums')">
-    <span class="nav-icon">💿</span> Albums
+    <span class="nav-icon">💿</span> Collection
     <span class="nav-badge" id="nav-albums-count">0</span>
   </div>
   <div class="nav-item" onclick="nav('discographie')">
     <span class="nav-icon">📀</span> Discographie
     <span class="nav-badge warn" id="nav-disco-warn">0</span>
   </div>
-  <div class="nav-item" onclick="nav('tracks')">
-    <span class="nav-icon">🎵</span> Morceaux isolés
-    <span class="nav-badge" id="nav-tracks-count">0</span>
+  <div class="nav-item" onclick="nav('ok-albums')">
+    <span class="nav-icon">✅</span> Ok
+    <span class="nav-badge" id="nav-ok-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('forsale')">
+    <span class="nav-icon">💸</span> À vendre
+    <span class="nav-badge" id="nav-forsale-count">0</span>
   </div>
   <div class="nav-item" onclick="nav('stock')">
     <span class="nav-icon">📦</span> Stock
     <span class="nav-badge" id="nav-stock-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('wishlist')">
+    <span class="nav-icon">🎯</span> Wishlist albums
+    <span class="nav-badge" id="nav-wish-count">0</span>
+  </div>
 
-  <div class="nav-section">last.fm</div>
+  <div class="nav-section">Morceaux</div>
+  <div class="nav-item" onclick="nav('all-tracks')">
+    <span class="nav-icon">🎼</span> Tous les morceaux
+    <span class="nav-badge" id="nav-all-tracks-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('album-tracks')">
+    <span class="nav-icon">💿</span> Morceaux des albums
+    <span class="nav-badge" id="nav-album-tracks-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('tracks')">
+    <span class="nav-icon">🎵</span> Morceaux isolés
+    <span class="nav-badge" id="nav-tracks-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('track-wishlist')">
+    <span class="nav-icon">🎯</span> Wishlist morceaux
+    <span class="nav-badge" id="nav-track-wish-count">0</span>
+  </div>
+
+  <div class="nav-section">Outils</div>
   <div class="nav-item" onclick="nav('missing')">
-    <span class="nav-icon">🔍</span> Albums manquants
+    <span class="nav-icon">🔍</span> last.fm albums
     <span class="nav-badge warn" id="nav-missing-count">0</span>
   </div>
   <div class="nav-item" onclick="nav('missing-tracks')">
-    <span class="nav-icon">🎵</span> Morceaux manquants
+    <span class="nav-icon">🎵</span> last.fm morceaux
     <span class="nav-badge warn" id="nav-missing-tracks-count">0</span>
   </div>
-
-  <div class="nav-section">RateYourMusic</div>
   <div class="nav-item" onclick="nav('rym')">
     <span class="nav-icon">⭐</span> RYM
     <span class="nav-badge warn" id="nav-rym-count">0</span>
-  </div>
-
-  <div class="nav-item" onclick="nav('wishlist')">
-    <span class="nav-icon">🎯</span> Wishlist
-    <span class="nav-badge" id="nav-wish-count">0</span>
   </div>
   <div class="nav-item" onclick="nav('assocreview')">
     <span class="nav-icon">🔗</span> Associations
     <span class="nav-badge" id="nav-assoc-count">0</span>
   </div>
-
-  <div class="nav-section">Outils</div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
   </div>
@@ -1008,6 +1025,100 @@ input[type="file"] { display: none; }
       </div>
     </div>
 
+    <!-- ==================== OK ALBUMS ==================== -->
+    <div class="section" id="sec-ok-albums">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums du dossier <code>Ok/</code> — écoutés, potentiellement à wishlist. Numériques uniquement si pas de CD Discogs.</p>
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-ok-artist" type="text" placeholder="Artiste…" oninput="renderOkAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <div class="toolbar-right">
+          <span id="ok-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th style="width:120px"></th></tr></thead>
+        <tbody id="ok-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <!-- ==================== FORSALE ==================== -->
+    <div class="section" id="sec-forsale">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums marqués à vendre. Cliquez sur ✓ pour retirer de la liste.</p>
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-forsale-artist" type="text" placeholder="Artiste…" oninput="renderForSale()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <div class="toolbar-right">
+          <span id="forsale-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th style="width:80px"></th></tr></thead>
+        <tbody id="forsale-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <!-- ==================== ALL TRACKS ==================== -->
+    <div class="section" id="sec-all-tracks">
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-at-artist" type="text" placeholder="Artiste…" oninput="renderAllTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-at-title" type="text" placeholder="Titre…" oninput="renderAllTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-at-album" type="text" placeholder="Album…" oninput="renderAllTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <select id="filter-at-source" onchange="renderAllTracks()">
+          <option value="">Toutes sources</option>
+          <option value="musicbee">MusicBee</option>
+          <option value="isolated">Morceaux isolés</option>
+        </select>
+        <select id="sort-at" onchange="renderAllTracks()">
+          <option value="artist">Artiste A→Z</option>
+          <option value="title">Titre A→Z</option>
+          <option value="plays">Écoutes ↓</option>
+        </select>
+        <div class="toolbar-right">
+          <span id="at-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Source</th><th>Écoutes</th><th>Bitrate</th></tr></thead>
+        <tbody id="at-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <!-- ==================== ALBUM TRACKS ==================== -->
+    <div class="section" id="sec-album-tracks">
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-abt-artist" type="text" placeholder="Artiste…" oninput="renderAlbumTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-abt-title" type="text" placeholder="Titre…" oninput="renderAlbumTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-abt-album" type="text" placeholder="Album…" oninput="renderAlbumTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <select id="sort-abt" onchange="renderAlbumTracks()">
+          <option value="artist">Artiste A→Z</option>
+          <option value="title">Titre A→Z</option>
+          <option value="plays">Écoutes ↓</option>
+          <option value="bitrate">Bitrate ↓</option>
+        </select>
+        <div class="toolbar-right">
+          <span id="abt-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Écoutes</th><th>Bitrate</th><th>Durée</th></tr></thead>
+        <tbody id="abt-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <!-- ==================== TRACK WISHLIST ==================== -->
+    <div class="section" id="sec-track-wishlist">
+      <div class="toolbar" style="margin-bottom:12px">
+        <input id="filter-tw-artist" type="text" placeholder="Artiste…" oninput="renderTrackWishlist()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <input id="filter-tw-title" type="text" placeholder="Titre…" oninput="renderTrackWishlist()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <div class="toolbar-right">
+          <span id="tw-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-accent" onclick="openTrackWishModal()">＋ Ajouter</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Priorité</th><th style="width:80px"></th></tr></thead>
+        <tbody id="tw-tbody"></tbody>
+      </table></div>
+    </div>
+
     <!-- ==================== IMPORT ==================== -->
     <div class="section" id="sec-import">
       <div class="import-grid">
@@ -1291,6 +1402,31 @@ input[type="file"] { display: none; }
 </div>
 
 <!-- MODAL ASSOCIATION RYM -->
+<!-- Modal track wishlist -->
+<div class="modal-overlay" id="modal-tw">
+  <div class="modal" style="width:420px">
+    <div class="modal-header">
+      <span>Wishlist morceaux</span>
+      <button class="modal-close" onclick="document.getElementById('modal-tw').classList.remove('open')">✕</button>
+    </div>
+    <input type="hidden" id="tw-edit-id">
+    <div class="form-group"><label>Artiste</label><input type="text" id="tw-f-artist" placeholder="Artiste…"></div>
+    <div class="form-group"><label>Titre</label><input type="text" id="tw-f-title" placeholder="Titre du morceau…"></div>
+    <div class="form-group"><label>Album (optionnel)</label><input type="text" id="tw-f-album" placeholder="Album…"></div>
+    <div class="form-group"><label>Priorité</label>
+      <select id="tw-f-prio">
+        <option value="high">🔴 Haute</option>
+        <option value="mid" selected>🟡 Moyenne</option>
+        <option value="low">🟢 Basse</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="document.getElementById('modal-tw').classList.remove('open')">Annuler</button>
+      <button class="btn btn-accent" onclick="saveTrackWish()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal diff tracklist -->
 <div class="modal-overlay" id="modal-tracklist-diff">
   <div class="modal" style="width:700px;max-height:80vh;overflow-y:auto">
@@ -1412,7 +1548,7 @@ function _saveToStorageImpl() {
         await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, nextId, savedAt: now };
+        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -1443,6 +1579,7 @@ function loadFromStorage() {
     associations = data.associations || [];
     rymAssociations = data.rymAssociations || [];
     wishlist = data.wishlist || [];
+    trackWishlist = data.trackWishlist || [];
     nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
@@ -1968,7 +2105,9 @@ function initials(artist) {
 }
 
 // ===================== NAVIGATION =====================
-const SECTIONS = ['albums', 'discographie', 'tracks', 'stock', 'missing', 'missing-tracks', 'rym', 'wishlist', 'assocreview', 'import'];
+const SECTIONS = ['albums', 'discographie', 'ok-albums', 'forsale', 'stock', 'wishlist',
+  'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'import'];
 function nav(id) {
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
@@ -1977,8 +2116,24 @@ function nav(id) {
       else el.classList.remove('active');
     });
   });
-  const titles = { albums: 'Albums', discographie: 'Discographie', tracks: 'Morceaux isolés', stock: 'Stock', missing: 'Albums manquants', 'missing-tracks': 'Morceaux manquants', rym: 'RateYourMusic', wishlist: 'Wishlist', assocreview: 'Associations', import: 'Import / Export' };
-  const subs = { albums: 'Ma collection', discographie: 'CDs Discogs vs sauvegardes MusicBee', tracks: 'Fichiers numériques isolés', stock: 'F:\\music\\!_00_stock\\ — à écouter', missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents des morceaux isolés', rym: 'Croisement collection & ratings', wishlist: 'Albums à acquérir', assocreview: 'Revue & correction des associations', import: 'Sources externes & sauvegarde' };
+  const titles = {
+    albums: 'Collection', discographie: 'Discographie', 'ok-albums': 'Ok', forsale: 'À vendre',
+    stock: 'Stock', wishlist: 'Wishlist albums',
+    'all-tracks': 'Tous les morceaux', 'album-tracks': 'Morceaux des albums',
+    tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
+    missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
+    rym: 'RateYourMusic', assocreview: 'Associations', import: 'Import / Export'
+  };
+  const subs = {
+    albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
+    'ok-albums': 'Albums écoutés — dossier Ok/', forsale: 'Albums à vendre',
+    stock: '!_00_stock — à écouter', wishlist: 'Albums à acquérir',
+    'all-tracks': 'Tous les morceaux (albums + isolés)', 'album-tracks': 'Pistes issues des albums MusicBee',
+    tracks: 'Fichiers isolés (top titres)', 'track-wishlist': 'Morceaux à acquérir',
+    missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
+    rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
+    import: 'Sources externes & sauvegarde'
+  };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   document.getElementById('topbar-sub').textContent = subs[id] || '';
   document.getElementById('global-search').value = '';
@@ -1988,9 +2143,14 @@ function nav(id) {
   if (id === 'stock') renderStock();
   if (id === 'missing') renderMissing();
   if (id === 'rym') renderRYM();
-  if (id === 'wishlist') renderWishlist();
-  if (id === 'assocreview') renderAssocReview();
+  if (id === 'wishlist')      renderWishlist();
+  if (id === 'assocreview')   renderAssocReview();
   if (id === 'missing-tracks') renderMissingTracks();
+  if (id === 'ok-albums')     renderOkAlbums();
+  if (id === 'forsale')       renderForSale();
+  if (id === 'all-tracks')    renderAllTracks();
+  if (id === 'album-tracks')  renderAlbumTracks();
+  if (id === 'track-wishlist') renderTrackWishlist();
 }
 
 function onSearch() {
@@ -2001,9 +2161,14 @@ function onSearch() {
   if (active === 'stock') renderStock();
   if (active === 'missing') renderMissing();
   if (active === 'rym') renderRYM();
-  if (active === 'wishlist') renderWishlist();
-  if (active === 'assocreview') renderAssocReview();
+  if (active === 'wishlist')      renderWishlist();
+  if (active === 'assocreview')   renderAssocReview();
   if (active === 'missing-tracks') renderMissingTracks();
+  if (active === 'ok-albums')     renderOkAlbums();
+  if (active === 'forsale')       renderForSale();
+  if (active === 'all-tracks')    renderAllTracks();
+  if (active === 'album-tracks')  renderAlbumTracks();
+  if (active === 'track-wishlist') renderTrackWishlist();
 }
 
 // ===================== ALBUMS =====================
@@ -2307,6 +2472,12 @@ function updateNavBadges() {
     if (wishBadge) wishBadge.textContent = wishlist.length;
     const missingTracksBadge = document.getElementById('nav-missing-tracks-count');
     if (missingTracksBadge && _cache.missingTracks) missingTracksBadge.textContent = _cache.missingTracks.length;
+    const okBadge = document.getElementById('nav-ok-count');
+    if (okBadge) okBadge.textContent = albums.filter(a=>a.okFolder).length;
+    const fsaleBadge = document.getElementById('nav-forsale-count');
+    if (fsaleBadge) fsaleBadge.textContent = albums.filter(a=>a.forSale).length;
+    const twBadge = document.getElementById('nav-track-wish-count');
+    if (twBadge) twBadge.textContent = trackWishlist.length;
     const assocBadge = document.getElementById('nav-assoc-count');
     if (assocBadge) {
       const total = associations.length + rymAssociations.length + albums.reduce((s, a) => s + (a.lastfmAliases?.length || 0), 0);
@@ -2876,6 +3047,10 @@ async function importMusicBeeXML(input) {
       if (p.includes('!_00_stock') || p.includes('/stock/')) return 'stock';
       if (p.includes('top titres') || p.includes('top-titres') || p.includes('top_titres')) return 'isolated';
       if (p.includes('blind-test') || p.includes('blind_test')) return 'ignore';
+      // Dossiers spéciaux (même niveau que Discographie)
+      const seg = p.split('/');
+      if (seg.some(s => s === 'ok' || s === 'ok ')) return 'ok';
+      if (seg.some(s => s === '!vendre' || s === 'a_vendre' || s === 'a vendre' || s === '!a vendre')) return 'vendre';
       return 'album';
     }
 
@@ -2976,8 +3151,11 @@ async function importMusicBeeXML(input) {
         if (!grouped[key]) {
           grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
             flac: false, mp3: false, digital: false, maxRating: 0,
-            isCompilation: isCompilation, trackArtists: [] };
+            isCompilation: isCompilation, trackArtists: [],
+            okFolder: false, forSaleFolder: false };
         }
+        if (folder === 'ok')     grouped[key].okFolder     = true;
+        if (folder === 'vendre') grouped[key].forSaleFolder = true;
         if (flac) grouped[key].flac = true;
         else if (mp3) grouped[key].mp3 = true;
         else grouped[key].digital = true;
@@ -3017,12 +3195,16 @@ async function importMusicBeeXML(input) {
         if (g.maxRating && !existing.note) existing.note = g.maxRating;
         existing.isCompilation = g.isCompilation || existing.isCompilation;
         if (g.trackArtists?.length) existing.trackArtists = Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : [...g.trackArtists].slice(0,20);
+        if (g.okFolder)      existing.okFolder = true;
+        if (g.forSaleFolder) existing.forSale  = true;
         albumsUpdated++;
       } else {
         albums.push({ id: uid(), artist: g.artist, album: g.album, year: g.year, genre: g.genre,
           cd: false, flac: g.flac, mp3: g.mp3, digital: g.digital, note: g.maxRating || 0, plays: 0,
           isCompilation: g.isCompilation || false,
-          trackArtists: Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : g.trackArtists ? [...g.trackArtists].slice(0,20) : [] });
+          trackArtists: Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : g.trackArtists ? [...g.trackArtists].slice(0,20) : [],
+          okFolder: g.okFolder || false,
+          forSale: g.forSaleFolder || false });
         albumsAdded++;
       }
     });
@@ -3073,9 +3255,16 @@ async function importMusicBeeXML(input) {
     parts.push(`${stockDelta} en stock`);
     status.textContent = `✓ XML : ${parts.join(' — ')}`;
     status.className = 'status ok';
+    // Supprimer les albums sans aucun support (ni CD ni numérique)
+    // Sauf si forSale (à vendre) ou noté (curated)
+    const beforeDel = albums.length;
+    albums = albums.filter(a => a.cd || a.flac || a.mp3 || a.digital || a.forSale || (a.note > 0));
+    const removedAlbums = beforeDel - albums.length;
+
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
-    toast(`MusicBee XML : ${albumsAdded} nouveaux albums, ${trackDelta} morceaux, ${stockDelta} stock`);
+    const removedStr = removedAlbums ? `, ${removedAlbums} supprimés` : '';
+    toast(`MusicBee XML : ${albumsAdded} nouveaux, ${trackDelta} morceaux, ${stockDelta} stock${removedStr}`);
     saveToStorage();
   } catch(e) {
     status.textContent = 'Erreur : ' + e.message;
@@ -4539,6 +4728,246 @@ function markWishAcquired(id) {
   saveToStorage();
 }
 
+// ===================== OK ALBUMS =====================
+function renderOkAlbums() {
+  const q  = (document.getElementById('global-search').value || '').toLowerCase();
+  const af = (document.getElementById('filter-ok-artist')?.value || '').toLowerCase().trim();
+  const list = albums.filter(a => a.okFolder)
+    .filter(a => (!q || (a.artist+' '+a.album).toLowerCase().includes(q))
+              && (!af || a.artist.toLowerCase().includes(af)))
+    .sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
+  const ctr = document.getElementById('ok-counter');
+  if (ctr) ctr.textContent = list.length + ' albums';
+  const badge = document.getElementById('nav-ok-count');
+  if (badge) badge.textContent = albums.filter(a=>a.okFolder).length;
+  const tbody = document.getElementById('ok-tbody');
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
+  const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
+  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderOkAlbums()">★</button>`).join('');
+  tbody.innerHTML = list.map(a => `<tr>
+    <td><div class="artist-cell"><div class="artist-avatar">${initials(a.artist)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
+    <td class="mono">${a.year||'–'}</td>
+    <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">numérique seul</span>'}</div></td>
+    <td><div class="stars">${stars(a)}</div></td>
+    <td style="display:flex;gap:4px">
+      <button class="btn btn-sm" onclick="addToWishlist('${esc(a.artist).replace(/'/g,"\'")}','${esc(a.album).replace(/'/g,"\'")}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
+      <button class="btn btn-sm btn-danger" onclick="markOkDone(${a.id})" title="Retirer de Ok">✕</button>
+    </td>
+  </tr>`).join('');
+}
+
+function markOkDone(id) {
+  const a = albums.find(x => x.id === id);
+  if (!a) return;
+  a.okFolder = false;
+  invalidateCache(); saveToStorage(); renderOkAlbums(); updateNavBadges();
+}
+
+// ===================== FOR SALE =====================
+function renderForSale() {
+  const q  = (document.getElementById('global-search').value || '').toLowerCase();
+  const af = (document.getElementById('filter-forsale-artist')?.value || '').toLowerCase().trim();
+  const list = albums.filter(a => a.forSale)
+    .filter(a => (!q || (a.artist+' '+a.album).toLowerCase().includes(q))
+              && (!af || a.artist.toLowerCase().includes(af)))
+    .sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
+  const ctr = document.getElementById('forsale-counter');
+  if (ctr) ctr.textContent = list.length + ' albums';
+  const badge = document.getElementById('nav-forsale-count');
+  if (badge) badge.textContent = list.length;
+  const tbody = document.getElementById('forsale-tbody');
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
+  const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
+  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderForSale()">★</button>`).join('');
+  tbody.innerHTML = list.map(a => `<tr>
+    <td><div class="artist-cell"><div class="artist-avatar">${initials(a.artist)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
+    <td class="mono">${a.year||'–'}</td>
+    <td><div class="badges-cell">${fmtBadge(a)}</div></td>
+    <td><div class="stars">${stars(a)}</div></td>
+    <td><button class="btn btn-sm" onclick="unmarkForSale(${a.id})" title="Retirer">✓</button></td>
+  </tr>`).join('');
+}
+
+function markForSale(id) {
+  const a = albums.find(x => x.id === id);
+  if (!a) return;
+  a.forSale = true;
+  invalidateCache(); saveToStorage(); renderDiscographie(); renderForSale(); updateNavBadges();
+  toast(`${a.artist} — ${a.album} marqué à vendre`);
+}
+function unmarkForSale(id) {
+  const a = albums.find(x => x.id === id);
+  if (!a) return;
+  a.forSale = false;
+  invalidateCache(); saveToStorage(); renderForSale(); updateNavBadges();
+}
+
+// ===================== ALL TRACKS =====================
+function buildAllTracksList() {
+  const result = [];
+  // 1. Pistes des albums (source musicbee)
+  albums.forEach(a => {
+    (albumTracksCache[a.id] || []).filter(t => t.source === 'musicbee').forEach(t => {
+      result.push({ title: t.title, artist: a.artist, album: a.album, albumId: a.id,
+        source: 'musicbee', bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+    });
+  });
+  // 2. Morceaux isolés
+  tracks.forEach(t => {
+    result.push({ title: t.title, artist: t.artist, album: t.album || '', albumId: null,
+      source: 'isolated', bitrate: null, duration: t.duration, play_count: null });
+  });
+  return result;
+}
+
+function renderAllTracks() {
+  const q    = (document.getElementById('global-search').value||'').toLowerCase();
+  const af   = (document.getElementById('filter-at-artist')?.value||'').toLowerCase().trim();
+  const tf   = (document.getElementById('filter-at-title')?.value||'').toLowerCase().trim();
+  const albf = (document.getElementById('filter-at-album')?.value||'').toLowerCase().trim();
+  const sf   = document.getElementById('filter-at-source')?.value||'';
+  const sort = document.getElementById('sort-at')?.value||'artist';
+  const lfExact = new Map(Object.values(_lastfmTrackCounts).map(d => [normalizeKey(d.artist,d.track), d.plays]));
+
+  let list = buildAllTracksList().filter(t =>
+    (!q    || (t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q))
+    && (!af   || t.artist.toLowerCase().includes(af))
+    && (!tf   || t.title.toLowerCase().includes(tf))
+    && (!albf || t.album.toLowerCase().includes(albf))
+    && (!sf   || (sf==='musicbee' ? t.source==='musicbee' : t.source==='isolated'))
+  );
+
+  if (sort==='title')  list.sort((a,b)=>a.title.localeCompare(b.title,'fr'));
+  else if (sort==='plays') list.sort((a,b)=>(lfExact.get(normalizeKey(b.artist,b.title))||0)-(lfExact.get(normalizeKey(a.artist,a.title))||0));
+  else list.sort((a,b)=>a.artist.localeCompare(b.artist,'fr')||a.title.localeCompare(b.title,'fr'));
+
+  const ctr = document.getElementById('at-counter');
+  if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' morceaux';
+  const badge = document.getElementById('nav-all-tracks-count');
+  if (badge) badge.textContent = buildAllTracksList().length.toLocaleString('fr-FR');
+
+  const tbody = document.getElementById('at-tbody');
+  const slice = list.slice(0, 300);
+  if (!slice.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎼</div>Aucun morceau</div></td></tr>'; return; }
+  tbody.innerHTML = slice.map(t => {
+    const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
+    const srcBadge = t.source==='musicbee' ? '<span class="badge badge-flac" style="font-size:10px">MB</span>' : '<span class="badge" style="font-size:10px">isolé</span>';
+    return `<tr>
+      <td style="font-weight:500">${esc(t.title)}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
+      <td style="font-size:11px;color:var(--text3)">${esc(t.album||'–')}</td>
+      <td>${srcBadge}</td>
+      <td class="mono" style="color:var(--accent)">${plays||'–'}</td>
+      <td class="mono" style="font-size:11px;color:var(--text3)">${t.bitrate ? t.bitrate+'k' : '–'}</td>
+    </tr>`;
+  }).join('') + (list.length>300 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${(list.length-300).toLocaleString('fr-FR')} de plus — affinez les filtres</td></tr>` : '');
+}
+
+// ===================== ALBUM TRACKS VIEW =====================
+function renderAlbumTracks() {
+  const q    = (document.getElementById('global-search').value||'').toLowerCase();
+  const af   = (document.getElementById('filter-abt-artist')?.value||'').toLowerCase().trim();
+  const tf   = (document.getElementById('filter-abt-title')?.value||'').toLowerCase().trim();
+  const albf = (document.getElementById('filter-abt-album')?.value||'').toLowerCase().trim();
+  const sort = document.getElementById('sort-abt')?.value||'artist';
+  const lfExact = new Map(Object.values(_lastfmTrackCounts).map(d => [normalizeKey(d.artist,d.track), d.plays]));
+
+  const full = [];
+  albums.forEach(a => {
+    (albumTracksCache[a.id]||[]).filter(t=>t.source==='musicbee').forEach(t => {
+      full.push({ title: t.title, artist: a.artist, album: a.album,
+        bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+    });
+  });
+
+  let list = full.filter(t =>
+    (!q    || (t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q))
+    && (!af   || t.artist.toLowerCase().includes(af))
+    && (!tf   || t.title.toLowerCase().includes(tf))
+    && (!albf || t.album.toLowerCase().includes(albf))
+  );
+
+  if (sort==='title')   list.sort((a,b)=>a.title.localeCompare(b.title,'fr'));
+  else if (sort==='plays')   list.sort((a,b)=>(lfExact.get(normalizeKey(b.artist,b.title))||0)-(lfExact.get(normalizeKey(a.artist,a.title))||0));
+  else if (sort==='bitrate') list.sort((a,b)=>(b.bitrate||0)-(a.bitrate||0));
+  else list.sort((a,b)=>a.artist.localeCompare(b.artist,'fr')||a.album.localeCompare(b.album,'fr'));
+
+  const ctr = document.getElementById('abt-counter');
+  if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' / ' + full.length.toLocaleString('fr-FR') + ' pistes';
+  const badge = document.getElementById('nav-album-tracks-count');
+  if (badge) badge.textContent = full.length.toLocaleString('fr-FR');
+
+  const tbody = document.getElementById('abt-tbody');
+  const slice = list.slice(0,300);
+  if (!slice.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">💿</div>Importez le XML MusicBee pour charger les pistes</div></td></tr>'; return; }
+  tbody.innerHTML = slice.map(t => {
+    const plays = lfExact.get(normalizeKey(t.artist,t.title)) || 0;
+    return `<tr>
+      <td style="font-weight:500">${esc(t.title)}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
+      <td style="font-size:11px;color:var(--text3)">${esc(t.album)}</td>
+      <td class="mono" style="color:var(--accent)">${plays||'–'}</td>
+      <td class="mono" style="font-size:11px">${t.bitrate?t.bitrate+'k':'–'}</td>
+      <td class="mono" style="font-size:11px;color:var(--text3)">${t.duration||'–'}</td>
+    </tr>`;
+  }).join('') + (list.length>300 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${(list.length-300).toLocaleString('fr-FR')} de plus</td></tr>` : '');
+}
+
+// ===================== TRACK WISHLIST =====================
+let trackWishlist = [];
+
+function openTrackWishModal(id) {
+  const w = id ? trackWishlist.find(x=>x.id===id) : null;
+  document.getElementById('tw-edit-id').value = id||'';
+  document.getElementById('tw-f-artist').value = w?.artist||'';
+  document.getElementById('tw-f-title').value  = w?.title ||'';
+  document.getElementById('tw-f-album').value  = w?.album ||'';
+  document.getElementById('tw-f-prio').value   = w?.prio  ||'mid';
+  document.getElementById('modal-tw').classList.add('open');
+}
+function saveTrackWish() {
+  const id     = document.getElementById('tw-edit-id').value;
+  const artist = document.getElementById('tw-f-artist').value.trim();
+  const title  = document.getElementById('tw-f-title').value.trim();
+  const album  = document.getElementById('tw-f-album').value.trim();
+  const prio   = document.getElementById('tw-f-prio').value;
+  if (!artist||!title) { toast('Artiste et titre requis','error'); return; }
+  if (id) { const w=trackWishlist.find(x=>x.id==id); if(w) Object.assign(w,{artist,title,album,prio}); }
+  else trackWishlist.push({ id:uid(), artist, title, album, prio, addedAt:Date.now() });
+  document.getElementById('modal-tw').classList.remove('open');
+  renderTrackWishlist(); updateNavBadges(); saveToStorage();
+}
+function deleteTrackWish(id) {
+  if (!confirm('Retirer de la wishlist morceaux ?')) return;
+  trackWishlist = trackWishlist.filter(w=>w.id!==id);
+  renderTrackWishlist(); updateNavBadges(); saveToStorage();
+}
+function renderTrackWishlist() {
+  const q  = (document.getElementById('global-search').value||'').toLowerCase();
+  const af = (document.getElementById('filter-tw-artist')?.value||'').toLowerCase().trim();
+  const tf = (document.getElementById('filter-tw-title')?.value||'').toLowerCase().trim();
+  const list = trackWishlist.filter(w =>
+    (!q||`${w.artist} ${w.title}`.toLowerCase().includes(q))
+    &&(!af||w.artist.toLowerCase().includes(af))
+    &&(!tf||w.title.toLowerCase().includes(tf))
+  ).sort((a,b)=>({high:0,mid:1,low:2}[a.prio]||1)-({high:0,mid:1,low:2}[b.prio]||1));
+  const ctr=document.getElementById('tw-counter'); if(ctr) ctr.textContent=list.length+' morceaux';
+  const badge=document.getElementById('nav-track-wish-count'); if(badge) badge.textContent=trackWishlist.length;
+  const tbody=document.getElementById('tw-tbody');
+  const prioL={high:'🔴 Haute',mid:'🟡 Moyenne',low:'🟢 Basse'};
+  if (!list.length) { tbody.innerHTML='<tr><td colspan="5"><div class="empty"><div class="empty-icon">🎯</div>Wishlist morceaux vide.</div></td></tr>'; return; }
+  tbody.innerHTML=list.map(w=>`<tr>
+    <td style="font-weight:500">${esc(w.title)}</td>
+    <td style="font-size:12px;color:var(--text2)">${esc(w.artist)}</td>
+    <td style="font-size:11px;color:var(--text3)">${esc(w.album||'–')}</td>
+    <td style="font-size:12px">${prioL[w.prio]||w.prio}</td>
+    <td style="display:flex;gap:4px">
+      <button class="btn btn-sm" onclick="openTrackWishModal(${w.id})">✎</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteTrackWish(${w.id})">✕</button>
+    </td>
+  </tr>`).join('');
+}
+
 // ===================== ASSOCIATIONS REVIEW =====================
 
 function renderAssocReview() {
@@ -5074,6 +5503,7 @@ function renderDiscographie() {
       <td><div class="stars">${stars}</div></td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
         ${assocBtn}${unlinkBtn}
+        <button class="btn btn-sm" onclick="event.stopPropagation();markForSale(${a.id})" title="${a.forSale?'Déjà à vendre':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
       </td>
     </tr>`;
   }).join('');
