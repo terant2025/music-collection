@@ -1671,6 +1671,11 @@ async function saveToSupabase() {
       cd: !!a.cd, flac: !!a.flac, mp3: !!a.mp3, digital: !!a.digital,
       note: a.note || 0, plays: a.plays || 0, notes: a.notes || null,
       discogs_id: a.discogsId || null, label: a.label || null, catno: a.catno || null,
+      mb_release_id: a.mb_release_id || null,
+      release_date: a.release_date || null,
+      cover_url: a.cover_url || null,
+      ok_folder: a.okFolder || false,
+      for_sale: a.forSale || false,
       updated_at: now
     }));
     await sbUpsert('albums', albumRows, 'id');
@@ -1773,7 +1778,12 @@ async function loadFromSupabase() {
       year: a.year || '', genre: a.genre || '',
       cd: !!a.cd, flac: !!a.flac, mp3: !!a.mp3, digital: !!a.digital,
       note: a.note || 0, plays: a.plays || 0, notes: a.notes || '',
-      discogsId: a.discogs_id || undefined, label: a.label || undefined, catno: a.catno || undefined
+      discogsId: a.discogs_id || undefined, label: a.label || undefined, catno: a.catno || undefined,
+      mb_release_id: a.mb_release_id || undefined,
+      release_date: a.release_date || undefined,
+      cover_url: a.cover_url || undefined,
+      okFolder: a.ok_folder || false,
+      forSale: a.for_sale || false
     }));
     // Dédoublonnage : utiliser cleanDiscogsArtist pour fusionner ex. "Husky (5)" et "Husky"
     // Garder l'entrée avec l'id le plus élevé en cas de doublon
@@ -3060,23 +3070,34 @@ async function importMusicBeeXML(input) {
     const stockAlbums = [];    // stock
 
     trackDicts.forEach(d => {
-      const name    = str(d, 'Name');
-      const artist  = str(d, 'Artist');
+      const name        = str(d, 'Name');
+      const artist      = str(d, 'Artist');
       const albumArtist = str(d, 'Album Artist');
-      const album   = str(d, 'Album');
-      const year    = String(num(d, 'Year') || '');
-      const genre   = str(d, 'Genre');
-      const rating  = parseRating(num(d, 'Rating'));
-      const kind    = str(d, 'Kind');
-      const location = str(d, 'Location');
+      const album       = str(d, 'Album');
+      // Year peut être "1997-08-26" (Picard) ou "1997" — extraire l'année sur 4 chiffres
+      const yearRaw     = str(d, 'Year') || str(d, 'Original Year') || String(num(d, 'Year') || '');
+      const year        = extractYear(yearRaw);
+      const releaseDate = yearRaw.length > 4 ? yearRaw.slice(0, 10) : '';
+      const genre       = str(d, 'Genre');
+      const rating      = parseRating(num(d, 'Rating'));
+      const kind        = str(d, 'Kind');
+      const location    = str(d, 'Location');
       const { flac, mp3 } = detectFormat(kind, location);
-      const folder  = detectFolder(location);
+      const folder      = detectFolder(location);
+
+      // Champs Picard MusicBrainz
+      const mbidAlbum  = str(d, 'MBID Album');
+      const mbidArtist = str(d, 'MBID Artiste');
+      const isCompilTag = bool(d, 'Compilation');
+      const composer   = str(d, 'Composer');
+      const discNum    = num(d, 'Disc Number') || 1;
+      const discCnt    = num(d, 'Disc Count')  || 1;
+      const trkCnt     = num(d, 'Track Count') || 0;
 
       // Artiste effectif : préférer Album Artist
       // Pour les compilations (Various Artists), garder "Various Artists" comme artiste de l'album
-      const isCompilation = albumArtist === 'Various Artists';
-      const effectiveArtist = isCompilation ? 'Various Artists'
-        : (albumArtist || artist);
+      const isCompilation = isCompilTag || albumArtist === 'Various Artists';
+      const effectiveArtist = isCompilation ? 'Various Artists' : (albumArtist || artist);
 
       if (folder === 'ignore') return;
 
@@ -3151,11 +3172,16 @@ async function importMusicBeeXML(input) {
         if (!grouped[key]) {
           grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
             flac: false, mp3: false, digital: false, maxRating: 0,
-            isCompilation: isCompilation, trackArtists: [],
-            okFolder: false, forSaleFolder: false };
+            isCompilation, trackArtists: [],
+            okFolder: false, forSaleFolder: false,
+            mbReleaseId: mbidAlbum || '',
+            releaseDate:  releaseDate || '' };
         }
         if (folder === 'ok')     grouped[key].okFolder     = true;
         if (folder === 'vendre') grouped[key].forSaleFolder = true;
+        // Enrichir si données manquantes
+        if (mbidAlbum  && !grouped[key].mbReleaseId)  grouped[key].mbReleaseId  = mbidAlbum;
+        if (releaseDate && !grouped[key].releaseDate) grouped[key].releaseDate  = releaseDate;
         if (flac) grouped[key].flac = true;
         else if (mp3) grouped[key].mp3 = true;
         else grouped[key].digital = true;
@@ -3197,6 +3223,8 @@ async function importMusicBeeXML(input) {
         if (g.trackArtists?.length) existing.trackArtists = Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : [...g.trackArtists].slice(0,20);
         if (g.okFolder)      existing.okFolder = true;
         if (g.forSaleFolder) existing.forSale  = true;
+        if (g.mbReleaseId  && !existing.mb_release_id) existing.mb_release_id = g.mbReleaseId;
+        if (g.releaseDate  && !existing.release_date)  existing.release_date  = g.releaseDate;
         albumsUpdated++;
       } else {
         albums.push({ id: uid(), artist: g.artist, album: g.album, year: g.year, genre: g.genre,
@@ -3204,7 +3232,9 @@ async function importMusicBeeXML(input) {
           isCompilation: g.isCompilation || false,
           trackArtists: Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : g.trackArtists ? [...g.trackArtists].slice(0,20) : [],
           okFolder: g.okFolder || false,
-          forSale: g.forSaleFolder || false });
+          forSale: g.forSaleFolder || false,
+          mb_release_id: g.mbReleaseId || undefined,
+          release_date:  g.releaseDate  || undefined });
         albumsAdded++;
       }
     });
@@ -4427,17 +4457,19 @@ function importMusicBeeTracklists(trackDicts, str, num) {
     const key = normalizeKey(artist, album);
     if (!byAlbum[key]) byAlbum[key] = { artist, album, tracks: [] };
     byAlbum[key].tracks.push({
-      position:    String(num(d, 'Track Number') || ''),
-      title:       str(d, 'Name'),
-      duration:    formatDuration(num(d, 'Total Time')),
-      source:      'musicbee',
-      bitrate:     num(d, 'Bit Rate')    || null,
-      sample_rate: num(d, 'Sample Rate') || null,
-      file_size:   num(d, 'Size')        || null,
-      play_count:  num(d, 'Play Count')  || null,
-      last_played: dateStr(d, 'Last Played') || null,
-      date_added:  dateStr(d, 'Date Added')  || null,
-      composer:    str(d, 'Composer')    || null,
+      position:        String(num(d, 'Track Number') || ''),
+      title:           str(d, 'Name'),
+      duration:        formatDuration(num(d, 'Total Time')),
+      source:          'musicbee',
+      bitrate:         num(d, 'Bit Rate')    || null,
+      sample_rate:     num(d, 'Sample Rate') || null,
+      file_size:       num(d, 'Size')        || null,
+      play_count:      num(d, 'Play Count')  || null,
+      last_played:     dateStr(d, 'Last Played') || null,
+      date_added:      dateStr(d, 'Date Added')  || null,
+      composer:        str(d, 'Composer')    || null,
+      mb_recording_id: str(d, 'MBID Track')  || str(d, 'MusicBrainz Track Id') || null,
+      disc_number:     num(d, 'Disc Number') || null,
     });
   });
 
