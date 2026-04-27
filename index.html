@@ -3034,6 +3034,8 @@ async function importMusicBeeXML(input) {
     function str(dict, key) { const n = getVal(dict, key); return n ? n.textContent.trim() : ''; }
     function num(dict, key) { const n = getVal(dict, key); return n ? parseInt(n.textContent) || 0 : 0; }
     function dateStr(dict, key) { const n = getVal(dict, key); return n ? n.textContent.trim().slice(0,10) : ''; }
+    function bool(dict, key) { const n = getVal(dict, key); return n ? n.tagName.toLowerCase() === 'true' : false; }
+    function extractYear(val) { if (!val) return ''; const m = String(val).match(/^(\d{4})/); return m ? m[1] : ''; }
 
     // Convertir la note iTunes/MusicBee : 0-100 → 0-5 étoiles
     // MusicBee : 20=1★, 40=2★, 60=3★, 80=4★, 100=5★
