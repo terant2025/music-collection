@@ -3065,7 +3065,8 @@ async function importMusicBeeXML(input) {
     // Détecter le dossier spécial depuis le chemin
     function detectFolder(location) {
       const p = decodeURIComponent(location).toLowerCase().replace(/\\/g, '/');
-      if (p.includes('!_00_stock') || p.includes('/stock/')) return 'stock';
+      // Dossier stock : uniquement !_00_stock (éviter false positifs avec /stock/ trop large)
+      if (p.includes('!_00_stock')) return 'stock';
       if (p.includes('top titres') || p.includes('top-titres') || p.includes('top_titres')) return 'isolated';
       if (p.includes('blind-test') || p.includes('blind_test')) return 'ignore';
       // Dossiers spéciaux (même niveau que Discographie)
@@ -3296,11 +3297,11 @@ async function importMusicBeeXML(input) {
     parts.push(`${stockDelta} en stock`);
     status.textContent = `✓ XML : ${parts.join(' — ')}`;
     status.className = 'status ok';
-    // Supprimer les albums sans aucun support (ni CD ni numérique)
-    // Sauf si forSale (à vendre) ou noté (curated)
-    const beforeDel = albums.length;
-    albums = albums.filter(a => a.cd || a.flac || a.mp3 || a.digital || a.forSale || (a.note > 0));
-    const removedAlbums = beforeDel - albums.length;
+    // Ne pas supprimer automatiquement — risque trop élevé si detectFolder rate des dossiers
+    // Afficher seulement un avertissement
+    const noSupportAlbums = albums.filter(a => !a.cd && !a.flac && !a.mp3 && !a.digital && !a.forSale && !(a.note > 0));
+    const removedAlbums = 0;
+    if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support détectés (non supprimés)`);
 
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
@@ -4856,11 +4857,14 @@ function unmarkForSale(id) {
 // ===================== ALL TRACKS =====================
 function buildAllTracksList() {
   const result = [];
-  // 1. Pistes des albums (source musicbee)
+  // 1. Pistes des albums (source musicbee) — depuis albumTracksCache
+  let mbCount = 0;
   albums.forEach(a => {
-    (albumTracksCache[a.id] || []).filter(t => t.source === 'musicbee').forEach(t => {
+    const atracks = albumTracksCache[a.id] || [];
+    atracks.filter(t => t.source === 'musicbee').forEach(t => {
       result.push({ title: t.title, artist: a.artist, album: a.album, albumId: a.id,
         source: 'musicbee', bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+      mbCount++;
     });
   });
   // 2. Morceaux isolés
@@ -4868,6 +4872,9 @@ function buildAllTracksList() {
     result.push({ title: t.title, artist: t.artist, album: t.album || '', albumId: null,
       source: 'isolated', bitrate: null, duration: t.duration, play_count: null });
   });
+  if (!mbCount && Object.keys(albumTracksCache).length) {
+    console.warn('buildAllTracksList: albumTracksCache a des entrées mais aucune source=musicbee. Vérifier l\'import XML.');
+  }
   return result;
 }
 
