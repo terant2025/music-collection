@@ -4331,11 +4331,18 @@ async function fetchMusicBrainzRelease(mbId) {
 // Sauvegarder tracklist dans Supabase
 async function saveTracklist(albumId, tracks_) {
   if (!window._sb || !tracks_.length) return;
+  const source = tracks_[0]?.source || 'discogs';
   // Supprimer les anciennes entrées pour cette source
   await window._sb.from('album_tracks').delete()
-    .eq('album_id', albumId).eq('source', 'discogs');
-  // Insérer les nouvelles par tranches
-  const rows = tracks_.map(t => ({
+    .eq('album_id', albumId).eq('source', source);
+  // Dédoublonner avant insert (évite ON CONFLICT duplicate dans le même batch)
+  const seen = new Set();
+  const unique = tracks_.filter(t => {
+    const k = (t.title||'').toLowerCase().trim() + '|' + (t.position||'');
+    if (seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+  const rows = unique.map(t => ({
     album_id: albumId, position: t.position||'', title: t.title||'',
     duration: t.duration||'', source: t.source,
     bitrate: t.bitrate||null, sample_rate: t.sample_rate||null,
@@ -4343,12 +4350,14 @@ async function saveTracklist(albumId, tracks_) {
     last_played: t.last_played||null, date_added: t.date_added||null,
     composer: t.composer||null, isrc: t.isrc||null,
     mb_recording_id: t.mb_recording_id||null,
+    disc_number: t.disc_number||null,
   }));
   for (let i = 0; i < rows.length; i += 100) {
-    await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
+    const { error } = await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
+    if (error) console.warn('saveTracklist error:', error.message);
   }
   albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
-    .filter(t => t.source !== 'discogs').concat(tracks_);
+    .filter(t => t.source !== source).concat(tracks_);
 }
 
 // Charger toutes les tracklists (Discogs + MusicBrainz) via Edge Function
@@ -4861,10 +4870,13 @@ function buildAllTracksList() {
   let mbCount = 0;
   albums.forEach(a => {
     const atracks = albumTracksCache[a.id] || [];
-    atracks.filter(t => t.source === 'musicbee').forEach(t => {
+    // Préférer musicbee, sinon discogs si musicbee absent pour cet album
+    const mbTracks = atracks.filter(t => t.source === 'musicbee');
+    const useTracks = mbTracks.length ? mbTracks : atracks.filter(t => t.source === 'discogs');
+    useTracks.forEach(t => {
       result.push({ title: t.title, artist: a.artist, album: a.album, albumId: a.id,
-        source: 'musicbee', bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
-      mbCount++;
+        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+      if (t.source === 'musicbee') mbCount++;
     });
   });
   // 2. Morceaux isolés
@@ -4873,7 +4885,8 @@ function buildAllTracksList() {
       source: 'isolated', bitrate: null, duration: t.duration, play_count: null });
   });
   if (!mbCount && Object.keys(albumTracksCache).length) {
-    console.warn('buildAllTracksList: albumTracksCache a des entrées mais aucune source=musicbee. Vérifier l\'import XML.');
+    const sources = new Set(Object.values(albumTracksCache).flat().map(t=>t.source));
+    console.info('buildAllTracksList: sources dans cache =', [...sources]);
   }
   return result;
 }
@@ -4951,9 +4964,12 @@ function renderAlbumTracks() {
 
   const full = [];
   albums.forEach(a => {
-    (albumTracksCache[a.id]||[]).filter(t=>t.source==='musicbee').forEach(t => {
+    const atracks = albumTracksCache[a.id] || [];
+    const mbT = atracks.filter(t => t.source === 'musicbee');
+    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
+    useT.forEach(t => {
       full.push({ title: t.title, artist: a.artist, album: a.album,
-        bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
     });
   });
 
@@ -5422,11 +5438,11 @@ function getLinkedNumId(cdId) {
 // Cache de lookup : Set des clés numériques pour éviter O(n²)
 function getDigitalKeysSet() {
   if (_cache.digitalKeysSet) return _cache.digitalKeysSet;
-  _cache.digitalKeysSet = new Set(
-    albums
-      .filter(a => a.flac || a.mp3 || a.digital)
-      .map(a => normalizeKey(a.artist, a.album))
-  );
+  _cache.digitalKeysSet = new Set();
+  albums.filter(a => a.flac || a.mp3 || a.digital).forEach(a => {
+    _cache.digitalKeysSet.add(normalizeKey(a.artist, a.album));
+    _cache.digitalKeysSet.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+  });
   return _cache.digitalKeysSet;
 }
 
@@ -5445,8 +5461,10 @@ function hasDigitalBackup(album) {
     const linked = albums.find(a => a.id === lid);
     if (linked && (linked.flac || linked.mp3 || linked.digital)) return true;
   }
-  const key = normalizeKey(album.artist, album.album);
-  return getDigitalKeysSet().has(key);
+  const digitalKeys = getDigitalKeysSet();
+  if (digitalKeys.has(normalizeKey(album.artist, album.album))) return true;
+  if (digitalKeys.has(normalizeKey(cleanDiscogsArtist(album.artist), album.album))) return true;
+  return false;
 }
 
 // Liste des CDs Discogs sans aucune sauvegarde numérique
