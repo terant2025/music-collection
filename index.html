@@ -5528,7 +5528,8 @@ function renderDiscographie() {
   const filter = document.getElementById('disco-filter')?.value || 'all';
 
   tbody.innerHTML = slice.map(a => {
-    const isCD = a.cd;
+    const isCD = !!a.cd;
+    const isDigital = !!(a.flac || a.mp3 || a.digital);
     const hasNum = hasDigitalBackup(a);
     const linkedId = getLinkedNumId(a.id);
     const linked = linkedId ? albums.find(b => b.id === linkedId) : null;
