@@ -1063,8 +1063,17 @@ input[type="file"] { display: none; }
         <input id="filter-at-album" type="text" placeholder="Album…" oninput="renderAllTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
         <select id="filter-at-source" onchange="renderAllTracks()">
           <option value="">Toutes sources</option>
-          <option value="musicbee">MusicBee</option>
+          <option value="musicbee">Albums MusicBee</option>
           <option value="isolated">Morceaux isolés</option>
+        </select>
+        <select id="filter-at-folder" onchange="renderAllTracks()">
+          <option value="">Tous dossiers</option>
+          <option value="discographie">Discographie</option>
+          <option value="stock">Stock</option>
+          <option value="ok">Ok</option>
+          <option value="forsale">À vendre</option>
+          <option value="isolated">Top titres</option>
+          <option value="discogs">Dans Discogs</option>
         </select>
         <select id="sort-at" onchange="renderAllTracks()">
           <option value="artist">Artiste A→Z</option>
@@ -4457,7 +4466,9 @@ function importMusicBeeTracklists(trackDicts, str, num) {
     const location = str(d, 'Location').toLowerCase();
     if (location.includes('blind-test') || location.includes('blind_test')) return;
     const key = normalizeKey(artist, album);
-    if (!byAlbum[key]) byAlbum[key] = { artist, album, tracks: [] };
+    const mbidAlbum_ = str(d, 'MBID Album');
+    if (!byAlbum[key]) byAlbum[key] = { artist, album, tracks: [], mbReleaseId: mbidAlbum_ || '' };
+    else if (mbidAlbum_ && !byAlbum[key].mbReleaseId) byAlbum[key].mbReleaseId = mbidAlbum_;
     byAlbum[key].tracks.push({
       position:        String(num(d, 'Track Number') || ''),
       title:           str(d, 'Name'),
@@ -4478,8 +4489,12 @@ function importMusicBeeTracklists(trackDicts, str, num) {
   // Pour chaque groupe, trouver l'album dans la collection et sauvegarder
   const toSave = [];
   Object.values(byAlbum).forEach(g => {
-    const albumObj = albums.find(a => normalizeKey(a.artist, a.album) === g.key ||
-      normalizeKey(cleanDiscogsArtist(a.artist), a.album) === normalizeKey(g.artist, g.album));
+    const gKey = normalizeKey(g.artist, g.album);
+    const albumObj = albums.find(a =>
+      normalizeKey(a.artist, a.album) === gKey ||
+      normalizeKey(cleanDiscogsArtist(a.artist), a.album) === gKey ||
+      // Aussi matcher par MBID Album si disponible
+      (g.mbReleaseId && a.mb_release_id && g.mbReleaseId === a.mb_release_id));
     if (!albumObj) return;
     // Trier par position
     g.tracks.sort((a, b) => {
@@ -4546,9 +4561,11 @@ async function loadAlbumTracks() {
           bitrate: t.bitrate, sample_rate: t.sample_rate, file_size: t.file_size,
           play_count: t.play_count, last_played: t.last_played, date_added: t.date_added,
           composer: t.composer, isrc: t.isrc, mb_recording_id: t.mb_recording_id,
+          disc_number: t.disc_number,
         });
       });
       console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
+      if (_dataReady) invalidateCache();
     }
   } catch(e) { console.warn('loadAlbumTracks:', e); }
 }
@@ -4855,21 +4872,40 @@ function buildAllTracksList() {
 }
 
 function renderAllTracks() {
-  const q    = (document.getElementById('global-search').value||'').toLowerCase();
-  const af   = (document.getElementById('filter-at-artist')?.value||'').toLowerCase().trim();
-  const tf   = (document.getElementById('filter-at-title')?.value||'').toLowerCase().trim();
-  const albf = (document.getElementById('filter-at-album')?.value||'').toLowerCase().trim();
-  const sf   = document.getElementById('filter-at-source')?.value||'';
-  const sort = document.getElementById('sort-at')?.value||'artist';
+  const q      = (document.getElementById('global-search').value||'').toLowerCase();
+  const af     = (document.getElementById('filter-at-artist')?.value||'').toLowerCase().trim();
+  const tf     = (document.getElementById('filter-at-title')?.value||'').toLowerCase().trim();
+  const albf   = (document.getElementById('filter-at-album')?.value||'').toLowerCase().trim();
+  const sf     = document.getElementById('filter-at-source')?.value||'';
+  const folder = document.getElementById('filter-at-folder')?.value||'';
+  const sort   = document.getElementById('sort-at')?.value||'artist';
   const lfExact = new Map(Object.values(_lastfmTrackCounts).map(d => [normalizeKey(d.artist,d.track), d.plays]));
 
-  let list = buildAllTracksList().filter(t =>
-    (!q    || (t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q))
-    && (!af   || t.artist.toLowerCase().includes(af))
-    && (!tf   || t.title.toLowerCase().includes(tf))
-    && (!albf || t.album.toLowerCase().includes(albf))
-    && (!sf   || (sf==='musicbee' ? t.source==='musicbee' : t.source==='isolated'))
-  );
+  // Index des albums par dossier pour le filtre
+  const albumById = new Map(albums.map(a => [a.id, a]));
+
+  let list = buildAllTracksList().filter(t => {
+    if (!(!q || (t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q))) return false;
+    if (af   && !t.artist.toLowerCase().includes(af))   return false;
+    if (tf   && !t.title.toLowerCase().includes(tf))    return false;
+    if (albf && !t.album.toLowerCase().includes(albf))  return false;
+    if (sf) {
+      if (sf === 'musicbee' && t.source !== 'musicbee') return false;
+      if (sf === 'isolated' && t.source !== 'isolated') return false;
+    }
+    if (folder && t.source === 'musicbee') {
+      const a = t.albumId ? albumById.get(t.albumId) : null;
+      if (!a) return false;
+      if (folder === 'discographie' && !(a.cd || a.flac || a.mp3)) return false;
+      if (folder === 'stock'  && !a.stockFolder) return false;
+      if (folder === 'ok'     && !a.okFolder)    return false;
+      if (folder === 'forsale'&& !a.forSale)     return false;
+      if (folder === 'discogs'&& !a.cd)          return false;
+      if (folder === 'isolated') return false; // isolés = pas source musicbee
+    }
+    if (folder === 'isolated' && t.source !== 'isolated') return false;
+    return true;
+  });
 
   if (sort==='title')  list.sort((a,b)=>a.title.localeCompare(b.title,'fr'));
   else if (sort==='plays') list.sort((a,b)=>(lfExact.get(normalizeKey(b.artist,b.title))||0)-(lfExact.get(normalizeKey(a.artist,a.title))||0));
@@ -5889,13 +5925,23 @@ function computeRYMMissing() {
   if (_cache.rymMissing) return _cache.rymMissing;
   if (!rymData.length) return (_cache.rymMissing = []);
   const threshold = getRYMThreshold();
-  const ownedKeys = new Set(albums.filter(a => a.cd || a.flac || a.mp3 || a.digital).map(a => normalizeKey(a.artist, a.album)));
+  // Index par clé normalisée + par mb_release_id
+  const ownedKeys = new Set();
+  const ownedMbIds = new Set();
+  albums.filter(a => a.cd || a.flac || a.mp3 || a.digital).forEach(a => {
+    ownedKeys.add(normalizeKey(a.artist, a.album));
+    ownedKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+    if (a.mb_release_id) ownedMbIds.add(a.mb_release_id);
+  });
   const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
   _cache.rymMissing = rymData
     .filter(r => r.rating >= threshold)
     .filter(r => {
       const key = normalizeKey(r.artist, r.album);
-      return !ownedKeys.has(key) && !associatedRymKeys.has(key);
+      if (ownedKeys.has(key)) return false;
+      if (associatedRymKeys.has(key)) return false;
+      if (r.mb_release_id && ownedMbIds.has(r.mb_release_id)) return false;
+      return true;
     })
     .sort((a, b) => b.rating - a.rating);
   return _cache.rymMissing;
