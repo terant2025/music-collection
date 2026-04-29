@@ -1758,6 +1758,15 @@ async function saveToSupabase() {
     // meta : next_id
     await window._sb.from('meta').upsert({ key: 'next_id', value: String(nextId) }, { onConflict: 'key' });
 
+    // Wishlist (stockée dans meta en JSON)
+    if (wishlist.length || trackWishlist.length) {
+      const wishData = JSON.stringify({ albums: wishlist, tracks: trackWishlist });
+      await window._sb.from('meta').upsert(
+        { key: 'wishlist_data', value: wishData },
+        { onConflict: 'key' }
+      );
+    }
+
     setSaveIndicator('saved', now);
   } catch(e) {
     setSaveIndicator('error');
@@ -1882,6 +1891,17 @@ async function loadFromSupabase() {
       if (metaMap.lastfm_sync_ts) {
         // Toujours restaurer le timestamp depuis Supabase (source de vérité)
         localStorage.setItem(LASTFM_SYNC_KEY, metaMap.lastfm_sync_ts);
+      }
+    }
+    // Restaurer wishlist depuis meta
+    if (metaRows) {
+      const metaMap = Object.fromEntries(metaRows.map(r => [r.key, r.value]));
+      if (metaMap.wishlist_data) {
+        try {
+          const wd = JSON.parse(metaMap.wishlist_data);
+          if (wd.albums?.length) wishlist = wd.albums;
+          if (wd.tracks?.length) trackWishlist = wd.tracks;
+        } catch(e) { console.warn('wishlist_data parse error:', e); }
       }
     }
     // Mettre à jour le label de dernière sync après chargement
@@ -4913,17 +4933,20 @@ function renderAllTracks() {
       if (sf === 'musicbee' && t.source !== 'musicbee') return false;
       if (sf === 'isolated' && t.source !== 'isolated') return false;
     }
-    if (folder && t.source === 'musicbee') {
-      const a = t.albumId ? albumById.get(t.albumId) : null;
-      if (!a) return false;
-      if (folder === 'discographie' && !(a.cd || a.flac || a.mp3)) return false;
-      if (folder === 'stock'  && !a.stockFolder) return false;
-      if (folder === 'ok'     && !a.okFolder)    return false;
-      if (folder === 'forsale'&& !a.forSale)     return false;
-      if (folder === 'discogs'&& !a.cd)          return false;
-      if (folder === 'isolated') return false; // isolés = pas source musicbee
+    if (folder) {
+      if (folder === 'isolated') {
+        if (t.source !== 'isolated') return false;
+      } else {
+        const a = t.albumId ? albumById.get(t.albumId) : null;
+        if (!a) return false;
+        const inStock = stockItems.some(s => normalizeKey(s.artist,s.album) === normalizeKey(a.artist,a.album));
+        if (folder === 'discographie' && !(a.cd || a.flac || a.mp3)) return false;
+        if (folder === 'stock'   && !inStock)    return false;
+        if (folder === 'ok'      && !a.okFolder) return false;
+        if (folder === 'forsale' && !a.forSale)  return false;
+        if (folder === 'discogs' && !a.cd)       return false;
+      }
     }
-    if (folder === 'isolated' && t.source !== 'isolated') return false;
     return true;
   });
 
