@@ -280,11 +280,15 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 /* ARTIST CELL */
 .artist-cell { display: flex; align-items: center; gap: 10px; }
 .artist-avatar {
-  width: 32px; height: 32px; border-radius: 6px;
+  width: 36px; height: 36px; border-radius: 6px;
   background: var(--bg4);
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; flex-shrink: 0;
   border: 1px solid var(--border);
+  overflow: hidden;
+}
+.artist-avatar img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block;
 }
 .artist-info .name { font-size: 13px; font-weight: 500; color: var(--text); }
 .artist-info .sub { font-size: 11px; color: var(--text3); }
@@ -1008,12 +1012,14 @@ input[type="file"] { display: none; }
         <input id="filter-assoc-q" type="text" placeholder="Artiste / Album…" oninput="renderAssocReview()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:200px"/>
         <div class="toolbar-right">
           <span id="assoc-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm btn-danger" id="btn-delete-selected-assoc" onclick="deleteSelectedAssoc()" style="display:none">🗑 Supprimer la sélection</button>
         </div>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:30px"><input type="checkbox" id="assoc-check-all" onchange="toggleAllAssoc(this)"></th>
               <th>Type</th>
               <th>Source (A)</th>
               <th>Cible (B)</th>
@@ -1316,6 +1322,16 @@ input[type="file"] { display: none; }
       <div style="display:flex;gap:8px;align-items:center">
         <input type="text" id="f-discogs-id" placeholder="ex. 3729813" style="width:140px;font-family:var(--mono);font-size:12px" oninput="updateDiscogsLink()">
         <span id="f-discogs-link" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+    </div>
+    <div class="form-row" style="grid-column:1/-1">
+      <label>Pochette</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="f-cover-url" placeholder="URL pochette…" style="flex:1;font-size:12px">
+        <button class="btn btn-sm" onclick="fetchCoverForModal()" type="button">🖼 Auto</button>
+      </div>
+      <div id="modal-cover-wrap" style="margin-top:8px;display:none">
+        <img id="modal-cover-img" src="" alt="" style="max-height:80px;max-width:80px;border-radius:6px;object-fit:cover;border:1px solid var(--border)">
       </div>
     </div>
     <div class="modal-footer">
@@ -2140,7 +2156,15 @@ function slugEmoji(artist) {
 }
 
 function initials(artist) {
-  return artist.split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2);
+  return (artist||'?').split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2);
+}
+
+function albumAvatar(album) {
+  if (album?.cover_url) {
+    const ini = initials(album.artist || '?');
+    return `<img src="${esc(album.cover_url)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.textContent='${ini}'">`;
+  }
+  return initials(album?.artist || '?');
 }
 
 // ===================== NAVIGATION =====================
@@ -2296,7 +2320,7 @@ function renderAlbums() {
     return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
       <td>
         <div class="artist-cell">
-          <div class="artist-avatar">${initials(a.artist)}</div>
+          <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}</div>
             <div class="sub">${esc(a.artist)}${a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
@@ -2477,10 +2501,16 @@ function invalidateCache() {
 function getOwnedKeysSet() {
   if (_cache.ownedKeys) return _cache.ownedKeys;
   _cache.ownedKeys = new Set();
+  _cache.ownedMbIds = new Set();
   albums.forEach(a => {
+    const clean = cleanDiscogsArtist(a.artist);
     _cache.ownedKeys.add(normalizeKey(a.artist, a.album));
-    _cache.ownedKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+    _cache.ownedKeys.add(normalizeKey(clean, a.album));
+    // Variante sans "The" au début pour matcher "The Black Keys" ↔ "Black Keys"
+    const withoutThe = clean.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+    if (withoutThe !== clean) _cache.ownedKeys.add(normalizeKey(withoutThe, a.album));
     if (a.lastfmAliases) a.lastfmAliases.forEach(k => _cache.ownedKeys.add(k));
+    if (a.mb_release_id) _cache.ownedMbIds.add(a.mb_release_id);
   });
   return _cache.ownedKeys;
 }
@@ -2853,9 +2883,41 @@ function editAlbum(id) {
   document.getElementById('f-mp3').checked = !!a.mp3;
   document.getElementById('f-digital').checked = !!a.digital;
   document.getElementById('f-discogs-id').value = a.discogsId || '';
+  if (document.getElementById('f-cover-url')) document.getElementById('f-cover-url').value = a.cover_url || '';
+  const coverImg  = document.getElementById('modal-cover-img');
+  const coverWrap = document.getElementById('modal-cover-wrap');
+  if (a.cover_url && coverImg) { coverImg.src = a.cover_url; coverWrap.style.display = 'block'; }
+  else if (coverWrap) coverWrap.style.display = 'none';
   updateDiscogsLink();
   setModalNote(a.note || 0);
   document.getElementById('modal-album').classList.add('open');
+}
+
+async function fetchCoverForModal() {
+  const albumName  = (document.getElementById('f-album')?.value || '').trim();
+  const artistName = (document.getElementById('f-artist')?.value || '').trim();
+  const discogsId  = (document.getElementById('f-discogs-id')?.value || '').trim();
+  if (!albumName) { toast('Renseignez le titre de l\'album', 'warn'); return; }
+  try {
+    let coverUrl = '';
+    if (discogsId) {
+      const data = await callEdgeFn({ source: 'discogs', release_id: discogsId });
+      if (data.cover_url) coverUrl = data.cover_url;
+    }
+    if (!coverUrl && artistName) {
+      const results = await searchMusicBrainz(cleanDiscogsArtist(artistName), albumName);
+      if (results?.[0]?.cover_url) coverUrl = results[0].cover_url;
+    }
+    if (coverUrl) {
+      document.getElementById('f-cover-url').value = coverUrl;
+      const img = document.getElementById('modal-cover-img');
+      const wrap = document.getElementById('modal-cover-wrap');
+      if (img) { img.src = coverUrl; wrap.style.display = 'block'; }
+      toast('Pochette récupérée');
+    } else {
+      toast('Aucune pochette trouvée', 'warn');
+    }
+  } catch(e) { toast('Erreur : ' + e.message, 'error'); }
 }
 
 function closeAlbumModal() { document.getElementById('modal-album').classList.remove('open'); }
@@ -2882,6 +2944,7 @@ function saveAlbum() {
     plays: parseInt(document.getElementById('f-plays').value) || 0,
     notes: document.getElementById('f-notes').value.trim(),
     discogsId: document.getElementById('f-discogs-id').value.trim() || undefined,
+    cover_url: document.getElementById('f-cover-url')?.value.trim() || undefined,
   };
   if (eid) {
     const idx = albums.findIndex(a => a.id == eid);
@@ -2952,8 +3015,9 @@ document.addEventListener('change', e => {
 // Discogs ajoute ces suffixes pour distinguer les homonymes
 function cleanDiscogsArtist(raw) {
   return (raw || '')
-    .replace(/\s*\(\d+\)\s*$/, '') // enlever (2), (12) en fin de nom
-    .replace(/\s*,\s*The$/, ', The') // normaliser "The" déplacé
+    .replace(/\s*\(\d+\)\s*$/, '')      // enlever (2), (12) en fin de nom
+    .replace(/^(.+),\s*The\s*$/i, 'The $1') // "Black Keys, The" → "The Black Keys"
+    .replace(/^(.+),\s*A\s*$/i, 'A $1')    // "Band, A" → "A Band"
     .trim();
 }
 
@@ -4826,7 +4890,7 @@ function renderOkAlbums() {
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
   const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderOkAlbums()">★</button>`).join('');
   tbody.innerHTML = list.map(a => `<tr>
-    <td><div class="artist-cell"><div class="artist-avatar">${initials(a.artist)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
+    <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">numérique seul</span>'}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
@@ -4861,7 +4925,7 @@ function renderForSale() {
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
   const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderForSale()">★</button>`).join('');
   tbody.innerHTML = list.map(a => `<tr>
-    <td><div class="artist-cell"><div class="artist-avatar">${initials(a.artist)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
+    <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
@@ -5086,6 +5150,53 @@ function renderTrackWishlist() {
 
 // ===================== ASSOCIATIONS REVIEW =====================
 
+let _assocRows = [];
+
+function onAssocCheckChange() {
+  const checks = document.querySelectorAll('.assoc-row-check:checked');
+  const btn = document.getElementById('btn-delete-selected-assoc');
+  if (btn) btn.style.display = checks.length ? '' : 'none';
+  const all = document.getElementById('assoc-check-all');
+  if (all) {
+    const total = document.querySelectorAll('.assoc-row-check').length;
+    all.indeterminate = checks.length > 0 && checks.length < total;
+    all.checked = checks.length === total;
+  }
+}
+
+function toggleAllAssoc(chk) {
+  document.querySelectorAll('.assoc-row-check').forEach(c => c.checked = chk.checked);
+  onAssocCheckChange();
+}
+
+function deleteSelectedAssoc() {
+  const checked = [...document.querySelectorAll('.assoc-row-check:checked')];
+  if (!checked.length) return;
+  if (!confirm(`Supprimer ${checked.length} association${checked.length>1?'s':''} ?`)) return;
+  const indices = checked.map(c => parseInt(c.dataset.idx));
+  // Traiter de la fin pour ne pas décaler les indices
+  indices.sort((a,b)=>b-a).forEach(i => {
+    const r = _assocRows[i];
+    if (!r) return;
+    if (r.type === 'discogs-num') {
+      // Extraire cdId et numId depuis les actions
+      const m = r.actions.match(/removeDiscogsAssoc\((\d+),(\d+)\)/);
+      if (m) associations = associations.filter(a => !(a.cdId==m[1] && a.numId==m[2]));
+    } else if (r.type === 'rym') {
+      const m = r.actions.match(/removeRYMAssoc\('([^']+)'\)/);
+      if (m) rymAssociations = rymAssociations.filter(a => a.rymKey !== m[1]);
+    } else if (r.type === 'lastfm') {
+      const m = r.actions.match(/removeLastfmAlias\((\d+),(\d+)\)/);
+      if (m) {
+        const album = albums.find(a => a.id == m[1]);
+        if (album?.lastfmAliases) album.lastfmAliases.splice(parseInt(m[2]), 1);
+      }
+    }
+  });
+  invalidateCache(); saveToStorage(); renderAssocReview(); updateNavBadges();
+  toast(`${indices.length} association${indices.length>1?'s':''} supprimée${indices.length>1?'s':''}`);
+}
+
 function renderAssocReview() {
   const typeF = document.getElementById('filter-assoc-type')?.value || '';
   const q = (document.getElementById('filter-assoc-q')?.value || '').toLowerCase().trim();
@@ -5164,12 +5275,14 @@ function renderAssocReview() {
     tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🔗</div>Aucune association' + (q || typeF ? ' avec ces filtres' : ' enregistrée') + '.</div></td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => `<tr>
+  tbody.innerHTML = rows.map((r,i) => `<tr>
+    <td><input type="checkbox" class="assoc-row-check" data-idx="${i}" onchange="onAssocCheckChange()"></td>
     <td style="font-size:12px;color:var(--text2);white-space:nowrap">${r.typeLabel}</td>
     <td style="font-size:13px;line-height:1.5">${r.a}</td>
     <td style="font-size:13px;line-height:1.5">${r.b}</td>
     <td style="white-space:nowrap">${r.actions}</td>
   </tr>`).join('');
+  window._assocRows = rows; // stocker pour la suppression groupée
 }
 
 function removeDiscogsAssoc(cdId, numId) {
@@ -5609,7 +5722,7 @@ function renderDiscographie() {
     return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
       <td>
         <div class="artist-cell">
-          <div class="artist-avatar">${initials(a.artist)}</div>
+          <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}</div>
             <div class="sub">${esc(a.artist)}</div>
