@@ -2159,10 +2159,23 @@ function initials(artist) {
   return (artist||'?').split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2);
 }
 
+// Résoudre l'URL cover art : CAA retourne une redirection bloquée par Firefox
+// → passer par l'Edge Function ou utiliser l'URL directe archive.org
+function resolveCoverUrl(url) {
+  if (!url) return '';
+  // Remplacer coverartarchive.org/release/{id}/front par une URL proxy Edge Function
+  if (url.includes('coverartarchive.org')) {
+    const m = url.match(/release\/([a-f0-9-]+)\/front/i);
+    if (m) return `${EDGE_FN_URL}?source=cover&mb_id=${m[1]}`;
+  }
+  return url;
+}
+
 function albumAvatar(album) {
   if (album?.cover_url) {
     const ini = initials(album.artist || '?');
-    return `<img src="${esc(album.cover_url)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.textContent='${ini}'">`;
+    const src = resolveCoverUrl(album.cover_url);
+    return `<img src="${esc(src)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.parentElement.textContent='${ini}'" referrerpolicy="no-referrer">`;
   }
   return initials(album?.artist || '?');
 }
