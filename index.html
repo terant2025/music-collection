@@ -2165,24 +2165,22 @@ const _coverBlobCache = new Map();
 // Résoudre une URL CAA en blob URL via fetch authentifié
 async function resolveCoverToBlobUrl(url, mbId) {
   if (_coverBlobCache.has(mbId)) return _coverBlobCache.get(mbId);
-  try {
-    const data = await callEdgeFn({ source: 'cover', mb_id: mbId });
-    // callEdgeFn attend du JSON, mais on reçoit une image — on doit fetch directement
-  } catch(e) {}
-  // Fallback : fetch direct avec auth
+  _coverBlobCache.set(mbId, ''); // marquer comme en cours pour éviter les appels parallèles
   const anonKey = localStorage.getItem('supabase_anon_key') || '';
   const proxyUrl = `${EDGE_FN_URL}?source=cover&mb_id=${mbId}`;
   try {
     const res = await fetch(proxyUrl, {
       headers: { 'Authorization': `Bearer ${anonKey}`, 'apikey': anonKey }
     });
-    if (!res.ok) throw new Error(res.status);
+    if (!res.ok) throw new Error(`${res.status}`);
+    const contentType = res.headers.get('Content-Type') || '';
+    if (!contentType.startsWith('image/')) throw new Error('not an image: ' + contentType);
     const blob = await res.blob();
     const blobUrl = URL.createObjectURL(blob);
     _coverBlobCache.set(mbId, blobUrl);
     return blobUrl;
   } catch(e) {
-    _coverBlobCache.set(mbId, ''); // éviter de refetch en boucle
+    console.warn(`Cover ${mbId}:`, e.message);
     return '';
   }
 }
