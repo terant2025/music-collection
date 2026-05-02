@@ -1758,7 +1758,13 @@ async function saveToSupabase() {
 
     // lastfmData
     if (lastfmData.length) {
-      const lfRows = lastfmData.map(d => ({ artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: now }));
+      // Dédoublonner lastfmData avant upsert (évite ON CONFLICT duplicate dans le même batch)
+      const lfDedup = new Map();
+      lastfmData.forEach(d => {
+        const k = (d.artist||'') + '|||' + (d.album||'');
+        if (!lfDedup.has(k) || (d.plays||0) > (lfDedup.get(k).plays||0)) lfDedup.set(k, d);
+      });
+      const lfRows = [...lfDedup.values()].map(d => ({ artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: now }));
       await sbUpsert('lastfm_data', lfRows, 'artist,album');
     }
 
@@ -3804,7 +3810,13 @@ async function fetchLastfmIncrementalSilent(fromTs) {
   if (window._sb) {
     const updatedRows = lastfmData.map(d => ({ artist: d.artist, album: d.album, plays: d.plays }));
     try {
-      await sbUpsert('lastfm_data', updatedRows, 'artist,album');
+      // Dédoublonner avant upsert incrémental
+      const updDedup = new Map();
+      updatedRows.forEach(r => {
+        const k = r.artist + '|||' + r.album;
+        if (!updDedup.has(k) || r.plays > (updDedup.get(k).plays||0)) updDedup.set(k, r);
+      });
+      await sbUpsert('lastfm_data', [...updDedup.values()], 'artist,album');
     } catch(e) { console.error('Erreur sauvegarde lastfm Supabase:', e); }
   }
 
