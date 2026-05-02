@@ -1857,6 +1857,14 @@ async function loadFromSupabase() {
     });
     albums = Array.from(albDedup.values());
     console.log(`Albums chargés : ${albMapped.length} total, ${albums.length} après dédoublonnage`);
+    // Nettoyer les cover_url coverartarchive déjà stockées (non accessibles depuis les clouds)
+    let cleanedCovers = 0;
+    albums.forEach(a => {
+      if (a.cover_url && a.cover_url.includes('coverartarchive')) {
+        a.cover_url = undefined; cleanedCovers++;
+      }
+    });
+    if (cleanedCovers) console.log(`${cleanedCovers} cover_url coverartarchive nettoyées`);
 
     // Tracks — paginé
     let trkAll = [], trkPage = 0;
@@ -2165,57 +2173,15 @@ function initials(artist) {
   return (artist||'?').split(' ').map(w => w[0] || '').join('').toUpperCase().slice(0, 2);
 }
 
-// Cache des blob URLs résolus (évite de refetch à chaque render)
-const _coverBlobCache = new Map();
-
 // Résoudre une URL CAA en blob URL via fetch authentifié
-async function resolveCoverToBlobUrl(url, mbId) {
-  if (_coverBlobCache.has(mbId)) return _coverBlobCache.get(mbId);
-  _coverBlobCache.set(mbId, ''); // marquer comme en cours pour éviter les appels parallèles
-  const anonKey = localStorage.getItem('supabase_anon_key') || '';
-  const proxyUrl = `${EDGE_FN_URL}?source=cover&mb_id=${mbId}`;
-  try {
-    const res = await fetch(proxyUrl, {
-      headers: { 'Authorization': `Bearer ${anonKey}`, 'apikey': anonKey }
-    });
-    if (!res.ok) throw new Error(`${res.status}`);
-    const contentType = res.headers.get('Content-Type') || '';
-    if (!contentType.startsWith('image/')) throw new Error('not an image: ' + contentType);
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    _coverBlobCache.set(mbId, blobUrl);
-    return blobUrl;
-  } catch(e) {
-    console.warn(`Cover ${mbId}:`, e.message);
-    return '';
-  }
-}
-
 function albumAvatar(album) {
   if (album?.cover_url) {
+    const url = album.cover_url;
     const ini = initials(album.artist || '?');
-    const m = album.cover_url.match(/release\/([a-f0-9-]+)\/front/i);
-    const mbId = m ? m[1] : null;
-    if (mbId) {
-      // Si déjà en cache, afficher directement
-      const cached = _coverBlobCache.get(mbId);
-      if (cached) {
-        return cached
-          ? `<img src="${cached}" alt="" style="width:100%;height:100%;object-fit:cover" referrerpolicy="no-referrer">`
-          : initials(album.artist || '?');
-      }
-      // Sinon charger en async et laisser les initiales en attendant
-      resolveCoverToBlobUrl(album.cover_url, mbId).then(blobUrl => {
-        if (!blobUrl) return;
-        // Mettre à jour tous les avatars de cet album dans le DOM
-        document.querySelectorAll(`[data-album-id="${album.id}"]`).forEach(el => {
-          el.innerHTML = `<img src="${blobUrl}" alt="" style="width:100%;height:100%;object-fit:cover">`;
-        });
-      });
-      return initials(album.artist || '?'); // placeholder pendant le chargement
-    }
-    // URL directe (pas CAA) — charger normalement
-    return `<img src="${esc(album.cover_url)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.parentElement.textContent='${initials(album.artist||'?')}'" referrerpolicy="no-referrer">`;
+    // Ignorer les URLs coverartarchive (bloquées par les clouds) — afficher initiales
+    if (url.includes('coverartarchive.org')) return ini;
+    // URLs directes (Discogs i.discogs.com, last.fm, etc.) — charger normalement
+    return `<img src="${esc(url)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.parentElement.textContent='${ini}'" referrerpolicy="no-referrer">`;
   }
   return initials(album?.artist || '?');
 }
@@ -2373,7 +2339,7 @@ function renderAlbums() {
     return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
       <td>
         <div class="artist-cell">
-          <div class="artist-avatar" data-album-id="${a.id}">${albumAvatar(a)}</div>
+          <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}</div>
             <div class="sub">${esc(a.artist)}${a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
@@ -2953,13 +2919,22 @@ async function fetchCoverForModal() {
   if (!albumName) { toast('Renseignez le titre de l\'album', 'warn'); return; }
   try {
     let coverUrl = '';
+    // 1. Discogs : retourne une URL directe i.discogs.com
     if (discogsId) {
       const data = await callEdgeFn({ source: 'discogs', release_id: discogsId });
-      if (data.cover_url) coverUrl = data.cover_url;
+      if (data.cover_url && !data.cover_url.includes('coverartarchive')) coverUrl = data.cover_url;
     }
+    // 2. last.fm : album.getinfo retourne des URLs lastfm.freetls.fastly.net directes
     if (!coverUrl && artistName) {
-      const results = await searchMusicBrainz(cleanDiscogsArtist(artistName), albumName);
-      if (results?.[0]?.cover_url) coverUrl = results[0].cover_url;
+      const lfKey = 'e8aae3c9ca05ced8f56443c1108fdc65';
+      const lfUrl = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(cleanDiscogsArtist(artistName))}&album=${encodeURIComponent(albumName)}&api_key=${lfKey}&format=json`;
+      const res = await fetch(lfUrl);
+      if (res.ok) {
+        const data = await res.json();
+        const images = data.album?.image || [];
+        const img = images.find(i => i.size === 'extralarge') || images.find(i => i.size === 'large') || images.slice(-1)[0];
+        if (img?.['#text'] && !img['#text'].includes('2a96cbd8b46e442fc41c2b86b821562f')) coverUrl = img['#text'];
+      }
     }
     if (coverUrl) {
       document.getElementById('f-cover-url').value = coverUrl;
@@ -4544,7 +4519,7 @@ async function fetchAllTracklists(onlyMissing = true) {
       // Enrichir l'album avec les infos Discogs
       let changed = false;
       if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; changed = true; }
-      if (!album.cover_url   && rel.cover_url)    { album.cover_url   = rel.cover_url;   changed = true; }
+      if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive')) { album.cover_url = rel.cover_url; changed = true; }
       if (!album.genre && rel.genres?.length)      { album.genre = rel.genres[0];          changed = true; }
       if (changed) saveToStorage();
       done++;
@@ -4568,7 +4543,7 @@ async function fetchAllTracklists(onlyMissing = true) {
           await saveTracklist(album.id, rel.tracklist);
         }
         if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; saveToStorage(); }
-        if (!album.cover_url   && rel.cover_url)    { album.cover_url   = rel.cover_url;   saveToStorage(); }
+        if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive')) { album.cover_url = rel.cover_url; saveToStorage(); }
       } else {
         // Recherche — nettoyer le nom Discogs avant MusicBrainz
         const cleanArtist = cleanDiscogsArtist(album.artist);
@@ -4577,7 +4552,7 @@ async function fetchAllTracklists(onlyMissing = true) {
         if (best && best.score >= 90) {
           album.mb_release_id = best.mb_release_id;
           if (!album.release_date && best.release_date) album.release_date = best.release_date;
-          if (!album.cover_url   && best.cover_url)    album.cover_url   = best.cover_url;
+          if (!album.cover_url && best.cover_url && !best.cover_url.includes('coverartarchive')) album.cover_url = best.cover_url;
           saveToStorage();
           // 2e appel pour la tracklist complète
           await new Promise(r => setTimeout(r, 1200));
@@ -4949,7 +4924,7 @@ function renderOkAlbums() {
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
   const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderOkAlbums()">★</button>`).join('');
   tbody.innerHTML = list.map(a => `<tr>
-    <td><div class="artist-cell"><div class="artist-avatar" data-album-id="${a.id}">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
+    <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">numérique seul</span>'}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
@@ -4984,7 +4959,7 @@ function renderForSale() {
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
   const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderForSale()">★</button>`).join('');
   tbody.innerHTML = list.map(a => `<tr>
-    <td><div class="artist-cell"><div class="artist-avatar" data-album-id="${a.id}">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
+    <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
@@ -5781,7 +5756,7 @@ function renderDiscographie() {
     return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
       <td>
         <div class="artist-cell">
-          <div class="artist-avatar" data-album-id="${a.id}">${albumAvatar(a)}</div>
+          <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}</div>
             <div class="sub">${esc(a.artist)}</div>
