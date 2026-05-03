@@ -1154,6 +1154,7 @@ input[type="file"] { display: none; }
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 Charger CSV Discogs</button>
             <button class="btn btn-sm" onclick="fetchAllTracklists()" id="btn-fetch-tracklists">🎵 Charger tracklists</button>
+            <button class="btn btn-sm" onclick="_coverFetchRunning ? stopCoverFetch() : fetchMissingCovers()" id="btn-auto-covers">🖼 Pochettes auto</button>
           </div>
           <input type="file" id="file-discogs" accept=".csv" onchange="importDiscogs(this)">
           <div class="status" id="status-discogs"></div>
@@ -1938,6 +1939,8 @@ async function loadFromSupabase() {
     setTimeout(() => updateLastSyncLabel(), 100);
     // Charger les tracklists en arrière-plan
     loadAlbumTracks();
+    // Lancer la récupération automatique des pochettes (délai 3s pour laisser le reste charger)
+    setTimeout(() => fetchMissingCovers(), 3000);
     nextId = Math.max(nextId, ...albums.map(a => a.id || 0), ...tracks.map(t => t.id || 0)) + 1;
 
     setSaveIndicator('saved');
