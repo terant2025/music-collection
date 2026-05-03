@@ -2915,6 +2915,68 @@ function editAlbum(id) {
   document.getElementById('modal-album').classList.add('open');
 }
 
+// ===================== AUTO COVERS =====================
+let _coverFetchRunning = false;
+
+async function fetchMissingCovers(albumList) {
+  if (_coverFetchRunning) return;
+  _coverFetchRunning = true;
+  const lfKey = 'e8aae3c9ca05ced8f56443c1108fdc65';
+  const missing = (albumList || albums).filter(a =>
+    !a.cover_url && (a.flac || a.mp3 || a.digital || a.cd) && a.artist && a.album
+  );
+  if (!missing.length) { _coverFetchRunning = false; return; }
+  console.log(`Auto covers : ${missing.length} pochettes manquantes`);
+
+  let fetched = 0;
+  for (const album of missing) {
+    if (!_coverFetchRunning) break;
+    try {
+      await new Promise(r => setTimeout(r, 220));
+      const artist = cleanDiscogsArtist(album.artist);
+      const url = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album.album)}&api_key=${lfKey}&format=json`;
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const images = data.album?.image || [];
+      const img = images.find(i => i.size === 'extralarge') || images.find(i => i.size === 'large');
+      const imgUrl = img?.['#text'];
+      if (imgUrl && !imgUrl.includes('2a96cbd8b46e442fc41c2b86b821562f')) {
+        album.cover_url = imgUrl;
+        fetched++;
+        // Mettre à jour avatars dans le DOM
+        document.querySelectorAll(`[data-album-id="${album.id}"]`).forEach(el => {
+          el.innerHTML = albumAvatar(album);
+        });
+        // Sauvegarder en Supabase par lots de 20
+        if (fetched % 20 === 0 && window._sb) {
+          const batch = missing.filter(a => a.cover_url).slice(fetched - 20, fetched);
+          for (const a of batch) {
+            await window._sb.from('albums').update({ cover_url: a.cover_url }).eq('id', a.id);
+          }
+          saveToStorage();
+        }
+      }
+    } catch(e) { /* continuer */ }
+  }
+
+  // Flush final
+  if (fetched > 0) {
+    saveToStorage();
+    if (window._sb) {
+      const remaining = missing.filter(a => a.cover_url).slice(Math.floor(fetched / 20) * 20);
+      for (const a of remaining) {
+        await window._sb.from('albums').update({ cover_url: a.cover_url }).eq('id', a.id);
+      }
+    }
+    console.log(`Auto covers : ${fetched} pochettes récupérées`);
+    invalidateCache();
+  }
+  _coverFetchRunning = false;
+}
+
+function stopCoverFetch() { _coverFetchRunning = false; }
+
 async function fetchCoverForModal() {
   const albumName  = (document.getElementById('f-album')?.value || '').trim();
   const artistName = (document.getElementById('f-artist')?.value || '').trim();
