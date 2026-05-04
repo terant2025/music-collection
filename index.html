@@ -1736,12 +1736,19 @@ async function saveToSupabase() {
     }));
     await sbUpsert('tracks', trackRows, 'id');
 
-    // Stock
+    // Stock — supprimer d'abord les entrées orphelines puis upsert
     const stockRows = stockItems.map(s => ({
       id: s.id, artist: s.artist, album: s.album, year: s.year || null,
       genre: s.genre || null, format: s.format || null, note: s.note || 0,
       notes: s.notes || null, updated_at: now
     }));
+    if (stockRows.length) {
+      // Supprimer les ids absents de la liste locale
+      const stockIdList = stockRows.map(r => r.id);
+      if (stockIdList.length > 0) {
+        await window._sb.from('stock_items').delete().not('id', 'in', `(${stockIdList.join(',')})`);
+      }
+    }
     await sbUpsert('stock_items', stockRows, 'id');
 
     // Associations Discogs/MusicBee
@@ -3291,34 +3298,59 @@ async function importMusicBeeXML(input) {
       if (folder === 'ignore') return;
 
       if (folder === 'stock') {
-        // Parser chemin : .../!_00_stock/Artist/Album (Year)/fichier.flac
-        const pathParts = decodeURIComponent(location).replace(/\\/g, '/').split('/');
-        const stockIdx = pathParts.findIndex(p => p.toLowerCase().includes('stock'));
+        // Structure : !_00_stock/YYYY/Artist - Album (Date)/Artist - NN - Track.flac
+        // Les métadonnées MusicBee sont prioritaires (Picard les renseigne bien)
 
-        // Artiste : depuis métadonnées si valide, sinon depuis le chemin
-        let stockArtist = effectiveArtist;
-        if (!stockArtist || stockArtist.includes('\\') || stockArtist.includes('/') || !stockArtist.trim()) {
-          stockArtist = stockIdx >= 0 && pathParts[stockIdx + 1] ? pathParts[stockIdx + 1] : '';
+        // Artiste et album depuis métadonnées si disponibles
+        let stockArtist = (effectiveArtist && effectiveArtist.trim() && !effectiveArtist.includes('/')) ? cleanDiscogsArtist(effectiveArtist) : '';
+        let stockAlbum  = (album && album.trim() && !album.includes('/')) ? album : '';
+
+        // Fallback : parser depuis le chemin si métadonnées vides
+        if (!stockArtist || !stockAlbum) {
+          const pathParts = decodeURIComponent(location).replace(/\\/g, '/').split('/');
+          const stockIdx = pathParts.findIndex(p => p.toLowerCase().includes('stock'));
+          // Ignorer les segments qui sont juste une année (ex: "2026")
+          const afterStock = pathParts.slice(stockIdx + 1).filter(p => p && !/^\d{4}$/.test(p));
+          // afterStock[0] = "Artist - Album (Date)" ou "Artist"
+          // afterStock[1] = "Artist - Album" ou fichier
+          if (afterStock.length >= 1) {
+            const seg = afterStock[0]; // ex: "Em Spel - Bird or Snake (2026-04-03)"
+            // Format "Artist - Album (Date)"
+            const m = seg.match(/^(.+?)\s+-\s+(.+?)(?:\s*\([\.\d-]+\))?$/);
+            if (m) {
+              if (!stockArtist) stockArtist = cleanDiscogsArtist(m[1].trim());
+              if (!stockAlbum)  stockAlbum  = m[2].trim();
+            } else {
+              // Pas de " - " : tout le segment = album si artiste connu, sinon artiste
+              if (!stockAlbum && afterStock.length >= 2) {
+                if (!stockArtist) stockArtist = seg;
+                if (!stockAlbum)  stockAlbum  = afterStock[1];
+              } else if (!stockAlbum) {
+                stockAlbum = seg;
+              }
+            }
+          }
         }
 
-        // Album : depuis métadonnées si valide, sinon depuis le chemin
-        let stockAlbum = album;
-        if (!stockAlbum || stockAlbum.includes('\\') || stockAlbum.includes('/')) {
-          stockAlbum = stockIdx >= 0 && pathParts[stockIdx + 2] ? pathParts[stockIdx + 2] : '';
-        }
-
-        // Extraire année depuis l'album (format "Album (Year)") ou les métadonnées
+        // Extraire année depuis métadonnées ou nom de dossier
         let stockYear = year.slice(0,4);
-        if (!stockYear && stockAlbum) {
-          const ymatch = stockAlbum.match(/\((\d{4})\)/);
-          if (ymatch) { stockYear = ymatch[1]; }
+        if (!stockYear) {
+          // Chercher dans le chemin : segment /YYYY/ ou "(YYYY"
+          const pathLow = decodeURIComponent(location).replace(/\\/g, '/');
+          const ym1 = pathLow.match(/\/?(\d{4})\//);  // segment année
+          const ym2 = stockAlbum?.match(/\((\d{4})/);  // "(2026" dans le nom
+          stockYear = ym1?.[1] || ym2?.[1] || '';
         }
-        // Nettoyer l'année du nom d'album
-        if (stockAlbum) stockAlbum = stockAlbum.replace(/\s*\(\d{4}\)\s*/, '').trim();
 
-        // Genre depuis les métadonnées
+        // Nettoyer l'album (retirer date/année entre parenthèses et extension)
+        if (stockAlbum) {
+          stockAlbum = stockAlbum
+            .replace(/\s*\([\d-]{4,10}\)\s*$/, '') // "(2026-04-03)" ou "(2026)"
+            .replace(/\.[a-z0-9]{2,5}$/i, '')         // extension si fichier
+            .trim();
+        }
+
         const stockGenre = genre || '';
-
         if (!stockArtist && !stockAlbum) return;
         const key = normalizeKey(stockArtist, stockAlbum);
         if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
