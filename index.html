@@ -837,6 +837,13 @@ input[type="file"] { display: none; }
           <option value="50">≥ 50 écoutes</option>
           <option value="100">≥ 100 écoutes</option>
         </select>
+        <select id="filter-missing-status" onchange="renderMissing()">
+          <option value="">Tous statuts</option>
+          <option value="none">Sans statut</option>
+          <option value="ignored">🚫 Ignorés</option>
+          <option value="to_listen">👂 À écouter</option>
+          <option value="wishlist">🎯 Wishlist</option>
+        </select>
         <select id="filter-missing-genre" onchange="renderMissing()">
           <option value="">Tous genres</option>
         </select>
@@ -979,6 +986,7 @@ input[type="file"] { display: none; }
         </select>
         <div class="toolbar-right">
           <span id="wish-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportWishlistCSV()" title="Exporter CSV">⬇ CSV</button>
           <button class="btn btn-accent" onclick="openWishModal()">＋ Ajouter</button>
         </div>
       </div>
@@ -1931,7 +1939,7 @@ async function loadFromSupabase() {
         localStorage.setItem(LASTFM_SYNC_KEY, metaMap.lastfm_sync_ts);
       }
     }
-    // Restaurer wishlist depuis meta
+    // Restaurer wishlist + statuts last.fm depuis meta
     if (metaRows) {
       const metaMap = Object.fromEntries(metaRows.map(r => [r.key, r.value]));
       if (metaMap.wishlist_data) {
@@ -1940,6 +1948,9 @@ async function loadFromSupabase() {
           if (wd.albums?.length) wishlist = wd.albums;
           if (wd.tracks?.length) trackWishlist = wd.tracks;
         } catch(e) { console.warn('wishlist_data parse error:', e); }
+      }
+      if (metaMap.lastfm_status) {
+        try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {}
       }
     }
     // Mettre à jour le label de dernière sync après chargement
@@ -2544,16 +2555,49 @@ function getOwnedKeysSet() {
   return _cache.ownedKeys;
 }
 
+// ── Statuts last.fm albums ──────────────────────────────────────────
+let _lastfmStatus = {}; // { key: 'ignored'|'to_listen'|'wishlist' }
+
+function getLastfmStatus(artist, album) {
+  return _lastfmStatus[normalizeKey(artist, album)] || '';
+}
+
+function setLastfmStatus(artist, album, status) {
+  const k = normalizeKey(artist, album);
+  if (status) _lastfmStatus[k] = status;
+  else delete _lastfmStatus[k];
+  if (status === 'wishlist') {
+    const d = lastfmData.find(x => normalizeKey(x.artist, x.album) === k);
+    if (d && !wishlist.find(w => normalizeKey(w.artist, w.album) === k)) {
+      addToWishlist(d.artist, d.album, '', 'lastfm', d.plays, 0, '');
+    }
+  }
+  if (window._sb) {
+    window._sb.from('meta').upsert(
+      { key: 'lastfm_status', value: JSON.stringify(_lastfmStatus) },
+      { onConflict: 'key' }
+    ).then(() => {});
+  }
+  invalidateCache();
+  renderMissing();
+  updateNavBadges();
+}
+
 function computeMissing() {
   if (_cache.missing) return _cache.missing;
   if (!lastfmData.length) return (_cache.missing = []);
   const owned = getOwnedKeysSet();
-  // Ajouter les aliases manuels (associations faites depuis "Associer")
   albums.forEach(a => {
     if (a.lastfmAliases) a.lastfmAliases.forEach(k => owned.add(k));
   });
+  const ownedMbIds = _cache.ownedMbIds || new Set();
   _cache.missing = lastfmData
-    .filter(d => d.artist && d.album && !owned.has(normalizeKey(d.artist, d.album)))
+    .filter(d => {
+      if (!d.artist || !d.album) return false;
+      if (owned.has(normalizeKey(d.artist, d.album))) return false;
+      if (d.mb_release_id && ownedMbIds.has(d.mb_release_id)) return false;
+      return true;
+    })
     .sort((a, b) => b.plays - a.plays);
   return _cache.missing;
 }
@@ -2608,6 +2652,7 @@ function renderMissing() {
   const af     = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
   const albf   = (document.getElementById('filter-missing-album')?.value  || '').toLowerCase().trim();
   const minP   = parseInt(document.getElementById('filter-missing-plays')?.value || '0') || 0;
+  const statusF= document.getElementById('filter-missing-status')?.value || '';
   const genreF = (document.getElementById('filter-missing-genre')?.value  || '').toLowerCase().trim();
   const rymF   = document.getElementById('filter-missing-rym')?.value || '';
   const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
@@ -2626,12 +2671,19 @@ function renderMissing() {
     const key = normalizeKey(m.artist, m.album);
     const hasRym = rymIndex.has(key);
     const genre = (m.genre || '').toLowerCase();
+    const st = getLastfmStatus(m.artist, m.album);
+    let stMatch = true;
+    if (statusF === 'none')      stMatch = !st;
+    else if (statusF === 'ignored')   stMatch = st === 'ignored';
+    else if (statusF === 'to_listen') stMatch = st === 'to_listen';
+    else if (statusF === 'wishlist')  stMatch = st === 'wishlist';
     return (!q      || (m.artist+' '+m.album).toLowerCase().includes(q))
         && (!af     || m.artist.toLowerCase().includes(af))
         && (!albf   || m.album.toLowerCase().includes(albf))
         && (!genreF || genre.includes(genreF))
         && m.plays >= minP
-        && (!rymF || (rymF === 'rym' ? hasRym : !hasRym));
+        && (!rymF || (rymF === 'rym' ? hasRym : !hasRym))
+        && stMatch;
   });
 
   if (sortF === 'artist') filtered.sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
@@ -2660,19 +2712,25 @@ function renderMissing() {
     const genreBadge = m.genre
       ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(m.genre.split(',')[0].trim())}</span>`
       : '';
+    const st = getLastfmStatus(m.artist, m.album);
+    const stColors = { ignored:'var(--text3)', to_listen:'var(--accent)', wishlist:'var(--amber)' };
+    const stLabels = { ignored:'🚫', to_listen:'👂', wishlist:'🎯' };
+    const stBadge = st ? `<span style="font-size:11px;color:${stColors[st]}">${stLabels[st]}</span>` : '';
     return `
-    <div class="missing-card" style="padding:10px 14px;gap:10px">
+    <div class="missing-card" style="padding:10px 14px;gap:10px;opacity:${st==='ignored'?0.5:1}">
       <div class="missing-info" style="min-width:0;flex:1">
-        <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)}</div>
+        <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
         <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
           <span>${esc(m.artist)}</span>
           <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span>
           ${rymBadge}${genreBadge}
         </div>
       </div>
-      <div style="display:flex;gap:5px;flex-shrink:0">
+      <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
         <button class="btn btn-sm" onclick="associateFromMissingIdx(${i})" title="Associer">🔗</button>
-        <button class="btn btn-sm" onclick="addToWishlistFromMissing(${i})" title="Wishlist">🎯</button>
+        <button class="btn btn-sm ${st==='ignored'?'btn-accent':''}" onclick="setLastfmStatusFromMissing(${i},'ignored')" title="Ignorer">🚫</button>
+        <button class="btn btn-sm ${st==='to_listen'?'btn-accent':''}" onclick="setLastfmStatusFromMissing(${i},'to_listen')" title="À écouter">👂</button>
+        <button class="btn btn-sm ${st==='wishlist'?'btn-accent':''}" onclick="setLastfmStatusWishlist(${i})" title="Wishlist">🎯</button>
         <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋</button>
       </div>
     </div>`;
@@ -2681,6 +2739,23 @@ function renderMissing() {
 
 // Cible courante de l'association last.fm
 let _lastfmAssocTarget = null; // { artist, album } depuis lastfmData
+
+// Helper wishlist depuis missing (évite les problèmes d'encodage dans onclick)
+function setLastfmStatusWishlist(idx) {
+  const m = _missingListCache[idx];
+  if (!m) return;
+  const k = normalizeKey(m.artist, m.album);
+  const current = getLastfmStatus(m.artist, m.album);
+  const newStatus = current === 'wishlist' ? '' : 'wishlist';
+  setLastfmStatus(m.artist, m.album, newStatus);
+}
+
+function setLastfmStatusFromMissing(idx, status) {
+  const m = _missingListCache[idx];
+  if (!m) return;
+  const current = getLastfmStatus(m.artist, m.album);
+  setLastfmStatus(m.artist, m.album, current === status ? '' : status);
+}
 
 function associateFromMissingIdx(idx) {
   const m = _missingListCache[idx];
@@ -5474,6 +5549,26 @@ function addToWishlistFromStock(stockId) {
   const s = stockItems.find(x => x.id === stockId);
   if (!s) return;
   addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, 0, s.notes || '');
+}
+
+function exportWishlistCSV() {
+  const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
+  const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', manual: 'Manuel' };
+  const lfIndex   = new Map(lastfmData.map(d => [normalizeKey(d.artist, d.album), d.plays]));
+  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note RYM','Notes']];
+  wishlist.forEach(w => {
+    const plays = lfIndex.get(normalizeKey(w.artist, w.album)) || w.plays || '';
+    rows.push([w.artist, w.album, w.year||'', srcLabel[w.source]||w.source,
+      prioLabel[w.prio]||w.prio, plays, w.rymRating||'', w.notes||'']);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download=`wishlist-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`${wishlist.length} entrées exportées`);
 }
 
 function renderWishlist() {
