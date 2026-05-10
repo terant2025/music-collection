@@ -1703,13 +1703,14 @@ async function saveToSupabase() {
       id: a.id, artist: a.artist, artist_raw: a.artistRaw || a.artist,
       album: a.album, year: a.year || null, genre: a.genre || null,
       cd: !!a.cd, flac: !!a.flac, mp3: !!a.mp3, digital: !!a.digital,
-      note: a.note || 0, plays: a.plays || 0, notes: a.notes || null,
+	  note: a.note || 0, plays: a.plays || 0, notes: a.notes || null,
       discogs_id: a.discogsId || null, label: a.label || null, catno: a.catno || null,
       mb_release_id: a.mb_release_id || null,
       release_date: a.release_date || null,
       cover_url: a.cover_url || null,
       ok_folder: a.okFolder || false,
       for_sale: a.forSale || false,
+      lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
       updated_at: now
     }));
     await sbUpsert('albums', albumRows, 'id');
@@ -1839,7 +1840,8 @@ async function loadFromSupabase() {
       release_date: a.release_date || undefined,
       cover_url: a.cover_url || undefined,
       okFolder: a.ok_folder || false,
-      forSale: a.for_sale || false
+      forSale: a.for_sale || false,
+      lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
     }));
     // Dédoublonnage : utiliser cleanDiscogsArtist pour fusionner ex. "Husky (5)" et "Husky"
     // Garder l'entrée avec l'id le plus élevé en cas de doublon
