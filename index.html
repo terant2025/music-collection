@@ -3638,6 +3638,9 @@ async function importMusicBeeXML(input) {
     const removedAlbums = 0;
     if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support détectés (non supprimés)`);
 
+const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
+    console.log(`importMusicBeeTracklists résultat : ${tlCount} albums`);
+
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
     const removedStr = removedAlbums ? `, ${removedAlbums} supprimés` : '';
@@ -4901,9 +4904,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
           await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
       }
       console.log(`MusicBee tracklists : ${toSave.length} albums sauvegardés`);
-	  console.log('Appel importMusicBeeTracklists avec', trackDicts.length, 'pistes');
-      const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
-      console.log('importMusicBeeTracklists résultat:', tlCount);
+	
 	  
       invalidateCache();
       if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
