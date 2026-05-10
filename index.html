@@ -4818,6 +4818,12 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     const artist_ = str(d, 'Artist');
     const artist = (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist_;
     const album = str(d, 'Album');
+	
+	console.log('Appel importMusicBeeTracklists avec', trackDicts.length, 'pistes');
+const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
+console.log('importMusicBeeTracklists résultat:', tlCount);
+	
+	const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
     if (!artist || !album) return;
 
     const mbidAlbum_ = str(d, 'MBID Album');
