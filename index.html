@@ -2860,6 +2860,11 @@ function computeMissingTracks() {
       return true;
     })
     .sort((a, b) => b.plays - a.plays);
+	
+	console.log('albumTracksCache keys:', Object.keys(albumTracksCache).length);
+    console.log('ownedAlbumTracks size:', ownedAlbumTracks.size);
+    console.log('ownedTracks size:', ownedTracks.size);
+	
   return _cache.missingTracks;
 }
 
@@ -4878,7 +4883,14 @@ async function loadAlbumTracks() {
         });
       });
       console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
-      if (_dataReady) invalidateCache();
+      if (_dataReady) {
+        invalidateCache();
+        updateNavBadges();
+        // Rafraîchir l'onglet si ouvert
+        if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
+          renderMissingTracks();
+        }
+      }
     }
   } catch(e) { console.warn('loadAlbumTracks:', e); }
 }
