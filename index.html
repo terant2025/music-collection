@@ -2861,9 +2861,27 @@ function computeMissingTracks() {
     })
     .sort((a, b) => b.plays - a.plays);
 	
-	console.log('albumTracksCache keys:', Object.keys(albumTracksCache).length);
-    console.log('ownedAlbumTracks size:', ownedAlbumTracks.size);
-    console.log('ownedTracks size:', ownedTracks.size);
+	// Dans computeMissingTracks(), juste avant le filter final
+const ta = 'Grandaddy';
+const tt = "He's Simple, He's Dumb, He's The Pilot";
+console.log('key cherchée:', normalizeKey(ta, tt));
+console.log('dans ownedTracks:', ownedTracks.has(normalizeKey(ta, tt)));
+console.log('dans ownedAlbumTracks:', ownedAlbumTracks.has(normalizeKey(ta, tt)));
+
+// Chercher dans albumTracksCache manuellement
+albums.filter(a => a.artist.toLowerCase().includes('grandaddy')).forEach(a => {
+  console.log('album:', a.artist, '-', a.album, '| tracks:', (albumTracksCache[a.id]||[]).length);
+  (albumTracksCache[a.id]||[]).forEach(t => {
+    if (t.title && t.title.toLowerCase().includes('simple')) {
+      console.log('  TROUVÉ:', JSON.stringify(t.title), '| key:', normalizeKey(a.artist, t.title));
+    }
+  });
+});
+
+// Chercher dans _lastfmTrackCounts
+Object.values(_lastfmTrackCounts).filter(d => d.artist.toLowerCase().includes('grandaddy') && d.track.toLowerCase().includes('simple')).forEach(d => {
+  console.log('lastfm entry:', JSON.stringify(d.artist), JSON.stringify(d.track), '| key:', normalizeKey(d.artist, d.track));
+});
 	
   return _cache.missingTracks;
 }
