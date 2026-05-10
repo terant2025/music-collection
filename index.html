@@ -4842,6 +4842,10 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     });
   });
 
+// LOG DIAGNOSTIC
+  console.log('byAlbum slump:', Object.entries(byAlbum).filter(([k]) => k.includes('slump')));
+
+
   // Index des albums par plusieurs clés
   const albumIndex = new Map();
   albums.forEach(a => {
