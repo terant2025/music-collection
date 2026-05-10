@@ -2821,15 +2821,18 @@ function computeMissingTracks() {
     tracks.map(t => normalizeKey(t.artist, t.title))
   );
 
-  // 2. Pistes des albums MusicBee dans album_tracks
+  // 2. Pistes des albums (toutes sources : MusicBee, Discogs, MusicBrainz)
   // Index par normalizeKey(artist, title) — on cherche artiste de l'album + titre de la piste
   const ownedAlbumTracks = new Set();
   albums.forEach(a => {
     const albumTracks = albumTracksCache[a.id] || [];
-    albumTracks.filter(t => t.source === 'musicbee').forEach(t => {
+    // Inclure toutes les sources : musicbee, discogs, musicbrainz
+    albumTracks.forEach(t => {
       if (t.title) {
         // Clé artiste album + titre piste
         ownedAlbumTracks.add(normalizeKey(a.artist, t.title));
+        // Aussi avec artiste nettoyé Discogs
+        ownedAlbumTracks.add(normalizeKey(cleanDiscogsArtist(a.artist), t.title));
         // Aussi sans artiste (pour les compilations)
         ownedAlbumTracks.add(normalizeKey('', t.title));
       }
