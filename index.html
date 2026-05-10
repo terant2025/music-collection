@@ -3403,7 +3403,10 @@ async function importMusicBeeXML(input) {
       const location    = str(d, 'Location');
       const { flac, mp3 } = detectFormat(kind, location);
       const folder      = detectFolder(location);
-
+		
+		
+		console.log('byAlbum slump:', Object.entries(byAlbum).filter(([k]) => k.includes('slump')));
+		
       // Champs Picard MusicBrainz
       const mbidAlbum  = str(d, 'MBID Album');
       const mbidArtist = str(d, 'MBID Artiste');
@@ -4859,6 +4862,9 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
     if (!albumObj) {
       console.debug('importMusicBeeTracklists: non trouvé:', g.artist, '-', g.album);
+	  
+	  console.log('albums slump dans collection:', albums.filter(a => a.album.toLowerCase().includes('slump')).map(a => ({id: a.id, artist: a.artist, album: a.album, key: normalizeKey(a.artist, a.album)})));
+	  
       return;
     }
 
