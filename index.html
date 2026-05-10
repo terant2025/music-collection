@@ -3638,8 +3638,10 @@ async function importMusicBeeXML(input) {
     const removedAlbums = 0;
     if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support détectés (non supprimés)`);
 
-const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
+window._skipLoadAlbumTracks = true;
+    const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
     console.log(`importMusicBeeTracklists résultat : ${tlCount} albums`);
+    setTimeout(() => { window._skipLoadAlbumTracks = false; }, 10000);
 
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
@@ -4801,6 +4803,7 @@ async function fetchAllTracklists(onlyMissing = true) {
   status.textContent = `✓ ${done} tracklists chargées (Discogs: ${discogsTargets.length}, MusicBrainz: ${mbTargets.length})${errors ? ' — ' + errors + ' erreurs' : ''}`;
   status.className = 'status ok';
   toast(`Tracklists : ${done} albums mis à jour`);
+  
   invalidateCache();
   renderDiscographie();
 }
@@ -4919,6 +4922,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
 // Charger les tracklists depuis Supabase au démarrage
 async function loadAlbumTracks() {
   if (!window._sb) return;
+  if (window._skipLoadAlbumTracks) return;
   try {
     let all = [], page = 0;
     while (true) {
