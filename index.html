@@ -3357,19 +3357,31 @@ async function importMusicBeeXML(input) {
       return { flac: false, mp3: false };
     }
 
-    // Détecter le dossier spécial depuis le chemin
+  // Détecter le dossier spécial depuis le chemin
     function detectFolder(location) {
       const p = decodeURIComponent(location).toLowerCase().replace(/\\/g, '/');
-      // Dossier stock : uniquement !_00_stock (éviter false positifs avec /stock/ trop large)
       if (p.includes('!_00_stock')) return 'stock';
       if (p.includes('top titres') || p.includes('top-titres') || p.includes('top_titres')) return 'isolated';
       if (p.includes('blind-test') || p.includes('blind_test')) return 'ignore';
-      // Dossiers spéciaux (même niveau que Discographie)
       const seg = p.split('/');
       if (seg.some(s => s === 'ok' || s === 'ok ')) return 'ok';
       if (seg.some(s => s === '!vendre' || s === 'a_vendre' || s === 'a vendre' || s === '!a vendre')) return 'vendre';
       return 'album';
     }
+
+    // Log pour diagnostiquer les albums non trouvés
+    trackDicts.forEach(d => {
+      const album = str(d, 'Album');
+      if (album && album.toLowerCase().includes('slump')) {
+        console.log('SLUMP:', {
+          artist: str(d, 'Artist'),
+          albumArtist: str(d, 'Album Artist'),
+          album,
+          location: str(d, 'Location'),
+          folder: detectFolder(str(d, 'Location'))
+        });
+      }
+    });
 
     // Grouper par album
     const grouped = {};       // albums normaux
@@ -4788,23 +4800,28 @@ async function fetchAllTracklists(onlyMissing = true) {
 }
 
 // Charger les tracklists MusicBee depuis le XML (appelé lors de l'import XML)
-function importMusicBeeTracklists(trackDicts, str, num) {
-  // Grouper par album
+function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
   const byAlbum = {};
+
   trackDicts.forEach(d => {
-    const artist = (() => {
-      const albumArtist = str(d, 'Album Artist');
-      const artist_ = str(d, 'Artist');
-      return (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist_;
-    })();
+    const location = str(d, 'Location');
+    const locationLow = location.toLowerCase();
+    if (locationLow.includes('blind-test') || locationLow.includes('blind_test')) return;
+    if (locationLow.includes('!_00_stock')) return;
+    const pathParts = location.replace(/\\/g, '/').split('/');
+    if (pathParts.some(p => /top.?ti/i.test(p) || /top.?track/i.test(p))) return;
+
+    const albumArtist = str(d, 'Album Artist');
+    const artist_ = str(d, 'Artist');
+    const artist = (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist_;
     const album = str(d, 'Album');
     if (!artist || !album) return;
-    const location = str(d, 'Location').toLowerCase();
-    if (location.includes('blind-test') || location.includes('blind_test')) return;
-    const key = normalizeKey(artist, album);
+
     const mbidAlbum_ = str(d, 'MBID Album');
+    const key = normalizeKey(artist, album);
     if (!byAlbum[key]) byAlbum[key] = { artist, album, tracks: [], mbReleaseId: mbidAlbum_ || '' };
     else if (mbidAlbum_ && !byAlbum[key].mbReleaseId) byAlbum[key].mbReleaseId = mbidAlbum_;
+
     byAlbum[key].tracks.push({
       position:        String(num(d, 'Track Number') || ''),
       title:           str(d, 'Name'),
@@ -4814,54 +4831,75 @@ function importMusicBeeTracklists(trackDicts, str, num) {
       sample_rate:     num(d, 'Sample Rate') || null,
       file_size:       num(d, 'Size')        || null,
       play_count:      num(d, 'Play Count')  || null,
-      last_played:     dateStr(d, 'Last Played') || null,
-      date_added:      dateStr(d, 'Date Added')  || null,
+      last_played:     dateStr ? dateStr(d, 'Last Played') || null : null,
+      date_added:      dateStr ? dateStr(d, 'Date Added')  || null : null,
       composer:        str(d, 'Composer')    || null,
       mb_recording_id: str(d, 'MBID Track')  || str(d, 'MusicBrainz Track Id') || null,
       disc_number:     num(d, 'Disc Number') || null,
     });
   });
 
-  // Pour chaque groupe, trouver l'album dans la collection et sauvegarder
+  // Index des albums par plusieurs clés
+  const albumIndex = new Map();
+  albums.forEach(a => {
+    albumIndex.set(normalizeKey(a.artist, a.album), a);
+    albumIndex.set(normalizeKey(cleanDiscogsArtist(a.artist), a.album), a);
+    const withoutThe = (a.artist || '').replace(/^The\s+/i, '').trim();
+    if (withoutThe !== a.artist) albumIndex.set(normalizeKey(withoutThe, a.album), a);
+    if (a.mb_release_id) albumIndex.set('mbid:' + a.mb_release_id, a);
+  });
+
   const toSave = [];
+
   Object.values(byAlbum).forEach(g => {
     const gKey = normalizeKey(g.artist, g.album);
-    const albumObj = albums.find(a =>
-      normalizeKey(a.artist, a.album) === gKey ||
-      normalizeKey(cleanDiscogsArtist(a.artist), a.album) === gKey ||
-      // Aussi matcher par MBID Album si disponible
-      (g.mbReleaseId && a.mb_release_id && g.mbReleaseId === a.mb_release_id));
-    if (!albumObj) return;
-    // Trier par position
+    let albumObj = albumIndex.get(gKey)
+      || albumIndex.get(normalizeKey(cleanDiscogsArtist(g.artist), g.album))
+      || albumIndex.get(normalizeKey((g.artist || '').replace(/^The\s+/i, '').trim(), g.album));
+    if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
+    if (!albumObj) {
+      console.debug('importMusicBeeTracklists: non trouvé:', g.artist, '-', g.album);
+      return;
+    }
+
     g.tracks.sort((a, b) => {
-      const na = parseInt(a.position) || 999, nb = parseInt(b.position) || 999;
-      return na - nb;
+      const da = a.disc_number || 1, db = b.disc_number || 1;
+      if (da !== db) return da - db;
+      return (parseInt(a.position) || 999) - (parseInt(b.position) || 999);
     });
+
     albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
       .filter(t => t.source !== 'musicbee').concat(g.tracks);
     toSave.push({ albumId: albumObj.id, tracks: g.tracks });
   });
 
-  // Sauvegarder en arrière-plan
+  console.log(`importMusicBeeTracklists : ${toSave.length} albums matchés sur ${Object.keys(byAlbum).length} groupes`);
+
   if (window._sb && toSave.length) {
     (async () => {
       for (const { albumId, tracks } of toSave) {
         await window._sb.from('album_tracks').delete()
           .eq('album_id', albumId).eq('source', 'musicbee');
         const rows = tracks.map(t => ({
-          album_id: albumId, position: t.position||'', title: t.title||'',
-          duration: t.duration||'', source: 'musicbee',
-          bitrate: t.bitrate||null, sample_rate: t.sample_rate||null,
-          file_size: t.file_size||null, play_count: t.play_count||null,
-          last_played: t.last_played||null, date_added: t.date_added||null,
-          composer: t.composer||null,
+          album_id: albumId, position: t.position || '', title: t.title || '',
+          duration: t.duration || '', source: 'musicbee',
+          bitrate: t.bitrate || null, sample_rate: t.sample_rate || null,
+          file_size: t.file_size || null, play_count: t.play_count || null,
+          last_played: t.last_played || null, date_added: t.date_added || null,
+          composer: t.composer || null, mb_recording_id: t.mb_recording_id || null,
+          disc_number: t.disc_number || null,
         }));
         for (let i = 0; i < rows.length; i += 100)
           await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
       }
       console.log(`MusicBee tracklists : ${toSave.length} albums sauvegardés`);
+      invalidateCache();
+      if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
+        renderMissingTracks();
+      }
     })();
   }
+
   return toSave.length;
 }
 
