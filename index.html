@@ -2823,32 +2823,40 @@ function computeMissingTracks() {
     tracks.map(t => normalizeKey(t.artist, t.title))
   );
 
-  // 2. Pistes des albums (toutes sources : MusicBee, Discogs, MusicBrainz)
-  // Index par normalizeKey(artist, title) — on cherche artiste de l'album + titre de la piste
-  const ownedAlbumTracks = new Set();
+// 2. Pistes des albums (toutes sources : MusicBee, Discogs, MusicBrainz)
+  // On indexe de plusieurs façons pour maximiser les correspondances
+  const ownedAlbumTracks = new Set();      // normalizeKey(artist_album, titre)
+  const ownedAlbumTitles = new Set();      // normalizeKey('', titre) — titre seul
   albums.forEach(a => {
     const albumTracks = albumTracksCache[a.id] || [];
-    // Inclure toutes les sources : musicbee, discogs, musicbrainz
     albumTracks.forEach(t => {
-      if (t.title) {
-        // Clé artiste album + titre piste
-        ownedAlbumTracks.add(normalizeKey(a.artist, t.title));
-        // Aussi avec artiste nettoyé Discogs
-        ownedAlbumTracks.add(normalizeKey(cleanDiscogsArtist(a.artist), t.title));
-        // Aussi sans artiste (pour les compilations)
-        ownedAlbumTracks.add(normalizeKey('', t.title));
-      }
+      if (!t.title) return;
+      const titleNorm = normalizeKey('', t.title);
+      // Par artiste album + titre
+      ownedAlbumTracks.add(normalizeKey(a.artist, t.title));
+      ownedAlbumTracks.add(normalizeKey(cleanDiscogsArtist(a.artist), t.title));
+      // Sans "The" au début
+      const withoutThe = (a.artist || '').replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+      if (withoutThe !== a.artist) ownedAlbumTracks.add(normalizeKey(withoutThe, t.title));
+      // Titre seul (compilations, artistes variés)
+      ownedAlbumTitles.add(titleNorm);
     });
   });
 
-  // 3. Exclure les morceaux déjà possédés (isolés OU dans un album MusicBee)
+  // 3. Exclure les morceaux déjà possédés
   _cache.missingTracks = Object.values(_lastfmTrackCounts)
     .filter(d => {
       if (!d.plays) return false;
       const keyTrack = normalizeKey(d.artist, d.track);
+      // Morceau isolé possédé
       if (ownedTracks.has(keyTrack)) return false;
-      // Chercher dans les pistes d'album : artiste last.fm + titre
+      // Dans un album : artiste last.fm + titre
       if (ownedAlbumTracks.has(normalizeKey(d.artist, d.track))) return false;
+      // Dans un album : artiste last.fm nettoyé + titre
+      if (ownedAlbumTracks.has(normalizeKey(cleanDiscogsArtist(d.artist), d.track))) return false;
+      // Sans "The" au début de l'artiste last.fm
+      const withoutThe = (d.artist || '').replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+      if (withoutThe !== d.artist && ownedAlbumTracks.has(normalizeKey(withoutThe, d.track))) return false;
       return true;
     })
     .sort((a, b) => b.plays - a.plays);
