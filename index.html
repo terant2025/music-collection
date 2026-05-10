@@ -2452,11 +2452,8 @@ function renderTracks() {
   });
   if (seen.size < tracks.length) { tracks = Array.from(seen.values()); saveToStorage(); }
 
-  // Index last.fm tracks
-  const lfExact = new Map();
-  Object.values(_lastfmTrackCounts).forEach(d => {
-    lfExact.set(normalizeKey(d.artist, d.track), d.plays || 0);
-  });
+  // Index last.fm tracks (mis en cache global)
+  const lfExact = getLfExactMap();
 
   const q      = document.getElementById('global-search').value.toLowerCase();
   const af     = (document.getElementById('filter-track-artist')?.value || '').toLowerCase().trim();
@@ -2538,6 +2535,29 @@ let _cache = {};
 
 function invalidateCache() {
   _cache = {};
+  // Réinitialiser aussi les renders debounces pour forcer le recalcul immédiat
+  // si une mutation se produit (ex: import XML recharge albumTracksCache)
+  delete _debouncedRenders['allTracks'];
+}
+
+// Debounce : attend `delay` ms d'inactivité avant d'appeler fn
+function debounce(fn, delay) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
+}
+const _debouncedRenders = {};
+function debouncedRender(name, fn, delay = 300) {
+  if (!_debouncedRenders[name]) _debouncedRenders[name] = debounce(fn, delay);
+  return _debouncedRenders[name];
+}
+
+// Cache de la Map last.fm tracks (coûteuse à reconstruire)
+function getLfExactMap() {
+  if (_cache.lfExact) return _cache.lfExact;
+  _cache.lfExact = new Map(
+    Object.values(_lastfmTrackCounts).map(d => [normalizeKey(d.artist, d.track), d.plays])
+  );
+  return _cache.lfExact;
 }
 
 function getOwnedKeysSet() {
@@ -5253,6 +5273,7 @@ function unmarkForSale(id) {
 
 // ===================== ALL TRACKS =====================
 function buildAllTracksList() {
+  if (_cache.allTracksList) return _cache.allTracksList;
   const result = [];
   // 1. Pistes des albums (source musicbee) — depuis albumTracksCache
   let mbCount = 0;
@@ -5276,6 +5297,7 @@ function buildAllTracksList() {
     const sources = new Set(Object.values(albumTracksCache).flat().map(t=>t.source));
     console.info('buildAllTracksList: sources dans cache =', [...sources]);
   }
+  _cache.allTracksList = result;
   return result;
 }
 
@@ -5287,12 +5309,19 @@ function renderAllTracks() {
   const sf     = document.getElementById('filter-at-source')?.value||'';
   const folder = document.getElementById('filter-at-folder')?.value||'';
   const sort   = document.getElementById('sort-at')?.value||'artist';
-  const lfExact = new Map(Object.values(_lastfmTrackCounts).map(d => [normalizeKey(d.artist,d.track), d.plays]));
+  const lfExact = getLfExactMap();
 
-  // Index des albums par dossier pour le filtre
-  const albumById = new Map(albums.map(a => [a.id, a]));
+  // Index des albums par id (mis en cache)
+  if (!_cache.albumById) _cache.albumById = new Map(albums.map(a => [a.id, a]));
+  const albumById = _cache.albumById;
 
-  let list = buildAllTracksList().filter(t => {
+  // Index des albums en stock (mis en cache)
+  if (!_cache.stockKeySet) _cache.stockKeySet = new Set(stockItems.map(s => normalizeKey(s.artist,s.album)));
+  const stockKeySet = _cache.stockKeySet;
+
+  const allTracks = buildAllTracksList();
+
+  let list = allTracks.filter(t => {
     if (!(!q || (t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q))) return false;
     if (af   && !t.artist.toLowerCase().includes(af))   return false;
     if (tf   && !t.title.toLowerCase().includes(tf))    return false;
@@ -5307,7 +5336,7 @@ function renderAllTracks() {
       } else {
         const a = t.albumId ? albumById.get(t.albumId) : null;
         if (!a) return false;
-        const inStock = stockItems.some(s => normalizeKey(s.artist,s.album) === normalizeKey(a.artist,a.album));
+        const inStock = stockKeySet.has(normalizeKey(a.artist,a.album));
         if (folder === 'discographie' && !(a.cd || a.flac || a.mp3)) return false;
         if (folder === 'stock'   && !inStock)    return false;
         if (folder === 'ok'      && !a.okFolder) return false;
@@ -5325,7 +5354,7 @@ function renderAllTracks() {
   const ctr = document.getElementById('at-counter');
   if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' morceaux';
   const badge = document.getElementById('nav-all-tracks-count');
-  if (badge) badge.textContent = buildAllTracksList().length.toLocaleString('fr-FR');
+  if (badge) badge.textContent = allTracks.length.toLocaleString('fr-FR');
 
   const tbody = document.getElementById('at-tbody');
   const slice = list.slice(0, 300);
@@ -5345,14 +5374,8 @@ function renderAllTracks() {
 }
 
 // ===================== ALBUM TRACKS VIEW =====================
-function renderAlbumTracks() {
-  const q    = (document.getElementById('global-search').value||'').toLowerCase();
-  const af   = (document.getElementById('filter-abt-artist')?.value||'').toLowerCase().trim();
-  const tf   = (document.getElementById('filter-abt-title')?.value||'').toLowerCase().trim();
-  const albf = (document.getElementById('filter-abt-album')?.value||'').toLowerCase().trim();
-  const sort = document.getElementById('sort-abt')?.value||'artist';
-  const lfExact = new Map(Object.values(_lastfmTrackCounts).map(d => [normalizeKey(d.artist,d.track), d.plays]));
-
+function buildAlbumTracksList() {
+  if (_cache.albumTracksList) return _cache.albumTracksList;
   const full = [];
   albums.forEach(a => {
     const atracks = albumTracksCache[a.id] || [];
@@ -5363,6 +5386,19 @@ function renderAlbumTracks() {
         source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
     });
   });
+  _cache.albumTracksList = full;
+  return full;
+}
+
+function renderAlbumTracks() {
+  const q    = (document.getElementById('global-search').value||'').toLowerCase();
+  const af   = (document.getElementById('filter-abt-artist')?.value||'').toLowerCase().trim();
+  const tf   = (document.getElementById('filter-abt-title')?.value||'').toLowerCase().trim();
+  const albf = (document.getElementById('filter-abt-album')?.value||'').toLowerCase().trim();
+  const sort = document.getElementById('sort-abt')?.value||'artist';
+  const lfExact = getLfExactMap();
+
+  const full = buildAlbumTracksList();
 
   let list = full.filter(t =>
     (!q    || (t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q))
@@ -6959,6 +6995,45 @@ async function initApp() {
     document.getElementById('supabase-setup').style.display = 'flex';
   }
 })();
+
+// ===================== DEBOUNCE DES INPUTS TEXTE =====================
+// Appliqué après le chargement du DOM — remplace les oninput inline
+// pour toutes les fonctions de rendu coûteuses (300ms par défaut, 150ms pour les légères)
+document.addEventListener('DOMContentLoaded', () => {
+  const rules = [
+    // [id de l'input, fonction à appeler, délai ms]
+    ['global-search',        () => onSearch(),                           200],
+    ['filter-artist',        () => { currentPage = 1; renderAlbums(); }, 300],
+    ['filter-album',         () => { currentPage = 1; renderAlbums(); }, 300],
+    ['filter-track-artist',  () => renderTracks(),                       300],
+    ['filter-track-title',   () => renderTracks(),                       300],
+    ['filter-missing-artist',() => renderMissing(),                      300],
+    ['filter-missing-album', () => renderMissing(),                      300],
+    ['filter-mtrack-artist', () => renderMissingTracks(),                300],
+    ['filter-mtrack-title',  () => renderMissingTracks(),                300],
+    ['filter-mtrack-album',  () => renderMissingTracks(),                300],
+    ['filter-wish-artist',   () => renderWishlist(),                     200],
+    ['filter-wish-album',    () => renderWishlist(),                     200],
+    ['filter-assoc-q',       () => renderAssocReview(),                  200],
+    ['filter-ok-artist',     () => renderOkAlbums(),                     200],
+    ['filter-forsale-artist',() => renderForSale(),                      200],
+    ['filter-at-artist',     () => renderAllTracks(),                    300],
+    ['filter-at-title',      () => renderAllTracks(),                    300],
+    ['filter-at-album',      () => renderAllTracks(),                    300],
+    ['filter-abt-artist',    () => renderAlbumTracks(),                  300],
+    ['filter-abt-title',     () => renderAlbumTracks(),                  300],
+    ['filter-abt-album',     () => renderAlbumTracks(),                  300],
+    ['filter-tw-artist',     () => renderTrackWishlist(),                200],
+    ['filter-tw-title',      () => renderTrackWishlist(),                200],
+  ];
+  rules.forEach(([id, fn, delay]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    // Supprimer l'attribut oninput inline pour éviter le double appel
+    el.removeAttribute('oninput');
+    el.addEventListener('input', debounce(fn, delay));
+  });
+});
 </script>
 </body>
 </html>
