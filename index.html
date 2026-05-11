@@ -1083,7 +1083,7 @@ input[type="file"] { display: none; }
         <select id="filter-at-folder" onchange="renderAllTracks()">
           <option value="">Tous dossiers</option>
           <option value="discographie">Discographie</option>
-          <option value="stock">Stock</option>
+          <option value="stock">Stock (!_00_stock)</option>
           <option value="ok">Ok</option>
           <option value="forsale">À vendre</option>
           <option value="isolated">Top titres</option>
@@ -1093,25 +1093,13 @@ input[type="file"] { display: none; }
           <option value="artist">Artiste A→Z</option>
           <option value="title">Titre A→Z</option>
           <option value="plays">Écoutes ↓</option>
-          <option value="rating">Note MB ↓</option>
-        </select>
-        <select id="filter-at-loved" onchange="renderAllTracks()">
-          <option value="">Tous</option>
-          <option value="loved">❤ Loved seulement</option>
-          <option value="rated">⭐ Notés (MB)</option>
-        </select>
-        <select id="filter-at-rating" onchange="renderAllTracks()">
-          <option value="">Toutes notes MB</option>
-          <option value="5">★★★★★ seulement</option>
-          <option value="4">★★★★ et plus</option>
-          <option value="3">★★★ et plus</option>
         </select>
         <div class="toolbar-right">
           <span id="at-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
         </div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Source</th><th>Note MB</th><th>Écoutes</th><th>Bitrate</th></tr></thead>
+        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Source</th><th>Écoutes</th><th>Bitrate</th></tr></thead>
         <tbody id="at-tbody"></tbody>
       </table></div>
     </div>
@@ -1127,25 +1115,13 @@ input[type="file"] { display: none; }
           <option value="title">Titre A→Z</option>
           <option value="plays">Écoutes ↓</option>
           <option value="bitrate">Bitrate ↓</option>
-          <option value="rating">Note MB ↓</option>
-        </select>
-        <select id="filter-abt-loved" onchange="renderAlbumTracks()">
-          <option value="">Tous</option>
-          <option value="loved">❤ Loved seulement</option>
-          <option value="rated">⭐ Notés (MB)</option>
-        </select>
-        <select id="filter-abt-rating" onchange="renderAlbumTracks()">
-          <option value="">Toutes notes MB</option>
-          <option value="5">★★★★★ seulement</option>
-          <option value="4">★★★★ et plus</option>
-          <option value="3">★★★ et plus</option>
         </select>
         <div class="toolbar-right">
           <span id="abt-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
         </div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Écoutes</th><th>Note MB</th><th>Bitrate</th><th>Durée</th></tr></thead>
+        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Écoutes</th><th>Bitrate</th><th>Durée</th></tr></thead>
         <tbody id="abt-tbody"></tbody>
       </table></div>
     </div>
@@ -3526,6 +3502,13 @@ async function importMusicBeeXML(input) {
         if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
           stockAlbums.push({ artist: stockArtist, album: stockAlbum, year: stockYear, genre: stockGenre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre' });
         }
+        // Alimenter albumTracksCache pour les pistes stock (groupées par clé artiste+album)
+        if (name && stockArtist && stockAlbum) {
+          const trackKey = '_stock_' + key;
+          if (!grouped[trackKey]) grouped[trackKey] = { artist: stockArtist, album: stockAlbum, year: stockYear, genre: stockGenre, flac: false, mp3: false, digital: false, maxRating: 0, isCompilation: false, trackArtists: [], okFolder: false, forSaleFolder: false, mbReleaseId: '', releaseDate: '', _isStock: true };
+          grouped[trackKey].tracks = grouped[trackKey].tracks || [];
+          grouped[trackKey].tracks.push({ position: String(num(d, 'Track Number') || ''), title: name, duration: formatDuration(num(d, 'Total Time')), source: 'musicbee', bitrate: num(d, 'Bit Rate') || null, sample_rate: num(d, 'Sample Rate') || null, file_size: num(d, 'Size') || null, play_count: num(d, 'Play Count') || null, last_played: null, date_added: null, composer: str(d, 'Composer') || null, mb_recording_id: null, disc_number: num(d, 'Disc Number') || null });
+        }
       } else if (folder === 'isolated') {
         if (!name) return;
         let trackArtist = artist;
@@ -3662,7 +3645,18 @@ async function importMusicBeeXML(input) {
     stockItems = stockAlbums.map(s => {
       const k = normalizeKey(s.artist, s.album);
       const meta = existingStockMeta[k] || { note: 0, notes: '' };
-      return { id: uid(), artist: s.artist, album: s.album,
+      const newId = uid();
+      // Rattacher les pistes collectées pour cet album stock à son id dans albumTracksCache
+      const stockGroupKey = '_stock_' + k;
+      if (grouped[stockGroupKey]?.tracks?.length) {
+        const sortedTracks = [...grouped[stockGroupKey].tracks].sort((a, b) => {
+          const da = a.disc_number || 1, db = b.disc_number || 1;
+          if (da !== db) return da - db;
+          return (parseInt(a.position) || 999) - (parseInt(b.position) || 999);
+        });
+        albumTracksCache[newId] = sortedTracks;
+      }
+      return { id: newId, artist: s.artist, album: s.album,
         year: s.year, genre: s.genre, format: s.format,
         note: meta.note, notes: meta.notes };
     });
@@ -3686,6 +3680,27 @@ window._skipLoadAlbumTracks = true;
     const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
     console.log(`importMusicBeeTracklists résultat : ${tlCount} albums`);
     setTimeout(() => { window._skipLoadAlbumTracks = false; }, 10000);
+
+    // Sauvegarder les tracklists des albums stock dans Supabase
+    if (window._sb) {
+      (async () => {
+        for (const s of stockItems) {
+          const stracks = albumTracksCache[s.id];
+          if (!stracks?.length) continue;
+          await window._sb.from('album_tracks').delete().eq('album_id', s.id).eq('source', 'musicbee');
+          const rows = stracks.map(t => ({
+            album_id: s.id, position: t.position||'', title: t.title||'',
+            duration: t.duration||'', source: 'musicbee',
+            bitrate: t.bitrate||null, sample_rate: t.sample_rate||null,
+            file_size: t.file_size||null, play_count: t.play_count||null,
+            composer: t.composer||null, disc_number: t.disc_number||null,
+          }));
+          for (let i = 0; i < rows.length; i += 100)
+            await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
+        }
+        console.log(`Stock tracklists : ${stockItems.filter(s => albumTracksCache[s.id]?.length).length} albums sauvegardés`);
+      })();
+    }
 
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
@@ -4741,8 +4756,6 @@ async function saveTracklist(albumId, tracks_) {
     composer: t.composer||null, isrc: t.isrc||null,
     mb_recording_id: t.mb_recording_id||null,
     disc_number: t.disc_number||null,
-    mb_rating: t.mb_rating||null,
-    loved: t.loved||null,
   }));
   for (let i = 0; i < rows.length; i += 100) {
     const { error } = await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
@@ -4876,13 +4889,6 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     if (!byAlbum[key]) byAlbum[key] = { artist, album, tracks: [], mbReleaseId: mbidAlbum_ || '' };
     else if (mbidAlbum_ && !byAlbum[key].mbReleaseId) byAlbum[key].mbReleaseId = mbidAlbum_;
 
-    // Note MusicBee : 0-100 → 0-5 étoiles (20=1★, 40=2★, 60=3★, 80=4★, 100=5★)
-    const rawRating = num(d, 'Rating') || 0;
-    const mbRating = rawRating > 5 ? Math.round(rawRating / 20) : rawRating;
-    // Loved : champ booléen MusicBee (true si le morceau est "aimé")
-    const lovedVal = str(d, 'Loved') || str(d, 'Love') || str(d, 'Favourite') || str(d, 'Favorite') || '';
-    const loved = lovedVal === 'true' || lovedVal === '1' || lovedVal.toLowerCase() === 'yes';
-
     byAlbum[key].tracks.push({
       position:        String(num(d, 'Track Number') || ''),
       title:           str(d, 'Name'),
@@ -4897,8 +4903,6 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
       composer:        str(d, 'Composer')    || null,
       mb_recording_id: str(d, 'MBID Track')  || str(d, 'MusicBrainz Track Id') || null,
       disc_number:     num(d, 'Disc Number') || null,
-      mb_rating:       mbRating || null,
-      loved:           loved || null,
     });
   });
 
@@ -4957,8 +4961,6 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
           last_played: t.last_played || null, date_added: t.date_added || null,
           composer: t.composer || null, mb_recording_id: t.mb_recording_id || null,
           disc_number: t.disc_number || null,
-          mb_rating: t.mb_rating || null,
-          loved: t.loved || null,
         }));
         for (let i = 0; i < rows.length; i += 100)
           await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
@@ -4983,7 +4985,7 @@ async function loadAlbumTracks() {
   try {
     let all = [], page = 0;
     while (true) {
-      const { data, error } = await window._sb.from('album_tracks').select('album_id,position,title,duration,source,bitrate,sample_rate,file_size,play_count,last_played,date_added,composer,isrc,mb_recording_id,mb_rating,loved')
+      const { data, error } = await window._sb.from('album_tracks').select('album_id,position,title,duration,source,bitrate,sample_rate,file_size,play_count,last_played,date_added,composer,isrc,mb_recording_id')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error) {
         // Table absente ou RLS non configurée — ignorer silencieusement
@@ -5010,8 +5012,6 @@ async function loadAlbumTracks() {
           play_count: t.play_count, last_played: t.last_played, date_added: t.date_added,
           composer: t.composer, isrc: t.isrc, mb_recording_id: t.mb_recording_id,
           disc_number: t.disc_number,
-          mb_rating: t.mb_rating,
-          loved: t.loved,
         });
       });
       console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
@@ -5053,8 +5053,6 @@ function compareTracklists(albumId) {
       ? Math.round(musicbee.filter(t => t.bitrate).reduce((s,t) => s + t.bitrate, 0) / (musicbee.filter(t=>t.bitrate).length||1))
       : 0,
     totalPlays: musicbee.reduce((s,t) => s + (t.play_count||0), 0),
-    lovedCount: musicbee.filter(t => t.loved).length,
-    ratedCount: musicbee.filter(t => t.mb_rating).length,
   };
 }
 
@@ -5097,11 +5095,8 @@ function showTracklistDiff(albumId) {
             const sr = t.sample_rate ? `${(t.sample_rate/1000).toFixed(1)}kHz` : '';
             const pc = t.play_count ? `▶${t.play_count}` : '';
             const comp = t.composer ? `✍ ${esc(t.composer)}` : '';
-            const lovedTag = t.loved ? `<span style="color:#ff6b9d">❤ loved</span>` : '';
-            const ratingTag = t.mb_rating ? `<span style="color:var(--amber)">${'★'.repeat(t.mb_rating)}</span>` : '';
             const info = [br, sr, pc, comp].filter(Boolean).join(' · ');
-            const tags = [lovedTag, ratingTag].filter(Boolean).join(' ');
-            if (info || tags) extra = `<div style="font-size:10px;color:var(--text3);margin-top:1px">${[tags, info].filter(Boolean).join(' · ')}</div>`;
+            if (info) extra = `<div style="font-size:10px;color:var(--text3);margin-top:1px">${info}</div>`;
           } else if (t.isrc) {
             extra = `<div style="font-size:10px;color:var(--text3);margin-top:1px">${t.isrc}</div>`;
           }
@@ -5119,13 +5114,11 @@ function showTracklistDiff(albumId) {
   let html = '';
 
   // Statistiques MusicBee
-  if (cmp.avgBitrate || cmp.totalPlays || cmp.lovedCount || cmp.ratedCount) {
+  if (cmp.avgBitrate || cmp.totalPlays) {
     const brLabel = cmp.avgBitrate >= 900 ? 'FLAC/lossless' : cmp.avgBitrate >= 256 ? 'haute qualité' : cmp.avgBitrate >= 128 ? 'bonne qualité' : 'qualité basse';
-    html += `<div style="display:flex;gap:12px;margin-bottom:12px;font-size:12px;color:var(--text2);flex-wrap:wrap">
+    html += `<div style="display:flex;gap:12px;margin-bottom:12px;font-size:12px;color:var(--text2)">
       ${cmp.avgBitrate ? `<span>📊 Bitrate moyen : <strong>${cmp.avgBitrate} kbps</strong> (${brLabel})</span>` : ''}
       ${cmp.totalPlays ? `<span>▶ Écoutes MusicBee : <strong>${cmp.totalPlays}</strong></span>` : ''}
-      ${cmp.lovedCount ? `<span style="color:#ff6b9d">❤ ${cmp.lovedCount} loved</span>` : ''}
-      ${cmp.ratedCount ? `<span style="color:var(--amber)">⭐ ${cmp.ratedCount} notés</span>` : ''}
     </div>`;
   }
 
@@ -5330,12 +5323,20 @@ function buildAllTracksList() {
     const useTracks = mbTracks.length ? mbTracks : atracks.filter(t => t.source === 'discogs');
     useTracks.forEach(t => {
       result.push({ title: t.title, artist: a.artist, album: a.album, albumId: a.id,
-        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
-        mb_rating: t.mb_rating || null, loved: t.loved || null });
+        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
       if (t.source === 'musicbee') mbCount++;
     });
   });
-  // 2. Morceaux isolés
+  // 2. Pistes des albums stock — depuis albumTracksCache (id stocké dans stockItems)
+  stockItems.forEach(s => {
+    const atracks = (albumTracksCache[s.id] || []).filter(t => t.source === 'musicbee');
+    atracks.forEach(t => {
+      result.push({ title: t.title, artist: s.artist, album: s.album, albumId: null,
+        source: 'stock', bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+      mbCount++;
+    });
+  });
+  // 3. Morceaux isolés
   tracks.forEach(t => {
     result.push({ title: t.title, artist: t.artist, album: t.album || '', albumId: null,
       source: 'isolated', bitrate: null, duration: t.duration, play_count: null });
@@ -5356,8 +5357,6 @@ function renderAllTracks() {
   const sf     = document.getElementById('filter-at-source')?.value||'';
   const folder = document.getElementById('filter-at-folder')?.value||'';
   const sort   = document.getElementById('sort-at')?.value||'artist';
-  const lovedF = document.getElementById('filter-at-loved')?.value||'';
-  const ratingF= parseInt(document.getElementById('filter-at-rating')?.value||'0')||0;
   const lfExact = getLfExactMap();
 
   // Index des albums par id (mis en cache)
@@ -5379,18 +5378,16 @@ function renderAllTracks() {
       if (sf === 'musicbee' && t.source !== 'musicbee') return false;
       if (sf === 'isolated' && t.source !== 'isolated') return false;
     }
-    if (lovedF === 'loved' && !t.loved) return false;
-    if (lovedF === 'rated' && !t.mb_rating) return false;
-    if (ratingF && (t.mb_rating||0) < ratingF) return false;
     if (folder) {
       if (folder === 'isolated') {
         if (t.source !== 'isolated') return false;
+      } else if (folder === 'stock') {
+        if (t.source !== 'stock') return false;
       } else {
         const a = t.albumId ? albumById.get(t.albumId) : null;
         if (!a) return false;
         const inStock = stockKeySet.has(normalizeKey(a.artist,a.album));
         if (folder === 'discographie' && !(a.cd || a.flac || a.mp3)) return false;
-        if (folder === 'stock'   && !inStock)    return false;
         if (folder === 'ok'      && !a.okFolder) return false;
         if (folder === 'forsale' && !a.forSale)  return false;
         if (folder === 'discogs' && !a.cd)       return false;
@@ -5401,7 +5398,6 @@ function renderAllTracks() {
 
   if (sort==='title')  list.sort((a,b)=>a.title.localeCompare(b.title,'fr'));
   else if (sort==='plays') list.sort((a,b)=>(lfExact.get(normalizeKey(b.artist,b.title))||0)-(lfExact.get(normalizeKey(a.artist,a.title))||0));
-  else if (sort==='rating') list.sort((a,b)=>(b.mb_rating||0)-(a.mb_rating||0));
   else list.sort((a,b)=>a.artist.localeCompare(b.artist,'fr')||a.title.localeCompare(b.title,'fr'));
 
   const ctr = document.getElementById('at-counter');
@@ -5411,25 +5407,19 @@ function renderAllTracks() {
 
   const tbody = document.getElementById('at-tbody');
   const slice = list.slice(0, 300);
-  if (!slice.length) { tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎼</div>Aucun morceau</div></td></tr>'; return; }
+  if (!slice.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎼</div>Aucun morceau</div></td></tr>'; return; }
   tbody.innerHTML = slice.map(t => {
     const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
-    const srcBadge = t.source==='musicbee' ? '<span class="badge badge-flac" style="font-size:10px">MB</span>' : '<span class="badge" style="font-size:10px">isolé</span>';
-    const lovedHtml = t.loved ? '<span title="Loved" style="color:#ff6b9d;font-size:14px;line-height:1">❤</span>' : '';
-    const ratingHtml = t.mb_rating
-      ? `<span style="color:var(--amber);font-size:12px">${'★'.repeat(t.mb_rating)}<span style="color:var(--border2)">${'★'.repeat(5-t.mb_rating)}</span></span>`
-      : '<span style="color:var(--text3);font-size:11px">–</span>';
-    const noteCombined = `<div style="display:flex;align-items:center;gap:5px">${lovedHtml}${ratingHtml}</div>`;
+    const srcBadge = t.source==='musicbee' ? '<span class="badge badge-flac" style="font-size:10px">MB</span>' : t.source==='stock' ? '<span class="badge badge-stock" style="font-size:10px">📦</span>' : '<span class="badge" style="font-size:10px">isolé</span>';
     return `<tr>
       <td style="font-weight:500">${esc(t.title)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(t.album||'–')}</td>
       <td>${srcBadge}</td>
-      <td>${noteCombined}</td>
       <td class="mono" style="color:var(--accent)">${plays||'–'}</td>
       <td class="mono" style="font-size:11px;color:var(--text3)">${t.bitrate ? t.bitrate+'k' : '–'}</td>
     </tr>`;
-  }).join('') + (list.length>300 ? `<tr><td colspan="7" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${(list.length-300).toLocaleString('fr-FR')} de plus — affinez les filtres</td></tr>` : '');
+  }).join('') + (list.length>300 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${(list.length-300).toLocaleString('fr-FR')} de plus — affinez les filtres</td></tr>` : '');
 }
 
 // ===================== ALBUM TRACKS VIEW =====================
@@ -5442,8 +5432,7 @@ function buildAlbumTracksList() {
     const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
     useT.forEach(t => {
       full.push({ title: t.title, artist: a.artist, album: a.album,
-        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
-        mb_rating: t.mb_rating || null, loved: t.loved || null });
+        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
     });
   });
   _cache.albumTracksList = full;
@@ -5456,8 +5445,6 @@ function renderAlbumTracks() {
   const tf   = (document.getElementById('filter-abt-title')?.value||'').toLowerCase().trim();
   const albf = (document.getElementById('filter-abt-album')?.value||'').toLowerCase().trim();
   const sort = document.getElementById('sort-abt')?.value||'artist';
-  const lovedF = document.getElementById('filter-abt-loved')?.value||'';
-  const ratingF= parseInt(document.getElementById('filter-abt-rating')?.value||'0')||0;
   const lfExact = getLfExactMap();
 
   const full = buildAlbumTracksList();
@@ -5467,15 +5454,11 @@ function renderAlbumTracks() {
     && (!af   || t.artist.toLowerCase().includes(af))
     && (!tf   || t.title.toLowerCase().includes(tf))
     && (!albf || t.album.toLowerCase().includes(albf))
-    && (lovedF !== 'loved' || t.loved)
-    && (lovedF !== 'rated' || t.mb_rating)
-    && (!ratingF || (t.mb_rating||0) >= ratingF)
   );
 
   if (sort==='title')   list.sort((a,b)=>a.title.localeCompare(b.title,'fr'));
   else if (sort==='plays')   list.sort((a,b)=>(lfExact.get(normalizeKey(b.artist,b.title))||0)-(lfExact.get(normalizeKey(a.artist,a.title))||0));
   else if (sort==='bitrate') list.sort((a,b)=>(b.bitrate||0)-(a.bitrate||0));
-  else if (sort==='rating')  list.sort((a,b)=>(b.mb_rating||0)-(a.mb_rating||0));
   else list.sort((a,b)=>a.artist.localeCompare(b.artist,'fr')||a.album.localeCompare(b.album,'fr'));
 
   const ctr = document.getElementById('abt-counter');
@@ -5485,24 +5468,18 @@ function renderAlbumTracks() {
 
   const tbody = document.getElementById('abt-tbody');
   const slice = list.slice(0,300);
-  if (!slice.length) { tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">💿</div>Importez le XML MusicBee pour charger les pistes</div></td></tr>'; return; }
+  if (!slice.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">💿</div>Importez le XML MusicBee pour charger les pistes</div></td></tr>'; return; }
   tbody.innerHTML = slice.map(t => {
     const plays = lfExact.get(normalizeKey(t.artist,t.title)) || 0;
-    const lovedHtml = t.loved ? '<span title="Loved" style="color:#ff6b9d;font-size:14px;line-height:1">❤</span>' : '';
-    const ratingHtml = t.mb_rating
-      ? `<span style="color:var(--amber);font-size:12px">${'★'.repeat(t.mb_rating)}<span style="color:var(--border2)">${'★'.repeat(5-t.mb_rating)}</span></span>`
-      : '<span style="color:var(--text3);font-size:11px">–</span>';
-    const noteCombined = `<div style="display:flex;align-items:center;gap:5px">${lovedHtml}${ratingHtml}</div>`;
     return `<tr>
       <td style="font-weight:500">${esc(t.title)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(t.album)}</td>
       <td class="mono" style="color:var(--accent)">${plays||'–'}</td>
-      <td>${noteCombined}</td>
       <td class="mono" style="font-size:11px">${t.bitrate?t.bitrate+'k':'–'}</td>
       <td class="mono" style="font-size:11px;color:var(--text3)">${t.duration||'–'}</td>
     </tr>`;
-  }).join('') + (list.length>300 ? `<tr><td colspan="7" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${(list.length-300).toLocaleString('fr-FR')} de plus</td></tr>` : '');
+  }).join('') + (list.length>300 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${(list.length-300).toLocaleString('fr-FR')} de plus</td></tr>` : '');
 }
 
 // ===================== TRACK WISHLIST =====================
