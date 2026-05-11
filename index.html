@@ -1562,13 +1562,13 @@ input[type="file"] { display: none; }
 <div class="modal-overlay" id="modal-track-assoc">
   <div class="modal" style="width:540px">
     <h2>🔗 Associer un morceau last.fm</h2>
-    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Liez ce morceau last.fm à un morceau isolé existant. Il ne sera plus affiché comme manquant.</p>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Liez ce morceau à un morceau de votre collection (isolé ou dans un album). Il disparaîtra de la liste des manquants.</p>
     <div id="track-assoc-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:13px"></div>
     <div class="form-row">
-      <label>Rechercher dans les morceaux isolés</label>
+      <label>Rechercher dans toute la collection</label>
       <input type="text" id="track-assoc-search" placeholder="Artiste ou titre…" oninput="renderTrackAssocList()">
     </div>
-    <div id="track-assoc-list" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
+    <div id="track-assoc-list" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="document.getElementById('modal-track-assoc').classList.remove('open')">Annuler</button>
     </div>
@@ -2607,7 +2607,7 @@ function getOwnedKeysSet() {
 
 // ── Statuts last.fm albums ──────────────────────────────────────────
 let _lastfmStatus = {}; // { key: 'ignored'|'to_listen'|'wishlist' }
-let _lastfmTrackStatus = {}; // { normalizeKey(artist,track): { status:'ignored'|'wishlist', linkedAlbumId, linkedTrackId } }
+let _lastfmTrackStatus = {}; // { normalizeKey(artist,track): { status, linkedTrackId, linkedAlbumId, linkedTrackTitle } }
 
 function getLastfmStatus(artist, album) {
   return _lastfmStatus[normalizeKey(artist, album)] || '';
@@ -2892,15 +2892,14 @@ function computeMissingTracks() {
     });
   });
 
-  // 3. Exclure les morceaux déjà possédés
+  // 3. Exclure les morceaux déjà possédés ou avec statut ignoré/associé
   _cache.missingTracks = Object.values(_lastfmTrackCounts)
     .filter(d => {
       if (!d.plays) return false;
       const keyTrack = normalizeKey(d.artist, d.track);
-      // Morceau ignoré ou associé manuellement → ne pas afficher
+      // Statut ignoré ou associé manuellement → exclure du décompte
       const st = _lastfmTrackStatus[keyTrack];
-      if (st?.status === 'ignored') return false;
-      if (st?.linkedTrackId) return false;
+      if (st?.status === 'ignored' || st?.status === 'linked') return false;
       // Morceau isolé possédé
       if (ownedTracks.has(keyTrack)) return false;
       // Dans un album : artiste last.fm + titre
@@ -2953,10 +2952,10 @@ function renderMissingTracks() {
     const key = normalizeKey(d.artist, d.track);
     const st  = _lastfmTrackStatus[key];
     let stMatch = true;
-    if      (statusF === 'none')    stMatch = !st;
-    else if (statusF === 'ignored') stMatch = st?.status === 'ignored';
-    else if (statusF === 'wishlist')stMatch = st?.status === 'wishlist';
-    else if (statusF === 'linked')  stMatch = !!st?.linkedTrackId;
+    if      (statusF === 'none')     stMatch = !st || !st.status;
+    else if (statusF === 'ignored')  stMatch = st?.status === 'ignored';
+    else if (statusF === 'wishlist') stMatch = st?.status === 'wishlist';
+    else if (statusF === 'linked')   stMatch = st?.status === 'linked';
     return (!q    || (d.artist+' '+d.track+' '+(d.album||'')).toLowerCase().includes(q))
         && (!af   || d.artist.toLowerCase().includes(af))
         && (!tf   || d.track.toLowerCase().includes(tf))
@@ -2965,11 +2964,9 @@ function renderMissingTracks() {
         && stMatch;
   });
 
-  // Tri
   if      (sortF === 'artist') list.sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
   else if (sortF === 'title')  list.sort((a,b) => a.track.localeCompare(b.track,'fr'));
   else if (sortF === 'album')  list.sort((a,b) => (a.album||'').localeCompare(b.album||'','fr'));
-  // plays = déjà trié desc
 
   const ctr = document.getElementById('mtrack-counter');
   if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' / ' + all.length.toLocaleString('fr-FR') + ' morceaux';
@@ -2979,7 +2976,7 @@ function renderMissingTracks() {
 
   const tbody = document.getElementById('mtrack-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎵</div>' +
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🎵</div>' +
       (Object.keys(_lastfmTrackCounts).length ? 'Aucun résultat avec ces filtres.' : 'Lancez la "Sync morceaux complète" dans Import pour charger les données.') +
       '</div></td></tr>';
     return;
@@ -2989,27 +2986,26 @@ function renderMissingTracks() {
     const key = normalizeKey(d.artist, d.track);
     const st  = _lastfmTrackStatus[key];
     const isIgnored  = st?.status === 'ignored';
+    const isLinked   = st?.status === 'linked';
     const isWishlist = st?.status === 'wishlist';
-    const isLinked   = !!st?.linkedTrackId;
-    const stBadge = isIgnored  ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">🚫</span>'
-                  : isLinked   ? '<span style="font-size:10px;color:var(--accent);margin-left:4px">🔗</span>'
-                  : isWishlist ? '<span style="font-size:10px;color:var(--amber);margin-left:4px">🎯</span>'
+    const stBadge = isIgnored  ? ' <span style="font-size:10px;color:var(--text3)">🚫</span>'
+                  : isLinked   ? ' <span style="font-size:10px;color:var(--accent)">🔗</span>'
+                  : isWishlist ? ' <span style="font-size:10px;color:var(--amber)">🎯</span>'
                   : '';
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
     <td style="color:var(--text2);font-size:13px">${esc(d.artist)}</td>
     <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
-    <td style="display:flex;gap:4px;flex-wrap:wrap">
-      <button class="btn btn-sm ${isIgnored?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
-      <button class="btn btn-sm ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau isolé">🔗</button>
+    <td style="display:flex;gap:3px;flex-wrap:wrap">
+      <button class="btn btn-sm ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
+      <button class="btn btn-sm ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
       <button class="btn btn-sm ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
       <button class="btn btn-sm btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋</button>
     </td>
   </tr>`;
-  }).join('') + (list.length > 200 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
+  }).join('') + (list.length > 200 ? `<tr><td colspan="5" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
 
-  // Cache pour les boutons idx
   renderMissingTracks._cache = slice;
 }
 
@@ -3034,16 +3030,11 @@ function setMissingTrackStatus(idx, status) {
   const current = _lastfmTrackStatus[key]?.status;
   if (current === status) {
     // Toggle off
-    if (_lastfmTrackStatus[key]) {
-      delete _lastfmTrackStatus[key].status;
-      if (!Object.keys(_lastfmTrackStatus[key]).length) delete _lastfmTrackStatus[key];
-    }
+    delete _lastfmTrackStatus[key];
   } else {
     if (!_lastfmTrackStatus[key]) _lastfmTrackStatus[key] = {};
     _lastfmTrackStatus[key].status = status;
-    if (status === 'wishlist') {
-      addToWishlistFromMissingTrack(idx);
-    }
+    if (status === 'wishlist') addToWishlistFromMissingTrack(idx);
   }
   persistLastfmTrackStatus();
   invalidateCache();
@@ -3051,36 +3042,33 @@ function setMissingTrackStatus(idx, status) {
 }
 
 function persistLastfmTrackStatus() {
+  try { localStorage.setItem('lastfm_track_status', JSON.stringify(_lastfmTrackStatus)); } catch(e) {}
   if (window._sb) {
     window._sb.from('meta').upsert(
       { key: 'lastfm_track_status', value: JSON.stringify(_lastfmTrackStatus) },
       { onConflict: 'key' }
     ).then(() => {});
   }
-  // Aussi en localStorage comme fallback
-  try { localStorage.setItem('lastfm_track_status', JSON.stringify(_lastfmTrackStatus)); } catch(e) {}
 }
 
 function loadLastfmTrackStatus() {
-  // Depuis localStorage d'abord (chargement synchrone)
   try {
     const raw = localStorage.getItem('lastfm_track_status');
-    if (raw) _lastfmTrackStatus = JSON.parse(raw);
+    if (raw) _lastfmTrackStatus = JSON.parse(raw) || {};
   } catch(e) {}
-  // Supabase écrasera si disponible (chargé dans loadFromSupabase via meta)
 }
 
-// ── Association morceau last.fm ↔ morceau isolé ───────────────────────────
-let _trackAssocTarget = null; // { artist, track, album, plays }
+// ── Association morceau last.fm ↔ tous les morceaux ──────────────────────────
+let _trackAssocTarget = null;
 
 function openTrackAssocModal(idx) {
   const d = renderMissingTracks._cache?.[idx];
   if (!d) return;
   _trackAssocTarget = d;
   document.getElementById('track-assoc-info').innerHTML =
-    `<strong>last.fm :</strong> ${esc(d.track)} — ${esc(d.artist)}
-     ${d.album ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">album: ${esc(d.album)}</span>` : ''}
-     <span style="color:var(--accent);margin-left:8px;font-family:var(--mono);font-size:12px">${d.plays} écoutes</span>`;
+    `<strong>last.fm :</strong> ${esc(d.track)} — ${esc(d.artist)}`
+    + (d.album ? ` <span style="color:var(--text3);font-size:11px;margin-left:6px">album : ${esc(d.album)}</span>` : '')
+    + ` <span style="color:var(--accent);margin-left:8px;font-family:var(--mono);font-size:12px">${d.plays} écoutes</span>`;
   document.getElementById('track-assoc-search').value = d.artist;
   renderTrackAssocList();
   document.getElementById('modal-track-assoc').classList.add('open');
@@ -3089,65 +3077,105 @@ function openTrackAssocModal(idx) {
 function renderTrackAssocList() {
   const q = (document.getElementById('track-assoc-search').value || '').toLowerCase().trim();
   const fmtBadge = { flac:'badge-flac', mp3:'badge-mp3', aac:'badge-digital', autre:'badge-digital' };
-  const list = tracks.filter(t => {
-    if (!q) return true;
-    return (t.artist + ' ' + t.title).toLowerCase().includes(q);
-  }).slice(0, 40);
+  const candidates = [];
+
+  // 1. Morceaux isolés
+  tracks.forEach(t => {
+    if (!q || (t.artist + ' ' + t.title).toLowerCase().includes(q))
+      candidates.push({ type:'isolated', id:t.id, title:t.title, artist:t.artist, album:t.album||'', format:t.format });
+  });
+
+  // 2. Pistes des albums (source musicbee en priorité, sinon discogs)
+  const seenKey = new Set();
+  albums.forEach(a => {
+    const atracks = albumTracksCache[a.id] || [];
+    const mbT = atracks.filter(t => t.source === 'musicbee');
+    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
+    useT.forEach(t => {
+      if (!t.title) return;
+      const dk = normalizeKey(a.artist, t.title);
+      if (seenKey.has(dk)) return;
+      seenKey.add(dk);
+      if (!q || (a.artist + ' ' + t.title + ' ' + a.album).toLowerCase().includes(q))
+        candidates.push({ type:'album', albumId:a.id, title:t.title, artist:a.artist, album:a.album, format: a.flac?'flac':a.mp3?'mp3':'digital' });
+    });
+  });
+
+  // Trier : correspondances exactes en premier
+  if (_trackAssocTarget) {
+    const tArtist = normalizeKey(_trackAssocTarget.artist, '');
+    const tTitle  = normalizeKey('', _trackAssocTarget.track);
+    candidates.sort((a, b) => {
+      const sA = (normalizeKey('', a.title) === tTitle ? 4 : 0) + (normalizeKey(a.artist,'') === tArtist ? 2 : 0);
+      const sB = (normalizeKey('', b.title) === tTitle ? 4 : 0) + (normalizeKey(b.artist,'') === tArtist ? 2 : 0);
+      return sB - sA;
+    });
+  }
+
+  const slice = candidates.slice(0, 60);
   const el = document.getElementById('track-assoc-list');
-  if (!list.length) {
-    el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun morceau isolé trouvé</div>';
+  if (!slice.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun morceau trouvé</div>';
     return;
   }
-  el.innerHTML = list.map(t => {
-    const badge = `<span class="badge ${fmtBadge[t.format]||'badge-digital'}" style="font-size:9px">${(t.format||'?').toUpperCase()}</span>`;
-    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);cursor:pointer;border:1px solid var(--border)" onclick="applyTrackAssoc(${t.id})">
+
+  el.innerHTML = slice.map(t => {
+    const srcLabel = t.type === 'isolated'
+      ? `<span class="badge ${fmtBadge[t.format]||'badge-digital'}" style="font-size:9px">${(t.format||'?').toUpperCase()}</span>`
+      : `<span class="badge badge-cd" style="font-size:9px;background:var(--accent-dim);color:var(--accent);border-color:rgba(200,240,100,0.2)">Album</span>`;
+    const onclick = t.type === 'isolated'
+      ? `applyTrackAssoc('isolated',${t.id},'')`
+      : `applyTrackAssoc('album',${t.albumId},${JSON.stringify(t.title)})`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);cursor:pointer;border:1px solid var(--border)" onclick="${onclick}">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
-        <div style="font-size:11px;color:var(--text2)">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
+        <div style="font-size:11px;color:var(--text2)">${esc(t.artist)}${t.album ? ' · <span style="color:var(--text3)">'+esc(t.album)+'</span>' : ''}</div>
       </div>
-      ${badge}
+      ${srcLabel}
     </div>`;
   }).join('');
 }
 
-function applyTrackAssoc(trackId) {
+function applyTrackAssoc(type, idOrAlbumId, trackTitle) {
   if (!_trackAssocTarget) return;
   const key = normalizeKey(_trackAssocTarget.artist, _trackAssocTarget.track);
   if (!_lastfmTrackStatus[key]) _lastfmTrackStatus[key] = {};
-  _lastfmTrackStatus[key].linkedTrackId = trackId;
   _lastfmTrackStatus[key].status = 'linked';
+  let label = '';
+  if (type === 'isolated') {
+    _lastfmTrackStatus[key].linkedTrackId = idOrAlbumId;
+    const t = tracks.find(x => x.id === idOrAlbumId);
+    label = t ? `${t.artist} — ${t.title}` : 'morceau isolé';
+  } else {
+    _lastfmTrackStatus[key].linkedAlbumId = idOrAlbumId;
+    _lastfmTrackStatus[key].linkedTrackTitle = trackTitle;
+    const a = albums.find(x => x.id === idOrAlbumId);
+    label = a ? `${a.artist} — ${trackTitle} (${a.album})` : trackTitle;
+  }
   document.getElementById('modal-track-assoc').classList.remove('open');
   persistLastfmTrackStatus();
   invalidateCache();
   renderMissingTracks();
-  const t = tracks.find(x => x.id === trackId);
-  toast(`Associé : ${t?.artist} — ${t?.title}`);
+  toast(`Associé : ${label}`);
   _trackAssocTarget = null;
 }
 
-// ── Export CSV morceaux last.fm manquants ────────────────────────────────────
+// ── Export CSV morceaux last.fm manquants ─────────────────────────────────────
 function exportMissingTracksCSV() {
   const all = computeMissingTracks();
-  // Inclure tous les morceaux non ignorés
-  const toExport = all.filter(d => {
-    const key = normalizeKey(d.artist, d.track);
-    return _lastfmTrackStatus[key]?.status !== 'ignored';
-  });
-
-  const statusLabel = { ignored:'🚫 Ignoré', wishlist:'🎯 Wishlist', linked:'🔗 Associé' };
+  const statusLabel = { ignored:'Ignoré', wishlist:'Wishlist', linked:'Associé' };
   const rows = [['Artiste','Titre','Album','Écoutes last.fm','Statut']];
-  toExport.forEach(d => {
+  all.forEach(d => {
     const key = normalizeKey(d.artist, d.track);
     const st  = _lastfmTrackStatus[key];
-    const label = st?.status ? (statusLabel[st.status] || st.status) : '';
-    rows.push([d.artist, d.track, d.album || '', d.plays, label]);
+    rows.push([d.artist, d.track, d.album||'', d.plays, st?.status ? (statusLabel[st.status]||st.status) : '']);
   });
   const csv = rows.map(r => r.map(v => {
     const s = String(v ?? '');
-    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g,'""')}"` : s;
+    return (s.includes(',') || s.includes('"') || s.includes('\n')) ? `"${s.replace(/"/g,'""')}"` : s;
   }).join(',')).join('\n');
-  download(`lastfm_morceaux_manquants_${new Date().toISOString().slice(0,10)}.csv`, '\uFEFF' + csv, 'text/csv;charset=utf-8');
-  toast(`${toExport.length} morceaux exportés ✓`);
+  download(`lastfm_morceaux_${new Date().toISOString().slice(0,10)}.csv`, '\uFEFF'+csv, 'text/csv;charset=utf-8');
+  toast(`${all.length} morceaux exportés ✓`);
 }
 
 function addToWishlistFromMissingTrack(idx) {
