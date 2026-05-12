@@ -5482,24 +5482,56 @@ function unmarkForSale(id) {
 function buildAllTracksList() {
   if (_cache.allTracksList) return _cache.allTracksList;
   const result = [];
-  // 1. Pistes des albums (source musicbee) — depuis albumTracksCache
+
+  // Index albums par id pour lookups rapides
+  const albumById = new Map(albums.map(a => [a.id, a]));
+
+  // 1. Pistes des albums (source musicbee en priorité, sinon discogs)
   let mbCount = 0;
   albums.forEach(a => {
     const atracks = albumTracksCache[a.id] || [];
-    // Préférer musicbee, sinon discogs si musicbee absent pour cet album
     const mbTracks = atracks.filter(t => t.source === 'musicbee');
     const useTracks = mbTracks.length ? mbTracks : atracks.filter(t => t.source === 'discogs');
     useTracks.forEach(t => {
       result.push({ title: t.title, artist: a.artist, album: a.album, albumId: a.id,
-        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count });
+        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
+        inStock: false });
       if (t.source === 'musicbee') mbCount++;
     });
   });
-  // 2. Morceaux isolés
+
+  // 2. Pistes des albums en stock — ils ont des tracklists dans albumTracksCache
+  //    mais leur "album" est dans stockItems, pas dans albums[]
+  //    On les retrouve via la clé normalisée artist+album → albumId stocké dans albumTracksCache
+  //    Stratégie : parcourir albumTracksCache, identifier les ids absents de albums[]
+  const albumIds = new Set(albums.map(a => a.id));
+  Object.entries(albumTracksCache).forEach(([idStr, atracks]) => {
+    const id = parseInt(idStr);
+    if (albumIds.has(id)) return; // déjà traité ci-dessus
+    // Chercher dans stockItems
+    const stock = stockItems.find(s => {
+      // On ne peut pas retrouver l'id stock directement — chercher par correspondance de clé
+      // Les stockItems ont leur propre id, mais albumTracksCache est indexé par album.id ou stock.id
+      return s.id === id;
+    });
+    if (!stock) return;
+    const mbT = atracks.filter(t => t.source === 'musicbee');
+    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
+    useT.forEach(t => {
+      result.push({ title: t.title, artist: stock.artist, album: stock.album, albumId: id,
+        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
+        inStock: true });
+      if (t.source === 'musicbee') mbCount++;
+    });
+  });
+
+  // 3. Morceaux isolés
   tracks.forEach(t => {
     result.push({ title: t.title, artist: t.artist, album: t.album || '', albumId: null,
-      source: 'isolated', bitrate: null, duration: t.duration, play_count: null });
+      source: 'isolated', bitrate: null, duration: t.duration, play_count: null,
+      inStock: false });
   });
+
   if (!mbCount && Object.keys(albumTracksCache).length) {
     const sources = new Set(Object.values(albumTracksCache).flat().map(t=>t.source));
     console.info('buildAllTracksList: sources dans cache =', [...sources]);
@@ -5522,7 +5554,11 @@ function renderAllTracks() {
   if (!_cache.albumById) _cache.albumById = new Map(albums.map(a => [a.id, a]));
   const albumById = _cache.albumById;
 
-  // Index des albums en stock (mis en cache)
+  // Index des albums en stock par id (mis en cache)
+  if (!_cache.stockById) _cache.stockById = new Map(stockItems.map(s => [s.id, s]));
+  const stockById = _cache.stockById;
+
+  // Index des clés stock (mis en cache)
   if (!_cache.stockKeySet) _cache.stockKeySet = new Set(stockItems.map(s => normalizeKey(s.artist,s.album)));
   const stockKeySet = _cache.stockKeySet;
 
@@ -5540,12 +5576,15 @@ function renderAllTracks() {
     if (folder) {
       if (folder === 'isolated') {
         if (t.source !== 'isolated') return false;
+      } else if (folder === 'stock') {
+        // Pistes d'un stockItem (flag inStock) OU album dans stockKeySet
+        const a = t.albumId ? albumById.get(t.albumId) : null;
+        const isInStock = t.inStock || (a && stockKeySet.has(normalizeKey(a.artist, a.album)));
+        if (!isInStock) return false;
       } else {
         const a = t.albumId ? albumById.get(t.albumId) : null;
         if (!a) return false;
-        const inStock = stockKeySet.has(normalizeKey(a.artist,a.album));
         if (folder === 'discographie' && !(a.cd || a.flac || a.mp3)) return false;
-        if (folder === 'stock'   && !inStock)    return false;
         if (folder === 'ok'      && !a.okFolder) return false;
         if (folder === 'forsale' && !a.forSale)  return false;
         if (folder === 'discogs' && !a.cd)       return false;
@@ -5568,7 +5607,11 @@ function renderAllTracks() {
   if (!slice.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎼</div>Aucun morceau</div></td></tr>'; return; }
   tbody.innerHTML = slice.map(t => {
     const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
-    const srcBadge = t.source==='musicbee' ? '<span class="badge badge-flac" style="font-size:10px">MB</span>' : '<span class="badge" style="font-size:10px">isolé</span>';
+    const srcBadge = t.inStock
+      ? '<span class="badge badge-stock" style="font-size:10px">Stock</span>'
+      : t.source === 'musicbee'
+        ? '<span class="badge badge-flac" style="font-size:10px">MB</span>'
+        : '<span class="badge" style="font-size:10px">isolé</span>';
     return `<tr>
       <td style="font-weight:500">${esc(t.title)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
