@@ -5110,6 +5110,44 @@ stockItems.forEach(s => {
         || normalizeKey(cleanDiscogsArtist(s.artist), s.album) === normalizeKey(cleanDiscogsArtist(g.artist), g.album)
       );
     }
+   // Fallback 1 : chercher uniquement par titre d'album (ignore l'artiste)
+    if (!albumObj) {
+      const albumNorm = normalizeKey('', g.album);
+      const candidates = albums.filter(a =>
+        normalizeKey('', a.album) === albumNorm
+      );
+      if (candidates.length === 1) {
+        albumObj = candidates[0];
+      } else if (candidates.length > 1) {
+        // Parmi les candidats, prendre celui dont l'artiste est le plus proche
+        const gArtistNorm = normalizeKey(g.artist, '');
+        albumObj = candidates.reduce((best, a) => {
+          const aNorm = normalizeKey(a.artist, '');
+          const bNorm = normalizeKey(best.artist, '');
+          const scoreA = aNorm.includes(gArtistNorm) || gArtistNorm.includes(aNorm) ? 1 : 0;
+          const scoreB = bNorm.includes(gArtistNorm) || gArtistNorm.includes(bNorm) ? 1 : 0;
+          return scoreA >= scoreB ? a : best;
+        }, candidates[0]);
+      }
+    }
+    // Fallback 2 : chercher dans stockItems par titre seul
+    if (!albumObj) {
+      const albumNorm = normalizeKey('', g.album);
+      const stockCandidates = stockItems.filter(s =>
+        normalizeKey('', s.album) === albumNorm
+      );
+      if (stockCandidates.length === 1) {
+        albumObj = stockCandidates[0];
+      } else if (stockCandidates.length > 1) {
+        const gArtistNorm = normalizeKey(g.artist, '');
+        albumObj = stockCandidates.reduce((best, s) => {
+          const aNorm = normalizeKey(s.artist, '');
+          const bNorm = normalizeKey(best.artist, '');
+          return (aNorm.includes(gArtistNorm) || gArtistNorm.includes(aNorm) ? 1 : 0) >=
+                 (bNorm.includes(gArtistNorm) || gArtistNorm.includes(bNorm) ? 1 : 0) ? s : best;
+        }, stockCandidates[0]);
+      }
+    }
     if (!albumObj) {
       console.debug('importMusicBeeTracklists: non trouvé:', g.artist, '-', g.album);
       return;
