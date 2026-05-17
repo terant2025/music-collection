@@ -5090,6 +5090,11 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     if (a.mb_release_id) albumIndex.set('mbid:' + a.mb_release_id, a);
   });
 
+stockItems.forEach(s => {
+  albumIndex.set(normalizeKey(s.artist, s.album), s);
+  albumIndex.set(normalizeKey(cleanDiscogsArtist(s.artist), s.album), s);
+});
+
   const toSave = [];
 
   Object.values(byAlbum).forEach(g => {
@@ -5098,6 +5103,13 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
       || albumIndex.get(normalizeKey(cleanDiscogsArtist(g.artist), g.album))
       || albumIndex.get(normalizeKey((g.artist || '').replace(/^The\s+/i, '').trim(), g.album));
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
+    // Chercher aussi dans les stockItems
+    if (!albumObj) {
+      albumObj = stockItems.find(s =>
+        normalizeKey(s.artist, s.album) === gKey
+        || normalizeKey(cleanDiscogsArtist(s.artist), s.album) === normalizeKey(cleanDiscogsArtist(g.artist), g.album)
+      );
+    }
     if (!albumObj) {
       console.debug('importMusicBeeTracklists: non trouvé:', g.artist, '-', g.album);
       return;
@@ -5500,30 +5512,30 @@ function buildAllTracksList() {
     });
   });
 
-  // 2. Pistes des albums en stock — ils ont des tracklists dans albumTracksCache
-  //    mais leur "album" est dans stockItems, pas dans albums[]
-  //    On les retrouve via la clé normalisée artist+album → albumId stocké dans albumTracksCache
-  //    Stratégie : parcourir albumTracksCache, identifier les ids absents de albums[]
-  const albumIds = new Set(albums.map(a => a.id));
-  Object.entries(albumTracksCache).forEach(([idStr, atracks]) => {
-    const id = parseInt(idStr);
-    if (albumIds.has(id)) return; // déjà traité ci-dessus
-    // Chercher dans stockItems
-    const stock = stockItems.find(s => {
-      // On ne peut pas retrouver l'id stock directement — chercher par correspondance de clé
-      // Les stockItems ont leur propre id, mais albumTracksCache est indexé par album.id ou stock.id
-      return s.id === id;
-    });
-    if (!stock) return;
-    const mbT = atracks.filter(t => t.source === 'musicbee');
-    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
-    useT.forEach(t => {
-      result.push({ title: t.title, artist: stock.artist, album: stock.album, albumId: id,
-        source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
-        inStock: true });
-      if (t.source === 'musicbee') mbCount++;
-    });
+  // 2. Pistes des albums en stock via index normalizeKey → albumId
+const stockTrackIndex = new Map(); // normalizeKey → stockItem
+stockItems.forEach(s => {
+  stockTrackIndex.set(normalizeKey(s.artist, s.album), s);
+  stockTrackIndex.set(normalizeKey(cleanDiscogsArtist(s.artist), s.album), s);
+});
+
+// Parcourir albumTracksCache pour les ids qui ne correspondent pas à un album[]
+const albumIds = new Set(albums.map(a => a.id));
+Object.entries(albumTracksCache).forEach(([idStr, atracks]) => {
+  const id = parseInt(idStr);
+  if (albumIds.has(id)) return; // déjà traité en section 1
+  // Retrouver le stockItem correspondant à cet id
+  const stock = stockItems.find(s => s.id === id);
+  if (!stock) return;
+  const mbT = atracks.filter(t => t.source === 'musicbee');
+  const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
+  useT.forEach(t => {
+    result.push({ title: t.title, artist: stock.artist, album: stock.album, albumId: id,
+      source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
+      inStock: true });
+    if (t.source === 'musicbee') mbCount++;
   });
+});
 
   // 3. Morceaux isolés
   tracks.forEach(t => {
