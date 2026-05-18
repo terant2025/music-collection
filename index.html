@@ -5120,10 +5120,31 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
       || albumIndex.get(normalizeKey((g.artist || '').replace(/^The\s+/i, '').trim(), g.album));
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
 
-    if (albumObj) {
+if (albumObj) {
       albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
         .filter(t => t.source !== 'musicbee').concat(g.tracks);
-      toSave.push(
+      toSave.push({ albumId: albumObj.id, tracks: g.tracks });
+      matched++;
+    } else {
+      unmatched++;
+    }
+  });
+
+  // Sauvegarder en Supabase en arrière-plan (sans bloquer)
+  if (window._sb && toSave.length) {
+    (async () => {
+      for (const { albumId, tracks: tl } of toSave) {
+        await saveTracklist(albumId, tl);
+      }
+      console.log(`importMusicBeeTracklists : ${toSave.length} albums sauvegardés dans Supabase`);
+    })();
+  }
+
+  console.log(`importMusicBeeTracklists : ${matched} matchés, ${unmatched} non matchés`);
+  invalidateCache();
+  updateNavBadges();
+  return matched;
+}
 
 // Charger les tracklists depuis Supabase au démarrage
 async function loadAlbumTracks() {
