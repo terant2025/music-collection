@@ -3698,6 +3698,7 @@ async function importMusicBeeXML(input) {
         if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
           stockAlbums.push({ artist: stockArtist, album: stockAlbum, year: stockYear, genre: stockGenre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre' });
         }
+        // Les pistes stock sont collectées par importMusicBeeTracklists (tous dossiers)
       } else if (folder === 'isolated') {
         if (!name) return;
         let trackArtist = artist;
@@ -5042,35 +5043,51 @@ async function fetchAllTracklists(onlyMissing = true) {
 }
 
 function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksArg) {
-  // ── Collecter toutes les pistes album depuis le XML ──────────────────────────
-  // Stratégie : stocker DIRECTEMENT dans musicbee_tracks (Supabase) indexé par
-  // (artist_norm, title_norm). Pas de dépendance au matching albums[].
-  const byKey = {}; // normalizeKey(artist, album) → { artist, album, tracks[] }
+  // ── Collecter TOUTES les pistes depuis le XML, indépendamment du dossier ─────
+  // Seule exclusion : blind-test (pas de la musique possédée)
+  // Stock, ok, à vendre, discographie, top titres → tout indexé dans musicbee_tracks
+  const byKey = {}; // normalizeKey(artist, album) → { artist, album, tracks[], folder }
 
   trackDicts.forEach(d => {
     const location = str(d, 'Location');
     const locationLow = location.toLowerCase();
     if (locationLow.includes('blind-test') || locationLow.includes('blind_test')) return;
-    if (locationLow.includes('!_00_stock')) return;
-    const pathParts = location.replace(/\\/g, '/').split('/');
-    if (pathParts.some(p => /top.?ti/i.test(p) || /top.?track/i.test(p))) return;
+
+    const name      = str(d, 'Name');
+    if (!name) return;
 
     const albumArtist = str(d, 'Album Artist');
     const artist_     = str(d, 'Artist');
-    const artist = (albumArtist && albumArtist !== 'Various Artists') ? albumArtist : artist_;
-    const album  = str(d, 'Album');
-    if (!artist || !album) return;
+    const isCompilTag = str(d, 'Compilation') === 'true' || str(d, 'Compilation') === '1';
+    const isCompilation = isCompilTag || albumArtist === 'Various Artists';
+    const artist = isCompilation ? 'Various Artists' : (albumArtist || artist_ || '');
+    const album  = str(d, 'Album') || '';
 
-    const mbidAlbum_ = str(d, 'MBID Album');
-    const key = normalizeKey(artist, album);
-    if (!byKey[key]) byKey[key] = { artist, album, tracks: [], mbReleaseId: mbidAlbum_ || '' };
-    else if (mbidAlbum_ && !byKey[key].mbReleaseId) byKey[key].mbReleaseId = mbidAlbum_;
+    // Détecter le dossier pour annoter (informatif seulement)
+    const pathParts = location.replace(/\\/g, '/').split('/');
+    let folder = 'album';
+    if (locationLow.includes('!_00_stock'))                                           folder = 'stock';
+    else if (pathParts.some(p => /top.?ti/i.test(p) || /top.?track/i.test(p)))       folder = 'isolated';
+    else if (pathParts.some(s => s === 'ok' || s === 'ok '))                          folder = 'ok';
+    else if (pathParts.some(s => /^!?a.?vendre$/i.test(s) || s === '!vendre'))        folder = 'forsale';
+
+    // Clé : si pas d'album (morceau isolé sans tag album), regrouper par artiste + titre
+    const groupArtist = artist || artist_;
+    const groupAlbum  = album  || `__isolated__${name}`;
+    if (!groupArtist && !groupAlbum) return;
+
+    const key = normalizeKey(groupArtist, groupAlbum);
+    if (!byKey[key]) {
+      const mbidAlbum_ = str(d, 'MBID Album');
+      byKey[key] = { artist: groupArtist, album, tracks: [], mbReleaseId: mbidAlbum_ || '', folder };
+    }
 
     byKey[key].tracks.push({
       position:        String(num(d, 'Track Number') || ''),
-      title:           str(d, 'Name'),
+      title:           name,
       duration:        formatDuration(num(d, 'Total Time')),
       source:          'musicbee',
+      folder,
       bitrate:         num(d, 'Bit Rate')    || null,
       sample_rate:     num(d, 'Sample Rate') || null,
       file_size:       num(d, 'Size')        || null,
@@ -5096,8 +5113,8 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   // ── Stocker dans _albumTracksByKey (cache en mémoire) ────────────────────────
   window._albumTracksByKey = byKey;
 
-  // ── Peupler _mbTrackKeys : Set des clés normalisées (artist_norm|||title_norm)
-  // C'est la source de vérité pour computeMissingTracks — aucun matching albums[]
+  // ── Peupler _mbTrackKeys : Set des clés normalisées ──────────────────────────
+  // Source de vérité pour computeMissingTracks — couvre TOUS les dossiers
   window._mbTrackKeys = new Set();
   Object.values(byKey).forEach(g => {
     g.tracks.forEach(t => {
@@ -5110,16 +5127,11 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       if (noThe !== artist) window._mbTrackKeys.add(normalizeKey(noThe, t.title));
     });
   });
-  // Ajouter les morceaux isolés
-  (isolatedTracksArg || []).forEach(t => {
-    if (!t.title || !t.artist) return;
-    const clean = cleanDiscogsArtist(t.artist);
-    const noThe = t.artist.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-    window._mbTrackKeys.add(normalizeKey(t.artist, t.title));
-    window._mbTrackKeys.add(normalizeKey(clean,    t.title));
-    if (noThe !== t.artist) window._mbTrackKeys.add(normalizeKey(noThe, t.title));
-  });
-  console.log(`_mbTrackKeys : ${window._mbTrackKeys.size} pistes MusicBee indexées (${Object.keys(byKey).length} albums + ${(isolatedTracksArg||[]).length} isolés)`);
+  const totalTracks = Object.values(byKey).reduce((s, g) => s + g.tracks.length, 0);
+  const byFolder = Object.values(byKey).reduce((acc, g) => {
+    acc[g.folder] = (acc[g.folder]||0) + g.tracks.length; return acc;
+  }, {});
+  console.log(`_mbTrackKeys : ${window._mbTrackKeys.size} clés pour ${totalTracks} pistes`, byFolder);
 
   // ── Tenter aussi le matching albums[] pour albumTracksCache (vue Discographie) ─
   const albumIndex = new Map();
@@ -5162,7 +5174,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   // 2. musicbee_tracks — table dédiée, indexée par (artist_norm, title_norm)
   //    Flush complet en arrière-plan
   if (window._sb) {
-    saveMusicBeeTracks(byKey, isolatedTracksArg || []);
+    saveMusicBeeTracks(byKey);
   }
 
   console.log(`importMusicBeeTracklists : ${matched} matchés dans albums[], ${unmatched} non matchés (tous indexés dans musicbee_tracks)`);
@@ -5174,14 +5186,13 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   return matched;
 }
 
-// Flush toutes les pistes MusicBee vers la table musicbee_tracks (remplace le contenu entier)
-// byKey : pistes d'albums ; isolatedTracks : morceaux isolés du dossier "top titres"
-async function saveMusicBeeTracks(byKey, isolatedTracks) {
+// Flush toutes les pistes MusicBee vers musicbee_tracks (remplace le contenu entier)
+// Toutes les pistes sont dans byKey (albums + stock + isolated + ok + forsale)
+async function saveMusicBeeTracks(byKey) {
   if (!window._sb) return;
   const rows = [];
   const seenKeys = new Set();
 
-  // ── Pistes d'albums ──────────────────────────────────────────────────────────
   Object.values(byKey).forEach(g => {
     g.tracks.forEach(t => {
       if (!t.title) return;
@@ -5192,60 +5203,32 @@ async function saveMusicBeeTracks(byKey, isolatedTracks) {
       seenKeys.add(pk);
       rows.push({
         artist:          g.artist,
-        album:           g.album,
+        album:           g.album  || null,
         title:           t.title,
         artist_norm:     an,
         title_norm:      tn,
-        position:        t.position || null,
-        duration:        t.duration || null,
-        bitrate:         t.bitrate  || null,
-        play_count:      t.play_count || null,
+        folder:          t.folder || g.folder || 'album',
+        position:        t.position    || null,
+        duration:        t.duration    || null,
+        bitrate:         t.bitrate     || null,
+        play_count:      t.play_count  || null,
         disc_number:     t.disc_number || null,
-        rating:          t.rating || null,
+        rating:          t.rating      || null,
         mb_recording_id: t.mb_recording_id || null,
-        is_isolated:     false,
         updated_at:      new Date().toISOString(),
       });
     });
   });
 
-  // ── Morceaux isolés (top titres) ─────────────────────────────────────────────
-  (isolatedTracks || []).forEach(t => {
-    if (!t.title || !t.artist) return;
-    const an = normalizeKey(t.artist, '').replace('|||', '');
-    const tn = normalizeKey('', t.title).replace('|||', '');
-    const pk = an + '|||' + tn;
-    if (seenKeys.has(pk)) return;
-    seenKeys.add(pk);
-    rows.push({
-      artist:          t.artist,
-      album:           t.album || null,
-      title:           t.title,
-      artist_norm:     an,
-      title_norm:      tn,
-      position:        null,
-      duration:        null,
-      bitrate:         t.bitrate || null,
-      play_count:      t.playCount || null,
-      disc_number:     null,
-      rating:          t.rating || null,
-      mb_recording_id: t.mbRecordingId || null,
-      is_isolated:     true,
-      updated_at:      new Date().toISOString(),
-    });
-  });
-
   if (!rows.length) return;
   try {
-    // Remplacer toutes les entrées (DELETE + INSERT par tranches)
     await window._sb.from('musicbee_tracks').delete().neq('artist_norm', '___never___');
     for (let i = 0; i < rows.length; i += 400) {
       const { error } = await window._sb.from('musicbee_tracks').insert(rows.slice(i, i + 400));
-      if (error) { console.warn('saveMusicBeeTracks chunk error:', error.message); }
+      if (error) console.warn('saveMusicBeeTracks chunk error:', error.message);
     }
-    const albumCount    = rows.filter(r => !r.is_isolated).length;
-    const isolatedCount = rows.filter(r =>  r.is_isolated).length;
-    console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées (${albumCount} albums + ${isolatedCount} isolés)`);
+    const byFolder = rows.reduce((acc, r) => { acc[r.folder] = (acc[r.folder]||0)+1; return acc; }, {});
+    console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées`, byFolder);
   } catch(e) { console.warn('saveMusicBeeTracks:', e); }
 }
 
@@ -5259,7 +5242,7 @@ async function loadMusicBeeTracks() {
     while (true) {
       const { data, error } = await window._sb
         .from('musicbee_tracks')
-        .select('artist,album,title,artist_norm,title_norm,bitrate,play_count,rating,mb_recording_id,is_isolated')
+        .select('artist,album,title,artist_norm,title_norm,bitrate,play_count,rating,mb_recording_id,folder')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error) {
         const ignorable = ['PGRST205', '42501', 'PGRST301'];
@@ -5288,7 +5271,7 @@ async function loadMusicBeeTracks() {
         window._mbTrackKeys.add(clean  + '|||' + t.title_norm);
         window._mbTrackKeys.add(noThe  + '|||' + t.title_norm);
         // _albumTracksByKey pour renderTrackAssocList (pistes d'albums uniquement)
-        if (!t.is_isolated) {
+        if (t.folder !== 'isolated') {
           const albumKey = normalizeKey(t.artist, t.album || '');
           if (!window._albumTracksByKey[albumKey]) {
             window._albumTracksByKey[albumKey] = { artist: t.artist, album: t.album || '', tracks: [] };
@@ -5300,9 +5283,8 @@ async function loadMusicBeeTracks() {
           });
         }
       });
-      const albumCount    = all.filter(t => !t.is_isolated).length;
-      const isolatedCount = all.filter(t =>  t.is_isolated).length;
-      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés (${albumCount} albums + ${isolatedCount} isolés)`);
+      const byFolder = all.reduce((acc, t) => { acc[t.folder||'album'] = (acc[t.folder||'album']||0)+1; return acc; }, {});
+      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés`, byFolder);
       invalidateCache();
       updateNavBadges();
       if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
