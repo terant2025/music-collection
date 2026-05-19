@@ -3703,31 +3703,47 @@ async function importMusicBeeXML(input) {
         let trackArtist = artist;
         let trackTitle  = name;
 
-        // Si artiste manquant, ressemble à un chemin, ou vient d'un répertoire
-        const artistLooksLikePath = !trackArtist
+        // Artistes "génériques" MusicBee : tag vide, "music", "unknown", chemin, etc.
+        const GENERIC_ARTISTS = new Set(['music', 'unknown', 'unknown artist', 'artiste inconnu', '']);
+        const artistIsGeneric = !trackArtist
           || trackArtist.includes('\\') || trackArtist.includes('/')
-          || /^[A-Z]:\\/.test(trackArtist);
+          || /^[A-Z]:\\/.test(trackArtist)
+          || GENERIC_ARTISTS.has(trackArtist.toLowerCase().trim());
 
-        if (artistLooksLikePath) {
-          // Essayer de parser "Artiste - Titre" ou "Artiste - Titre (Année)" depuis Name
-          const m = name.match(/^(.+?)\s+[-–]\s+(.+?)(?:\s*\(\d{4}\))?$/);
-          if (m) {
-            trackArtist = m[1].trim();
-            trackTitle  = m[2].trim();
+        if (artistIsGeneric) {
+          // 1. Essayer de parser "Artiste - Titre" depuis Name (avec date ISO optionnelle)
+          //    ex: "Laura Veirs - Autumn Song (2022-07-08)" ou "Laura Veirs - Autumn Song"
+          const mName = name.match(/^(.+?)\s+[-–]\s+(.+?)(?:\s*\(\d{4}(?:-\d{2}-\d{2})?\))?$/);
+          if (mName) {
+            trackArtist = mName[1].trim();
+            trackTitle  = mName[2].trim();
           } else {
-            // Essayer depuis le chemin : .../top titres/Artiste/fichier
+            // 2. Fallback : chemin .../top titres/Artiste/fichier
             const pathParts = decodeURIComponent(location).replace(/\\/g, '/').split('/');
             const topIdx = pathParts.findIndex(p => /top.?ti/i.test(p));
-            if (topIdx >= 0 && pathParts[topIdx + 1]) trackArtist = pathParts[topIdx + 1];
+            if (topIdx >= 0 && pathParts[topIdx + 1]) {
+              trackArtist = pathParts[topIdx + 1];
+            }
           }
         }
-        // Nettoyer l'année en fin de titre
-        trackTitle = trackTitle.replace(/\s*\(\d{4}\)\s*$/, '').trim();
-        // Nettoyer artiste Discogs (N)
+
+        // Nettoyer date ISO en fin de titre : "(2022-07-08)" ou "(2022)"
+        trackTitle = trackTitle
+          .replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/, '')
+          .replace(/\s*\(\d{4}\)\s*$/, '')
+          .trim();
+        // Nettoyer artiste style Discogs "(N)"
         trackArtist = cleanDiscogsArtist(trackArtist);
 
         if (!trackTitle) return;
-        isolatedTracks.push({ title: trackTitle, artist: trackArtist, album, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre', rating });
+        const mbRecordingId = str(d, 'MBID Track') || str(d, 'MusicBrainz Track Id') || null;
+        isolatedTracks.push({
+          title: trackTitle, artist: trackArtist, album,
+          format: flac ? 'flac' : mp3 ? 'mp3' : 'autre',
+          rating, mbRecordingId,
+          bitrate: num(d, 'Bit Rate') || null,
+          playCount: num(d, 'Play Count') || null,
+        });
       } else {
         // Album normal
         if (!album) return;
@@ -3818,7 +3834,8 @@ async function importMusicBeeXML(input) {
           const key = normalizeKey(t.artist, t.title);
           return {
             id: uid(), title: t.title, artist: t.artist, album: t.album,
-            format: t.format, duration: '', note: existingTrackNotes[key] || t.rating || 0
+            format: t.format, duration: '', note: existingTrackNotes[key] || t.rating || 0,
+            mb_recording_id: t.mbRecordingId || undefined,
           };
         })
     ];
@@ -3855,7 +3872,7 @@ async function importMusicBeeXML(input) {
     if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support détectés (non supprimés)`);
 
 window._skipLoadAlbumTracks = true;
-    const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr);
+    const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracks);
     console.log(`importMusicBeeTracklists résultat : ${tlCount} albums`);
     setTimeout(() => { window._skipLoadAlbumTracks = false; }, 10000);
 
@@ -5024,7 +5041,7 @@ async function fetchAllTracklists(onlyMissing = true) {
   renderDiscographie();
 }
 
-function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
+function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksArg) {
   // ── Collecter toutes les pistes album depuis le XML ──────────────────────────
   // Stratégie : stocker DIRECTEMENT dans musicbee_tracks (Supabase) indexé par
   // (artist_norm, title_norm). Pas de dépendance au matching albums[].
@@ -5063,6 +5080,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
       composer:        str(d, 'Composer')    || null,
       mb_recording_id: str(d, 'MBID Track')  || str(d, 'MusicBrainz Track Id') || null,
       disc_number:     num(d, 'Disc Number') || null,
+      rating:          (() => { const r = num(d, 'Rating'); return r ? Math.round(r / 20) : 0; })(),
     });
   });
 
@@ -5092,7 +5110,16 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
       if (noThe !== artist) window._mbTrackKeys.add(normalizeKey(noThe, t.title));
     });
   });
-  console.log(`_mbTrackKeys : ${window._mbTrackKeys.size} pistes MusicBee indexées (${Object.keys(byKey).length} albums)`);
+  // Ajouter les morceaux isolés
+  (isolatedTracksArg || []).forEach(t => {
+    if (!t.title || !t.artist) return;
+    const clean = cleanDiscogsArtist(t.artist);
+    const noThe = t.artist.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+    window._mbTrackKeys.add(normalizeKey(t.artist, t.title));
+    window._mbTrackKeys.add(normalizeKey(clean,    t.title));
+    if (noThe !== t.artist) window._mbTrackKeys.add(normalizeKey(noThe, t.title));
+  });
+  console.log(`_mbTrackKeys : ${window._mbTrackKeys.size} pistes MusicBee indexées (${Object.keys(byKey).length} albums + ${(isolatedTracksArg||[]).length} isolés)`);
 
   // ── Tenter aussi le matching albums[] pour albumTracksCache (vue Discographie) ─
   const albumIndex = new Map();
@@ -5135,7 +5162,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
   // 2. musicbee_tracks — table dédiée, indexée par (artist_norm, title_norm)
   //    Flush complet en arrière-plan
   if (window._sb) {
-    saveMusicBeeTracks(byKey);
+    saveMusicBeeTracks(byKey, isolatedTracksArg || []);
   }
 
   console.log(`importMusicBeeTracklists : ${matched} matchés dans albums[], ${unmatched} non matchés (tous indexés dans musicbee_tracks)`);
@@ -5148,33 +5175,66 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
 }
 
 // Flush toutes les pistes MusicBee vers la table musicbee_tracks (remplace le contenu entier)
-async function saveMusicBeeTracks(byKey) {
+// byKey : pistes d'albums ; isolatedTracks : morceaux isolés du dossier "top titres"
+async function saveMusicBeeTracks(byKey, isolatedTracks) {
   if (!window._sb) return;
   const rows = [];
   const seenKeys = new Set();
+
+  // ── Pistes d'albums ──────────────────────────────────────────────────────────
   Object.values(byKey).forEach(g => {
     g.tracks.forEach(t => {
       if (!t.title) return;
       const an = normalizeKey(g.artist, '').replace('|||', '');
       const tn = normalizeKey('', t.title).replace('|||', '');
       const pk = an + '|||' + tn;
-      if (seenKeys.has(pk)) return; // dédoublonner sur clé primaire
+      if (seenKeys.has(pk)) return;
       seenKeys.add(pk);
       rows.push({
-        artist:      g.artist,
-        album:       g.album,
-        title:       t.title,
-        artist_norm: an,
-        title_norm:  tn,
-        position:    t.position || null,
-        duration:    t.duration || null,
-        bitrate:     t.bitrate  || null,
-        play_count:  t.play_count || null,
-        disc_number: t.disc_number || null,
-        updated_at:  new Date().toISOString(),
+        artist:          g.artist,
+        album:           g.album,
+        title:           t.title,
+        artist_norm:     an,
+        title_norm:      tn,
+        position:        t.position || null,
+        duration:        t.duration || null,
+        bitrate:         t.bitrate  || null,
+        play_count:      t.play_count || null,
+        disc_number:     t.disc_number || null,
+        rating:          t.rating || null,
+        mb_recording_id: t.mb_recording_id || null,
+        is_isolated:     false,
+        updated_at:      new Date().toISOString(),
       });
     });
   });
+
+  // ── Morceaux isolés (top titres) ─────────────────────────────────────────────
+  (isolatedTracks || []).forEach(t => {
+    if (!t.title || !t.artist) return;
+    const an = normalizeKey(t.artist, '').replace('|||', '');
+    const tn = normalizeKey('', t.title).replace('|||', '');
+    const pk = an + '|||' + tn;
+    if (seenKeys.has(pk)) return;
+    seenKeys.add(pk);
+    rows.push({
+      artist:          t.artist,
+      album:           t.album || null,
+      title:           t.title,
+      artist_norm:     an,
+      title_norm:      tn,
+      position:        null,
+      duration:        null,
+      bitrate:         t.bitrate || null,
+      play_count:      t.playCount || null,
+      disc_number:     null,
+      rating:          t.rating || null,
+      mb_recording_id: t.mbRecordingId || null,
+      is_isolated:     true,
+      updated_at:      new Date().toISOString(),
+    });
+  });
+
   if (!rows.length) return;
   try {
     // Remplacer toutes les entrées (DELETE + INSERT par tranches)
@@ -5183,7 +5243,9 @@ async function saveMusicBeeTracks(byKey) {
       const { error } = await window._sb.from('musicbee_tracks').insert(rows.slice(i, i + 400));
       if (error) { console.warn('saveMusicBeeTracks chunk error:', error.message); }
     }
-    console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées`);
+    const albumCount    = rows.filter(r => !r.is_isolated).length;
+    const isolatedCount = rows.filter(r =>  r.is_isolated).length;
+    console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées (${albumCount} albums + ${isolatedCount} isolés)`);
   } catch(e) { console.warn('saveMusicBeeTracks:', e); }
 }
 
@@ -5197,7 +5259,7 @@ async function loadMusicBeeTracks() {
     while (true) {
       const { data, error } = await window._sb
         .from('musicbee_tracks')
-        .select('artist,album,title,artist_norm,title_norm')
+        .select('artist,album,title,artist_norm,title_norm,bitrate,play_count,rating,mb_recording_id,is_isolated')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error) {
         const ignorable = ['PGRST205', '42501', 'PGRST301'];
@@ -5215,27 +5277,32 @@ async function loadMusicBeeTracks() {
     }
     if (all.length) {
       window._mbTrackKeys = new Set();
-      // Aussi reconstruire _albumTracksByKey pour la vue Discographie
       window._albumTracksByKey = window._albumTracksByKey || {};
       all.forEach(t => {
         // Clé normalisée directe (stockée en DB)
         window._mbTrackKeys.add(t.artist_norm + '|||' + t.title_norm);
-        // Variantes pour le matching : artiste nettoyé, sans The/A
-        const clean  = normalizeKey(cleanDiscogsArtist(t.artist), '').replace('|||', '');
-        const noThe  = (t.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').toLowerCase()
-                        .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim();
-        window._mbTrackKeys.add(clean   + '|||' + t.title_norm);
-        window._mbTrackKeys.add(noThe   + '|||' + t.title_norm);
-        // _albumTracksByKey pour renderTrackAssocList
-        const albumKey = normalizeKey(t.artist, t.album);
-        if (!window._albumTracksByKey[albumKey]) {
-          window._albumTracksByKey[albumKey] = { artist: t.artist, album: t.album, tracks: [] };
+        // Variantes artiste nettoyé et sans The/A
+        const clean = normalizeKey(cleanDiscogsArtist(t.artist), '').replace('|||', '');
+        const noThe = (t.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').toLowerCase()
+                      .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim();
+        window._mbTrackKeys.add(clean  + '|||' + t.title_norm);
+        window._mbTrackKeys.add(noThe  + '|||' + t.title_norm);
+        // _albumTracksByKey pour renderTrackAssocList (pistes d'albums uniquement)
+        if (!t.is_isolated) {
+          const albumKey = normalizeKey(t.artist, t.album || '');
+          if (!window._albumTracksByKey[albumKey]) {
+            window._albumTracksByKey[albumKey] = { artist: t.artist, album: t.album || '', tracks: [] };
+          }
+          window._albumTracksByKey[albumKey].tracks.push({
+            title: t.title, source: 'musicbee',
+            bitrate: t.bitrate, play_count: t.play_count,
+            rating: t.rating, mb_recording_id: t.mb_recording_id,
+          });
         }
-        window._albumTracksByKey[albumKey].tracks.push({
-          title: t.title, source: 'musicbee', bitrate: t.bitrate, play_count: t.play_count
-        });
       });
-      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés normalisées`);
+      const albumCount    = all.filter(t => !t.is_isolated).length;
+      const isolatedCount = all.filter(t =>  t.is_isolated).length;
+      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés (${albumCount} albums + ${isolatedCount} isolés)`);
       invalidateCache();
       updateNavBadges();
       if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
