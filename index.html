@@ -1987,6 +1987,8 @@ async function loadFromSupabase() {
     setTimeout(() => updateLastSyncLabel(), 100);
     // Charger les tracklists en arrière-plan
     loadAlbumTracks();
+    // Charger musicbee_tracks (source canonique pour computeMissingTracks)
+    loadMusicBeeTracks();
     // Lancer la récupération automatique des pochettes (délai 3s pour laisser le reste charger)
     setTimeout(() => fetchMissingCovers(), 3000);
     nextId = Math.max(nextId, ...albums.map(a => a.id || 0), ...tracks.map(t => t.id || 0)) + 1;
@@ -2864,85 +2866,64 @@ function applyLastfmAssoc(albumId) {
 
 function computeMissingTracks() {
   if (_cache.missingTracks) return _cache.missingTracks;
-  // Ne pas mettre en cache si lastfm_tracks pas encore chargé — évite de bloquer sur []
   if (!Object.keys(_lastfmTrackCounts).length) return [];
 
-  // 1. Morceaux isolés possédés
-  const ownedTracks = new Set(
-    tracks.map(t => normalizeKey(t.artist, t.title))
-  );
+  // 1. Morceaux isolés possédés (tracks[])
+  const ownedIsolated = new Set(tracks.map(t => normalizeKey(t.artist, t.title)));
 
-// 2. Pistes des albums (albumTracksCache par id + _albumTracksByKey par clé normalisée)
-  const ownedAlbumTracks = new Set();
+  // 2. Pistes album MusicBee — source canonique : window._mbTrackKeys
+  //    (Set peuplé soit par l'import XML, soit par loadMusicBeeTracks depuis Supabase)
+  const mbKeys = window._mbTrackKeys || new Set();
 
-  // Via albumTracksCache (matchés par id)
-  albums.forEach(a => {
-    const albumTracks = albumTracksCache[a.id] || [];
-    albumTracks.forEach(t => {
-      if (!t.title) return;
-      ownedAlbumTracks.add(normalizeKey(a.artist, t.title));
-      ownedAlbumTracks.add(normalizeKey(cleanDiscogsArtist(a.artist), t.title));
-      const withoutThe = (a.artist || '').replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-      if (withoutThe !== a.artist) ownedAlbumTracks.add(normalizeKey(withoutThe, t.title));
-    });
-  });
-
-  // Via _albumTracksByKey (tous les albums MusicBee, même non matchés)
-  if (window._albumTracksByKey) {
-    Object.values(window._albumTracksByKey).forEach(g => {
-      g.tracks.forEach(t => {
+  // Fallback : si _mbTrackKeys vide, utiliser albumTracksCache / _albumTracksByKey
+  // (compatibilité si musicbee_tracks n'existe pas encore en Supabase)
+  const fallbackKeys = new Set();
+  if (!mbKeys.size) {
+    albums.forEach(a => {
+      (albumTracksCache[a.id] || []).forEach(t => {
         if (!t.title) return;
-        ownedAlbumTracks.add(normalizeKey(g.artist, t.title));
-        ownedAlbumTracks.add(normalizeKey(cleanDiscogsArtist(g.artist), t.title));
-        const withoutThe = (g.artist || '').replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-        if (withoutThe !== g.artist) ownedAlbumTracks.add(normalizeKey(withoutThe, t.title));
+        fallbackKeys.add(normalizeKey(a.artist, t.title));
+        fallbackKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), t.title));
+        const no = (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+        if (no !== a.artist) fallbackKeys.add(normalizeKey(no, t.title));
       });
     });
+    if (window._albumTracksByKey) {
+      Object.values(window._albumTracksByKey).forEach(g => {
+        g.tracks.forEach(t => {
+          if (!t.title) return;
+          fallbackKeys.add(normalizeKey(g.artist, t.title));
+          fallbackKeys.add(normalizeKey(cleanDiscogsArtist(g.artist), t.title));
+          const no = (g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+          if (no !== g.artist) fallbackKeys.add(normalizeKey(no, t.title));
+        });
+      });
+    }
   }
 
-  // 3. Exclure les morceaux déjà possédés ou avec statut ignoré/associé
+  const ownedAlbumTracks = mbKeys.size ? mbKeys : fallbackKeys;
+
+  // 3. Filtrer les morceaux last.fm
   _cache.missingTracks = Object.values(_lastfmTrackCounts)
     .filter(d => {
       if (!d.plays) return false;
       const keyTrack = normalizeKey(d.artist, d.track);
-      // Statut ignoré ou associé manuellement → exclure du décompte
+      // Statut ignoré ou associé manuellement
       const st = _lastfmTrackStatus[keyTrack];
       if (st?.status === 'ignored' || st?.status === 'linked') return false;
-      // Morceau isolé possédé
-      if (ownedTracks.has(keyTrack)) return false;
-      // Dans un album : artiste last.fm + titre
-      if (ownedAlbumTracks.has(normalizeKey(d.artist, d.track))) return false;
-      // Dans un album : artiste last.fm nettoyé + titre
+      // Morceau isolé
+      if (ownedIsolated.has(keyTrack)) return false;
+      // Dans musicbee_tracks (artiste exact)
+      if (ownedAlbumTracks.has(keyTrack)) return false;
+      // Artiste nettoyé Discogs
       if (ownedAlbumTracks.has(normalizeKey(cleanDiscogsArtist(d.artist), d.track))) return false;
-      // Sans "The" au début de l'artiste last.fm
-      const withoutThe = (d.artist || '').replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-      if (withoutThe !== d.artist && ownedAlbumTracks.has(normalizeKey(withoutThe, d.track))) return false;
+      // Sans "The"/"A" en début d'artiste
+      const noThe = (d.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+      if (noThe !== d.artist && ownedAlbumTracks.has(normalizeKey(noThe, d.track))) return false;
       return true;
     })
     .sort((a, b) => b.plays - a.plays);
-	
-	// Dans computeMissingTracks(), juste avant le filter final
-const ta = 'Grandaddy';
-const tt = "He's Simple, He's Dumb, He's The Pilot";
-console.log('key cherchée:', normalizeKey(ta, tt));
-console.log('dans ownedTracks:', ownedTracks.has(normalizeKey(ta, tt)));
-console.log('dans ownedAlbumTracks:', ownedAlbumTracks.has(normalizeKey(ta, tt)));
 
-// Chercher dans albumTracksCache manuellement
-albums.filter(a => a.artist.toLowerCase().includes('grandaddy')).forEach(a => {
-  console.log('album:', a.artist, '-', a.album, '| tracks:', (albumTracksCache[a.id]||[]).length);
-  (albumTracksCache[a.id]||[]).forEach(t => {
-    if (t.title && t.title.toLowerCase().includes('simple')) {
-      console.log('  TROUVÉ:', JSON.stringify(t.title), '| key:', normalizeKey(a.artist, t.title));
-    }
-  });
-});
-
-// Chercher dans _lastfmTrackCounts
-Object.values(_lastfmTrackCounts).filter(d => d.artist.toLowerCase().includes('grandaddy') && d.track.toLowerCase().includes('simple')).forEach(d => {
-  console.log('lastfm entry:', JSON.stringify(d.artist), JSON.stringify(d.track), '| key:', normalizeKey(d.artist, d.track));
-});
-	
   return _cache.missingTracks;
 }
 
@@ -5044,6 +5025,9 @@ async function fetchAllTracklists(onlyMissing = true) {
 }
 
 function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
+  // ── Collecter toutes les pistes album depuis le XML ──────────────────────────
+  // Stratégie : stocker DIRECTEMENT dans musicbee_tracks (Supabase) indexé par
+  // (artist_norm, title_norm). Pas de dépendance au matching albums[].
   const byKey = {}; // normalizeKey(artist, album) → { artist, album, tracks[] }
 
   trackDicts.forEach(d => {
@@ -5091,12 +5075,26 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     });
   });
 
-  // Stocker dans albumTracksByKey (cache clé normalisée → pistes)
-  // accessible sans dépendre du matching albums[]
+  // ── Stocker dans _albumTracksByKey (cache en mémoire) ────────────────────────
   window._albumTracksByKey = byKey;
 
-  // Tenter aussi le matching avec albums[] pour peupler albumTracksCache par id
-  // (utile pour la sauvegarde Supabase et les vues discographie)
+  // ── Peupler _mbTrackKeys : Set des clés normalisées (artist_norm|||title_norm)
+  // C'est la source de vérité pour computeMissingTracks — aucun matching albums[]
+  window._mbTrackKeys = new Set();
+  Object.values(byKey).forEach(g => {
+    g.tracks.forEach(t => {
+      if (!t.title) return;
+      const artist = g.artist;
+      const clean  = cleanDiscogsArtist(artist);
+      const noThe  = artist.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+      window._mbTrackKeys.add(normalizeKey(artist, t.title));
+      window._mbTrackKeys.add(normalizeKey(clean,  t.title));
+      if (noThe !== artist) window._mbTrackKeys.add(normalizeKey(noThe, t.title));
+    });
+  });
+  console.log(`_mbTrackKeys : ${window._mbTrackKeys.size} pistes MusicBee indexées (${Object.keys(byKey).length} albums)`);
+
+  // ── Tenter aussi le matching albums[] pour albumTracksCache (vue Discographie) ─
   const albumIndex = new Map();
   albums.forEach(a => {
     albumIndex.set(normalizeKey(a.artist, a.album), a);
@@ -5105,22 +5103,16 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr) {
     if (withoutThe !== a.artist) albumIndex.set(normalizeKey(withoutThe, a.album), a);
     if (a.mb_release_id) albumIndex.set('mbid:' + a.mb_release_id, a);
   });
-  stockItems.forEach(s => {
-    albumIndex.set(normalizeKey(s.artist, s.album), s);
-    albumIndex.set(normalizeKey(cleanDiscogsArtist(s.artist), s.album), s);
-  });
 
   const toSave = [];
   let matched = 0, unmatched = 0;
-
   Object.values(byKey).forEach(g => {
     const gKey = normalizeKey(g.artist, g.album);
     let albumObj = albumIndex.get(gKey)
       || albumIndex.get(normalizeKey(cleanDiscogsArtist(g.artist), g.album))
       || albumIndex.get(normalizeKey((g.artist || '').replace(/^The\s+/i, '').trim(), g.album));
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
-
-if (albumObj) {
+    if (albumObj) {
       albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
         .filter(t => t.source !== 'musicbee').concat(g.tracks);
       toSave.push({ albumId: albumObj.id, tracks: g.tracks });
@@ -5130,20 +5122,127 @@ if (albumObj) {
     }
   });
 
-  // Sauvegarder en Supabase en arrière-plan (sans bloquer)
+  // ── Sauvegarder dans Supabase en arrière-plan ────────────────────────────────
+  // 1. album_tracks (inchangé — pour la vue Discographie)
   if (window._sb && toSave.length) {
     (async () => {
       for (const { albumId, tracks: tl } of toSave) {
         await saveTracklist(albumId, tl);
       }
-      console.log(`importMusicBeeTracklists : ${toSave.length} albums sauvegardés dans Supabase`);
     })();
   }
 
-  console.log(`importMusicBeeTracklists : ${matched} matchés, ${unmatched} non matchés`);
+  // 2. musicbee_tracks — table dédiée, indexée par (artist_norm, title_norm)
+  //    Flush complet en arrière-plan
+  if (window._sb) {
+    saveMusicBeeTracks(byKey);
+  }
+
+  console.log(`importMusicBeeTracklists : ${matched} matchés dans albums[], ${unmatched} non matchés (tous indexés dans musicbee_tracks)`);
   invalidateCache();
   updateNavBadges();
+  if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
+    renderMissingTracks();
+  }
   return matched;
+}
+
+// Flush toutes les pistes MusicBee vers la table musicbee_tracks (remplace le contenu entier)
+async function saveMusicBeeTracks(byKey) {
+  if (!window._sb) return;
+  const rows = [];
+  const seenKeys = new Set();
+  Object.values(byKey).forEach(g => {
+    g.tracks.forEach(t => {
+      if (!t.title) return;
+      const an = normalizeKey(g.artist, '').replace('|||', '');
+      const tn = normalizeKey('', t.title).replace('|||', '');
+      const pk = an + '|||' + tn;
+      if (seenKeys.has(pk)) return; // dédoublonner sur clé primaire
+      seenKeys.add(pk);
+      rows.push({
+        artist:      g.artist,
+        album:       g.album,
+        title:       t.title,
+        artist_norm: an,
+        title_norm:  tn,
+        position:    t.position || null,
+        duration:    t.duration || null,
+        bitrate:     t.bitrate  || null,
+        play_count:  t.play_count || null,
+        disc_number: t.disc_number || null,
+        updated_at:  new Date().toISOString(),
+      });
+    });
+  });
+  if (!rows.length) return;
+  try {
+    // Remplacer toutes les entrées (DELETE + INSERT par tranches)
+    await window._sb.from('musicbee_tracks').delete().neq('artist_norm', '___never___');
+    for (let i = 0; i < rows.length; i += 400) {
+      const { error } = await window._sb.from('musicbee_tracks').insert(rows.slice(i, i + 400));
+      if (error) { console.warn('saveMusicBeeTracks chunk error:', error.message); }
+    }
+    console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées`);
+  } catch(e) { console.warn('saveMusicBeeTracks:', e); }
+}
+
+// Charger musicbee_tracks depuis Supabase au démarrage → peuple window._mbTrackKeys
+async function loadMusicBeeTracks() {
+  if (!window._sb) return;
+  // Ne pas recharger si déjà peuplé par un import XML récent
+  if (window._mbTrackKeys && window._mbTrackKeys.size > 0) return;
+  try {
+    let all = [], page = 0;
+    while (true) {
+      const { data, error } = await window._sb
+        .from('musicbee_tracks')
+        .select('artist,album,title,artist_norm,title_norm')
+        .range(page * 1000, (page + 1) * 1000 - 1);
+      if (error) {
+        const ignorable = ['PGRST205', '42501', 'PGRST301'];
+        if (ignorable.includes(error.code) || error.message?.includes('does not exist')) {
+          console.info('musicbee_tracks : table absente — créez-la via le SQL fourni');
+        } else {
+          console.warn('loadMusicBeeTracks:', error);
+        }
+        break;
+      }
+      if (!data || !data.length) break;
+      all = all.concat(data);
+      if (data.length < 1000) break;
+      page++;
+    }
+    if (all.length) {
+      window._mbTrackKeys = new Set();
+      // Aussi reconstruire _albumTracksByKey pour la vue Discographie
+      window._albumTracksByKey = window._albumTracksByKey || {};
+      all.forEach(t => {
+        // Clé normalisée directe (stockée en DB)
+        window._mbTrackKeys.add(t.artist_norm + '|||' + t.title_norm);
+        // Variantes pour le matching : artiste nettoyé, sans The/A
+        const clean  = normalizeKey(cleanDiscogsArtist(t.artist), '').replace('|||', '');
+        const noThe  = (t.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').toLowerCase()
+                        .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim();
+        window._mbTrackKeys.add(clean   + '|||' + t.title_norm);
+        window._mbTrackKeys.add(noThe   + '|||' + t.title_norm);
+        // _albumTracksByKey pour renderTrackAssocList
+        const albumKey = normalizeKey(t.artist, t.album);
+        if (!window._albumTracksByKey[albumKey]) {
+          window._albumTracksByKey[albumKey] = { artist: t.artist, album: t.album, tracks: [] };
+        }
+        window._albumTracksByKey[albumKey].tracks.push({
+          title: t.title, source: 'musicbee', bitrate: t.bitrate, play_count: t.play_count
+        });
+      });
+      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés normalisées`);
+      invalidateCache();
+      updateNavBadges();
+      if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
+        renderMissingTracks();
+      }
+    }
+  } catch(e) { console.warn('loadMusicBeeTracks:', e); }
 }
 
 // Charger les tracklists depuis Supabase au démarrage
