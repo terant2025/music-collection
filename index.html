@@ -2025,7 +2025,7 @@ async function loadLastfmFromSupabase() {
         let trackAll = [], tp = 0;
         while (true) {
           const { data, error } = await window._sb
-            .from('lastfm_tracks').select('artist,track,album,plays')
+			.from('lastfm_tracks').select('artist,track,album,plays,recording_mbid')
             .range(tp * pageSize, (tp + 1) * pageSize - 1);
           // 404 / PGRST205 = table inexistante → arrêter sans erreur
           if (error) {
@@ -2045,7 +2045,7 @@ async function loadLastfmFromSupabase() {
           _lastfmTrackCounts = {};
           trackAll.forEach(d => {
             const kt = normalizeKey(d.artist, d.track) + '|' + normalizeKey('', d.album || '');
-            _lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays };
+			_lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays, recording_mbid: d.recording_mbid || null };
           });
           console.log(`lastfm_tracks chargés : ${trackAll.length} morceaux`);
           // Invalider le cache et mettre à jour les onglets qui dépendent des tracks
@@ -2904,24 +2904,25 @@ function computeMissingTracks() {
   const ownedAlbumTracks = mbKeys.size ? mbKeys : fallbackKeys;
 
   // 3. Filtrer les morceaux last.fm
-  _cache.missingTracks = Object.values(_lastfmTrackCounts)
-    .filter(d => {
-      if (!d.plays) return false;
-      const keyTrack = normalizeKey(d.artist, d.track);
-      // Statut ignoré ou associé manuellement
-      const st = _lastfmTrackStatus[keyTrack];
-      if (st?.status === 'ignored' || st?.status === 'linked') return false;
-      // Morceau isolé
-      if (ownedIsolated.has(keyTrack)) return false;
-      // Dans musicbee_tracks (artiste exact)
-      if (ownedAlbumTracks.has(keyTrack)) return false;
-      // Artiste nettoyé Discogs
-      if (ownedAlbumTracks.has(normalizeKey(cleanDiscogsArtist(d.artist), d.track))) return false;
-      // Sans "The"/"A" en début d'artiste
-      const noThe = (d.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
-      if (noThe !== d.artist && ownedAlbumTracks.has(normalizeKey(noThe, d.track))) return false;
-      return true;
-    })
+  const mbRecordingIds = window._mbRecordingIds || new Set();
+
+	_cache.missingTracks = Object.values(_lastfmTrackCounts)
+	.filter(d => {
+    if (!d.plays) return false;
+    const keyTrack = normalizeKey(d.artist, d.track);
+    const st = _lastfmTrackStatus[keyTrack];
+    if (st?.status === 'ignored' || st?.status === 'linked') return false;
+    // Priorité 1 : matching MBID
+    if (d.recording_mbid && mbRecordingIds.has(d.recording_mbid)) return false;
+    // Priorité 2 : matching normalizeKey (morceaux isolés)
+    if (ownedIsolated.has(keyTrack)) return false;
+    // Priorité 3 : matching normalizeKey (pistes albums)
+    if (ownedAlbumTracks.has(keyTrack)) return false;
+    if (ownedAlbumTracks.has(normalizeKey(cleanDiscogsArtist(d.artist), d.track))) return false;
+    const noThe = (d.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+    if (noThe !== d.artist && ownedAlbumTracks.has(normalizeKey(noThe, d.track))) return false;
+    return true;
+  })
     .sort((a, b) => b.plays - a.plays);
 
   return _cache.missingTracks;
@@ -4417,15 +4418,17 @@ async function startTrackSync() {
         : [data.recenttracks.track];
 
       tracks.forEach(t => {
-        if (t['@attr']?.nowplaying) return;
-        const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
-        const track  = String(t.name || '').trim();
-        const album  = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
-        if (!artist || !track) return;
-        const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-        if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
-        _lastfmTrackCounts[kt].plays++;
-      });
+		if (t['@attr']?.nowplaying) return;
+		const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+		const track  = String(t.name || '').trim();
+		const album  = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
+		if (!artist || !track) return;
+		const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+		if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
+		_lastfmTrackCounts[kt].plays++;
+		const recMbid = t.mbid_mapping?.recording_mbid || t.additional_info?.recording_mbid || null;
+		if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) _lastfmTrackCounts[kt].recording_mbid = recMbid;
+		});
 
       const pct = Math.round((page / totalPages) * 100);
       bar.style.width = pct + '%';
@@ -4646,9 +4649,10 @@ async function flushTrackCountsToSupabase() {
   if (!window._sb || !Object.keys(_lastfmTrackCounts).length) return;
   try {
     const rows = Object.values(_lastfmTrackCounts).map(d => ({
-      artist: d.artist, track: d.track, album: d.album || '',
-      plays: d.plays, updated_at: new Date().toISOString()
-    }));
+		artist: d.artist, track: d.track, album: d.album || '',
+		plays: d.plays, recording_mbid: d.recording_mbid || null,
+		updated_at: new Date().toISOString()
+		}));
     // Upsert par tranches de 400 — clé (artist, track, album)
     for (let i = 0; i < rows.length; i += 400) {
       const { error } = await window._sb.from('lastfm_tracks')
@@ -4740,10 +4744,12 @@ async function fetchLastfmPage(page) {
         }
         // Index morceaux (track + album)
         if (track) {
-          const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
-          _lastfmTrackCounts[kt].plays++;
-        }
+		const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+		if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
+		_lastfmTrackCounts[kt].plays++;
+		const recMbid = t.mbid_mapping?.recording_mbid || t.additional_info?.recording_mbid || null;
+		if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) _lastfmTrackCounts[kt].recording_mbid = recMbid;
+		}
       });
 
       const pct = Math.round((currentPage / _lastfmTotalPages) * 100);
@@ -5284,7 +5290,9 @@ async function loadMusicBeeTracks() {
         }
       });
       const byFolder = all.reduce((acc, t) => { acc[t.folder||'album'] = (acc[t.folder||'album']||0)+1; return acc; }, {});
-      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés`, byFolder);
+      window._mbRecordingIds = new Set(all.filter(t => t.mb_recording_id).map(t => t.mb_recording_id));
+      console.log(`_mbRecordingIds : ${window._mbRecordingIds.size} pistes avec MBID`);
+	  console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés`, byFolder);
       invalidateCache();
       updateNavBadges();
       if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
