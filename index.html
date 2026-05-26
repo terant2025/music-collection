@@ -1566,7 +1566,8 @@ input[type="file"] { display: none; }
     <div id="track-assoc-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:13px"></div>
     <div class="form-row">
       <label>Rechercher dans toute la collection</label>
-      <input type="text" id="track-assoc-search" placeholder="Artiste ou titre…" oninput="renderTrackAssocList()">
+      <input type="text" id="track-assoc-search" placeholder="Tapez artiste ou titre pour chercher…" oninput="renderTrackAssocList()">
+      <div id="track-assoc-hint" style="font-size:11px;color:var(--text3);margin-top:4px">Les morceaux des albums apparaissent dès que vous tapez.</div>
     </div>
     <div id="track-assoc-list" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
     <div class="modal-footer">
@@ -2568,6 +2569,8 @@ function invalidateCache() {
   // Réinitialiser aussi les renders debounces pour forcer le recalcul immédiat
   // si une mutation se produit (ex: import XML recharge albumTracksCache)
   delete _debouncedRenders['allTracks'];
+  // Invalider l'index albums de renderTrackAssocList
+  if (typeof renderTrackAssocList !== 'undefined') delete renderTrackAssocList._albumIndex;
 }
 
 // Debounce : attend `delay` ms d'inactivité avant d'appeler fn
@@ -3065,48 +3068,98 @@ function openTrackAssocModal(idx) {
 
 function renderTrackAssocList() {
   const q = (document.getElementById('track-assoc-search').value || '').toLowerCase().trim();
+  const el = document.getElementById('track-assoc-list');
   const fmtBadge = { flac:'badge-flac', mp3:'badge-mp3', aac:'badge-digital', autre:'badge-digital' };
   const candidates = [];
 
+  // Sans saisie : afficher uniquement les morceaux isolés (rapide) avec un message d'invite
+  if (!q) {
+    tracks.forEach(t => candidates.push({ type:'isolated', id:t.id, title:t.title, artist:t.artist, album:t.album||'', format:t.format }));
+    // Trier par pertinence si une cible est définie
+    if (_trackAssocTarget) {
+      const tArtist = normalizeKey(_trackAssocTarget.artist, '');
+      const tTitle  = normalizeKey('', _trackAssocTarget.track);
+      candidates.sort((a, b) => {
+        const sA = (normalizeKey('', a.title) === tTitle ? 4 : 0) + (normalizeKey(a.artist,'') === tArtist ? 2 : 0);
+        const sB = (normalizeKey('', b.title) === tTitle ? 4 : 0) + (normalizeKey(b.artist,'') === tArtist ? 2 : 0);
+        return sB - sA;
+      });
+    }
+    const slice = candidates.slice(0, 40);
+    renderTrackAssocList._candidates = slice;
+    const hint = candidates.length
+      ? `<div style="font-size:11px;color:var(--text3);padding:6px 4px;margin-bottom:4px">Morceaux isolés uniquement — tapez pour chercher aussi dans les albums (${(window._mbTrackKeys?.size||0).toLocaleString('fr-FR')} pistes)</div>`
+      : '';
+    el.innerHTML = hint + (slice.length ? '' : '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun morceau isolé</div>');
+    if (slice.length) {
+      el.innerHTML = hint + slice.map((t, i) => {
+        const srcLabel = `<span class="badge ${fmtBadge[t.format]||'badge-digital'}" style="font-size:9px">${(t.format||'?').toUpperCase()}</span>`;
+        return `<div data-assoc-idx="${i}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);cursor:pointer;border:1px solid var(--border)">
+          <div style="flex:1;min-width:0;pointer-events:none">
+            <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
+            <div style="font-size:11px;color:var(--text2)">${esc(t.artist)}</div>
+          </div>${srcLabel}</div>`;
+      }).join('');
+      el.onclick = (e) => {
+        const row = e.target.closest('[data-assoc-idx]');
+        if (!row) return;
+        const t = renderTrackAssocList._candidates?.[parseInt(row.dataset.assocIdx)];
+        if (t) applyTrackAssoc('isolated', t.id, '');
+      };
+    }
+    return;
+  }
+
   // 1. Morceaux isolés
   tracks.forEach(t => {
-    if (!q || (t.artist + ' ' + t.title).toLowerCase().includes(q))
+    if ((t.artist + ' ' + t.title).toLowerCase().includes(q))
       candidates.push({ type:'isolated', id:t.id, title:t.title, artist:t.artist, album:t.album||'', format:t.format });
   });
 
-  // 2. Pistes des albums — d'abord depuis _albumTracksByKey (musicbee_tracks, source canonique)
+  // 2. Pistes des albums — uniquement si une recherche est saisie (sinon trop lent à 194k pistes)
   const seenKey = new Set();
-  // Source 1 : _albumTracksByKey peuplé par loadMusicBeeTracks / importMusicBeeTracklists
-  if (window._albumTracksByKey) {
-    Object.values(window._albumTracksByKey).forEach(g => {
-      const albumObj = albums.find(a =>
-        normalizeKey(a.artist, a.album) === normalizeKey(g.artist, g.album) ||
-        normalizeKey(cleanDiscogsArtist(a.artist), a.album) === normalizeKey(g.artist, g.album)
-      );
-      g.tracks.forEach(t => {
+  if (q) {
+    // Index albums O(1) — construit une seule fois
+    if (!renderTrackAssocList._albumIndex) {
+      renderTrackAssocList._albumIndex = new Map();
+      albums.forEach(a => {
+        renderTrackAssocList._albumIndex.set(normalizeKey(a.artist, a.album), a);
+        renderTrackAssocList._albumIndex.set(normalizeKey(cleanDiscogsArtist(a.artist), a.album), a);
+      });
+    }
+    const albumIndex = renderTrackAssocList._albumIndex;
+
+    // Source 1 : _albumTracksByKey (musicbee_tracks — couvre tous les dossiers)
+    if (window._albumTracksByKey) {
+      Object.values(window._albumTracksByKey).forEach(g => {
+        // Pré-filtrer au niveau de l'album pour éviter d'itérer toutes les pistes
+        const albumMatch = (g.artist + ' ' + g.album).toLowerCase().includes(q);
+        g.tracks.forEach(t => {
+          if (!t.title) return;
+          if (!albumMatch && !t.title.toLowerCase().includes(q)) return;
+          const dk = normalizeKey(g.artist, t.title);
+          if (seenKey.has(dk)) return;
+          seenKey.add(dk);
+          const albumObj = albumIndex.get(normalizeKey(g.artist, g.album));
+          candidates.push({ type:'album', albumId: albumObj?.id || null, title:t.title, artist:g.artist, album:g.album, format:'musicbee' });
+        });
+      });
+    }
+    // Source 2 : albumTracksCache — complément (Discogs/MB) pour les albums sans MusicBee
+    albums.forEach(a => {
+      const atracks = albumTracksCache[a.id] || [];
+      const mbT = atracks.filter(t => t.source === 'musicbee');
+      const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
+      useT.forEach(t => {
         if (!t.title) return;
-        const dk = normalizeKey(g.artist, t.title);
+        const dk = normalizeKey(a.artist, t.title);
         if (seenKey.has(dk)) return;
         seenKey.add(dk);
-        if (!q || (g.artist + ' ' + t.title + ' ' + g.album).toLowerCase().includes(q))
-          candidates.push({ type:'album', albumId: albumObj?.id || null, title:t.title, artist:g.artist, album:g.album, format:'musicbee' });
+        if ((a.artist + ' ' + t.title + ' ' + a.album).toLowerCase().includes(q))
+          candidates.push({ type:'album', albumId:a.id, title:t.title, artist:a.artist, album:a.album, format: a.flac?'flac':a.mp3?'mp3':'digital' });
       });
     });
   }
-  // Source 2 : albumTracksCache (tracklists Discogs/MB) — complément pour les albums sans MusicBee
-  albums.forEach(a => {
-    const atracks = albumTracksCache[a.id] || [];
-    const mbT = atracks.filter(t => t.source === 'musicbee');
-    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
-    useT.forEach(t => {
-      if (!t.title) return;
-      const dk = normalizeKey(a.artist, t.title);
-      if (seenKey.has(dk)) return;
-      seenKey.add(dk);
-      if (!q || (a.artist + ' ' + t.title + ' ' + a.album).toLowerCase().includes(q))
-        candidates.push({ type:'album', albumId:a.id, title:t.title, artist:a.artist, album:a.album, format: a.flac?'flac':a.mp3?'mp3':'digital' });
-    });
-  });
 
   // Trier : correspondances exactes en premier
   if (_trackAssocTarget) {
@@ -3120,7 +3173,6 @@ function renderTrackAssocList() {
   }
 
   const slice = candidates.slice(0, 60);
-  const el = document.getElementById('track-assoc-list');
   if (!slice.length) {
     el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun morceau trouvé</div>';
     return;
