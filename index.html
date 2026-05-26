@@ -1217,8 +1217,7 @@ input[type="file"] { display: none; }
             <button class="btn btn-accent" onclick="connectLastfm()">🔗 Synchroniser last.fm</button>
             <button class="btn btn-sm" onclick="loadMoreLastfm()" id="btn-lastfm-more" style="display:none">⏸ Pause</button>
             <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
-			<button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Sync morceaux via last.fm">🎵 Sync last.fm</button>
-			<button class="btn btn-sm" id="btn-lb-sync" onclick="startListenBrainzSync()" title="Sync morceaux via ListenBrainz (avec MBIDs)">🎵 Sync ListenBrainz</button>
+            <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux complète</button>
           </div>
           <div class="status" id="status-lastfm"></div>
           <div id="lastfm-progress" style="margin-top:8px;display:none">
@@ -2026,7 +2025,7 @@ async function loadLastfmFromSupabase() {
         let trackAll = [], tp = 0;
         while (true) {
           const { data, error } = await window._sb
-			.from('lastfm_tracks').select('artist,track,album,plays,recording_mbid')
+            .from('lastfm_tracks').select('artist,track,album,plays')
             .range(tp * pageSize, (tp + 1) * pageSize - 1);
           // 404 / PGRST205 = table inexistante → arrêter sans erreur
           if (error) {
@@ -2046,7 +2045,7 @@ async function loadLastfmFromSupabase() {
           _lastfmTrackCounts = {};
           trackAll.forEach(d => {
             const kt = normalizeKey(d.artist, d.track) + '|' + normalizeKey('', d.album || '');
-			_lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays, recording_mbid: d.recording_mbid || null };
+            _lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays };
           });
           console.log(`lastfm_tracks chargés : ${trackAll.length} morceaux`);
           // Invalider le cache et mettre à jour les onglets qui dépendent des tracks
@@ -2566,6 +2565,8 @@ let _cache = {};
 
 function invalidateCache() {
   _cache = {};
+  _rymIndexCache = null;
+  _missingListCache = null;
   // Réinitialiser aussi les renders debounces pour forcer le recalcul immédiat
   // si une mutation se produit (ex: import XML recharge albumTracksCache)
   delete _debouncedRenders['allTracks'];
@@ -2616,6 +2617,8 @@ function getLastfmStatus(artist, album) {
   return _lastfmStatus[normalizeKey(artist, album)] || '';
 }
 
+// setLastfmStatus : API publique, utilisée en dehors des toggles de la page missing
+// Ne fait PAS de re-rendu — l'appelant est responsable de rafraîchir si nécessaire
 function setLastfmStatus(artist, album, status) {
   const k = normalizeKey(artist, album);
   if (status) _lastfmStatus[k] = status;
@@ -2632,9 +2635,6 @@ function setLastfmStatus(artist, album, status) {
       { onConflict: 'key' }
     ).then(() => {});
   }
-  invalidateCache();
-  renderMissing();
-  updateNavBadges();
 }
 
 function computeMissing() {
@@ -2700,6 +2700,59 @@ function saveToStorage() {
 
 
 
+// Cache de l'index RYM pour renderMissing (reconstruit uniquement si rymData change)
+let _rymIndexCache = null;
+function getRymIndex() {
+  if (_rymIndexCache) return _rymIndexCache;
+  _rymIndexCache = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+  return _rymIndexCache;
+}
+
+function _buildMissingCard(m, i, rymIndex) {
+  const rymEntry = rymIndex.get(normalizeKey(m.artist, m.album));
+  const rymBadge = rymEntry
+    ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
+    : '';
+  const genreBadge = m.genre
+    ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(m.genre.split(',')[0].trim())}</span>`
+    : '';
+  const st = getLastfmStatus(m.artist, m.album);
+  const stColors = { ignored:'var(--text3)', to_listen:'var(--accent)', wishlist:'var(--amber)' };
+  const stLabels = { ignored:'🚫', to_listen:'👂', wishlist:'🎯' };
+  const stBadge = st ? `<span style="font-size:11px;color:${stColors[st]}">${stLabels[st]}</span>` : '';
+  return `<div class="missing-card" style="padding:10px 14px;gap:10px;opacity:${st==='ignored'?0.5:1}" data-idx="${i}">
+    <div class="missing-info" style="min-width:0;flex:1">
+      <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
+      <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+        <span>${esc(m.artist)}</span>
+        <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span>
+        ${rymBadge}${genreBadge}
+      </div>
+    </div>
+    <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn btn-sm" onclick="associateFromMissingIdx(${i})" title="Associer">🔗</button>
+      <button class="btn btn-sm ${st==='ignored'?'btn-accent':''}" onclick="setLastfmStatusFromMissing(${i},'ignored')" title="Ignorer">🚫</button>
+      <button class="btn btn-sm ${st==='to_listen'?'btn-accent':''}" onclick="setLastfmStatusFromMissing(${i},'to_listen')" title="À écouter">👂</button>
+      <button class="btn btn-sm ${st==='wishlist'?'btn-accent':''}" onclick="setLastfmStatusWishlist(${i})" title="Wishlist">🎯</button>
+      <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋</button>
+    </div>
+  </div>`;
+}
+
+// Mise à jour partielle d'une seule card après toggle de statut
+function _updateMissingCard(idx) {
+  if (!_missingListCache) return;
+  const m = _missingListCache[idx];
+  if (!m) return;
+  const rymIndex = getRymIndex();
+  // Si le filtre statut est actif, retirer la card plutôt que de la re-rendre
+  const statusF = document.getElementById('filter-missing-status')?.value || '';
+  if (statusF) { renderMissing(); return; }
+  const el = document.querySelector(`#missing-grid [data-idx="${idx}"]`);
+  if (!el) return;
+  el.outerHTML = _buildMissingCard(m, idx, rymIndex);
+}
+
 function renderMissing() {
   const list = computeMissing();
   const q      = document.getElementById('global-search').value.toLowerCase();
@@ -2711,8 +2764,8 @@ function renderMissing() {
   const rymF   = document.getElementById('filter-missing-rym')?.value || '';
   const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
 
-  // Index RYM pour le filtre et l'affichage
-  const rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+  // Index RYM mis en cache — reconstruit uniquement si rymData change
+  const rymIndex = getRymIndex();
 
   // Remplir le select genre dynamiquement (une seule fois)
   const genreSel = document.getElementById('filter-missing-genre');
@@ -2758,37 +2811,14 @@ function renderMissing() {
     el.innerHTML = '<div class="empty"><div class="empty-icon">✅</div>Aucun manquant avec ces filtres.</div>';
     return;
   }
-  el.innerHTML = filtered.map((m, i) => {
-    const rymEntry = rymIndex.get(normalizeKey(m.artist, m.album));
-    const rymBadge = rymEntry
-      ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
-      : '';
-    const genreBadge = m.genre
-      ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(m.genre.split(',')[0].trim())}</span>`
-      : '';
-    const st = getLastfmStatus(m.artist, m.album);
-    const stColors = { ignored:'var(--text3)', to_listen:'var(--accent)', wishlist:'var(--amber)' };
-    const stLabels = { ignored:'🚫', to_listen:'👂', wishlist:'🎯' };
-    const stBadge = st ? `<span style="font-size:11px;color:${stColors[st]}">${stLabels[st]}</span>` : '';
-    return `
-    <div class="missing-card" style="padding:10px 14px;gap:10px;opacity:${st==='ignored'?0.5:1}">
-      <div class="missing-info" style="min-width:0;flex:1">
-        <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
-        <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-          <span>${esc(m.artist)}</span>
-          <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span>
-          ${rymBadge}${genreBadge}
-        </div>
-      </div>
-      <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
-        <button class="btn btn-sm" onclick="associateFromMissingIdx(${i})" title="Associer">🔗</button>
-        <button class="btn btn-sm ${st==='ignored'?'btn-accent':''}" onclick="setLastfmStatusFromMissing(${i},'ignored')" title="Ignorer">🚫</button>
-        <button class="btn btn-sm ${st==='to_listen'?'btn-accent':''}" onclick="setLastfmStatusFromMissing(${i},'to_listen')" title="À écouter">👂</button>
-        <button class="btn btn-sm ${st==='wishlist'?'btn-accent':''}" onclick="setLastfmStatusWishlist(${i})" title="Wishlist">🎯</button>
-        <button class="btn btn-sm btn-accent" onclick="addFromMissing('${encodeURIComponent(m.artist)}','${encodeURIComponent(m.album)}')">＋</button>
-      </div>
-    </div>`;
-  }).join('');
+
+  // Virtualisation : n'afficher que 150 cards max
+  const SLICE = 150;
+  const slice = filtered.slice(0, SLICE);
+  el.innerHTML = slice.map((m, i) => _buildMissingCard(m, i, rymIndex)).join('')
+    + (filtered.length > SLICE
+      ? `<div style="text-align:center;padding:16px;color:var(--text3);font-size:13px">… et ${(filtered.length - SLICE).toLocaleString('fr-FR')} autres — affinez les filtres pour en voir plus</div>`
+      : '');
 }
 
 // Cible courante de l'association last.fm
@@ -2796,23 +2826,56 @@ let _lastfmAssocTarget = null; // { artist, album } depuis lastfmData
 
 // Helper wishlist depuis missing (évite les problèmes d'encodage dans onclick)
 function setLastfmStatusWishlist(idx) {
-  const m = _missingListCache[idx];
+  const m = _missingListCache?.[idx];
   if (!m) return;
-  const k = normalizeKey(m.artist, m.album);
   const current = getLastfmStatus(m.artist, m.album);
   const newStatus = current === 'wishlist' ? '' : 'wishlist';
-  setLastfmStatus(m.artist, m.album, newStatus);
+  _applyLastfmStatus(m.artist, m.album, newStatus, idx);
 }
 
 function setLastfmStatusFromMissing(idx, status) {
-  const m = _missingListCache[idx];
+  const m = _missingListCache?.[idx];
   if (!m) return;
   const current = getLastfmStatus(m.artist, m.album);
-  setLastfmStatus(m.artist, m.album, current === status ? '' : status);
+  _applyLastfmStatus(m.artist, m.album, current === status ? '' : status, idx);
+}
+
+// Applique un statut et met à jour uniquement la card concernée (pas de re-rendu complet)
+function _applyLastfmStatus(artist, album, status, cardIdx) {
+  const k = normalizeKey(artist, album);
+  if (status) _lastfmStatus[k] = status;
+  else delete _lastfmStatus[k];
+
+  if (status === 'wishlist') {
+    const d = lastfmData.find(x => normalizeKey(x.artist, x.album) === k);
+    if (d && !wishlist.find(w => normalizeKey(w.artist, w.album) === k)) {
+      addToWishlist(d.artist, d.album, '', 'lastfm', d.plays, 0, '');
+    }
+  }
+
+  // Persistance Supabase (async, non bloquant)
+  if (window._sb) {
+    window._sb.from('meta').upsert(
+      { key: 'lastfm_status', value: JSON.stringify(_lastfmStatus) },
+      { onConflict: 'key' }
+    ).then(() => {});
+  }
+
+  // Mise à jour DOM : seulement la card touchée si pas de filtre par statut actif
+  const statusF = document.getElementById('filter-missing-status')?.value || '';
+  if (statusF) {
+    // Filtre statut actif → la card peut disparaître, re-rendu complet nécessaire
+    delete _cache.missing;
+    renderMissing();
+  } else {
+    // Pas de filtre → mise à jour chirurgicale de la card
+    _updateMissingCard(cardIdx);
+  }
+  updateNavBadges();
 }
 
 function associateFromMissingIdx(idx) {
-  const m = _missingListCache[idx];
+  const m = _missingListCache?.[idx];
   if (!m) return;
   _lastfmAssocTarget = { artist: m.artist, album: m.album };
   document.getElementById('lastfm-assoc-info').innerHTML =
@@ -2857,7 +2920,10 @@ function applyLastfmAssoc(albumId) {
   const key = normalizeKey(_lastfmAssocTarget.artist, _lastfmAssocTarget.album);
   if (!album.lastfmAliases.includes(key)) album.lastfmAliases.push(key);
   document.getElementById('modal-lastfm-assoc').classList.remove('open');
-  invalidateCache();
+  // L'association réduit la liste missing : invalider uniquement missing + re-rendre
+  delete _cache.missing;
+  delete _cache.ownedKeys;
+  _missingListCache = null;
   saveToStorage();
   renderMissing();
   updateNavBadges();
@@ -2905,25 +2971,24 @@ function computeMissingTracks() {
   const ownedAlbumTracks = mbKeys.size ? mbKeys : fallbackKeys;
 
   // 3. Filtrer les morceaux last.fm
-  const mbRecordingIds = window._mbRecordingIds || new Set();
-
-	_cache.missingTracks = Object.values(_lastfmTrackCounts)
-	.filter(d => {
-    if (!d.plays) return false;
-    const keyTrack = normalizeKey(d.artist, d.track);
-    const st = _lastfmTrackStatus[keyTrack];
-    if (st?.status === 'ignored' || st?.status === 'linked') return false;
-    // Priorité 1 : matching MBID
-    if (d.recording_mbid && mbRecordingIds.has(d.recording_mbid)) return false;
-    // Priorité 2 : matching normalizeKey (morceaux isolés)
-    if (ownedIsolated.has(keyTrack)) return false;
-    // Priorité 3 : matching normalizeKey (pistes albums)
-    if (ownedAlbumTracks.has(keyTrack)) return false;
-    if (ownedAlbumTracks.has(normalizeKey(cleanDiscogsArtist(d.artist), d.track))) return false;
-    const noThe = (d.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
-    if (noThe !== d.artist && ownedAlbumTracks.has(normalizeKey(noThe, d.track))) return false;
-    return true;
-  })
+  _cache.missingTracks = Object.values(_lastfmTrackCounts)
+    .filter(d => {
+      if (!d.plays) return false;
+      const keyTrack = normalizeKey(d.artist, d.track);
+      // Statut ignoré ou associé manuellement
+      const st = _lastfmTrackStatus[keyTrack];
+      if (st?.status === 'ignored' || st?.status === 'linked') return false;
+      // Morceau isolé
+      if (ownedIsolated.has(keyTrack)) return false;
+      // Dans musicbee_tracks (artiste exact)
+      if (ownedAlbumTracks.has(keyTrack)) return false;
+      // Artiste nettoyé Discogs
+      if (ownedAlbumTracks.has(normalizeKey(cleanDiscogsArtist(d.artist), d.track))) return false;
+      // Sans "The"/"A" en début d'artiste
+      const noThe = (d.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+      if (noThe !== d.artist && ownedAlbumTracks.has(normalizeKey(noThe, d.track))) return false;
+      return true;
+    })
     .sort((a, b) => b.plays - a.plays);
 
   return _cache.missingTracks;
@@ -3060,8 +3125,7 @@ function openTrackAssocModal(idx) {
     `<strong>last.fm :</strong> ${esc(d.track)} — ${esc(d.artist)}`
     + (d.album ? ` <span style="color:var(--text3);font-size:11px;margin-left:6px">album : ${esc(d.album)}</span>` : '')
     + ` <span style="color:var(--accent);margin-left:8px;font-family:var(--mono);font-size:12px">${d.plays} écoutes</span>`;
-  const titleWords = d.track.split(/\s+/).slice(0, 2).join(' ');
-	document.getElementById('track-assoc-search').value = titleWords;
+  document.getElementById('track-assoc-search').value = d.artist;
   renderTrackAssocList();
   document.getElementById('modal-track-assoc').classList.add('open');
 }
@@ -3115,14 +3179,13 @@ function renderTrackAssocList() {
     const srcLabel = t.type === 'isolated'
       ? `<span class="badge ${fmtBadge[t.format]||'badge-digital'}" style="font-size:9px">${(t.format||'?').toUpperCase()}</span>`
       : `<span class="badge badge-cd" style="font-size:9px;background:var(--accent-dim);color:var(--accent);border-color:rgba(200,240,100,0.2)">Album</span>`;
-    const safeTitle = JSON.stringify(t.title).replace(/"/g, '&quot;');
-	const onclick = t.type === 'isolated'
-		? `applyTrackAssoc('isolated',${t.id},'')`
-		: `applyTrackAssoc('album',${t.albumId},${safeTitle})`;
+    const onclick = t.type === 'isolated'
+      ? `applyTrackAssoc('isolated',${t.id},'')`
+      : `applyTrackAssoc('album',${t.albumId},${JSON.stringify(t.title)})`;
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);cursor:pointer;border:1px solid var(--border)" onclick="${onclick}">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
-        <div style="font-size:11px;color:var(--text2)">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
+        <div style="font-size:11px;color:var(--text2)">${esc(t.artist)}${t.album ? ' · <span style="color:var(--text3)">'+esc(t.album)+'</span>' : ''}</div>
       </div>
       ${srcLabel}
     </div>`;
@@ -4421,17 +4484,15 @@ async function startTrackSync() {
         : [data.recenttracks.track];
 
       tracks.forEach(t => {
-		if (t['@attr']?.nowplaying) return;
-		const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
-		const track  = String(t.name || '').trim();
-		const album  = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
-		if (!artist || !track) return;
-		const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-		if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
-		_lastfmTrackCounts[kt].plays++;
-		const recMbid = t.mbid_mapping?.recording_mbid || t.additional_info?.recording_mbid || null;
-		if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) _lastfmTrackCounts[kt].recording_mbid = recMbid;
-		});
+        if (t['@attr']?.nowplaying) return;
+        const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+        const track  = String(t.name || '').trim();
+        const album  = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
+        if (!artist || !track) return;
+        const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+        if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
+        _lastfmTrackCounts[kt].plays++;
+      });
 
       const pct = Math.round((page / totalPages) * 100);
       bar.style.width = pct + '%';
@@ -4489,176 +4550,6 @@ async function startTrackSync() {
     progress.style.display = 'none';
   }
 }
-
-// ===================== SYNC TRACKS VIA LISTENBRAINZ =====================
-async function startListenBrainzSync() {
-  const btn    = document.getElementById('btn-lb-sync');
-  const status = document.getElementById('status-lastfm');
-  const progress = document.getElementById('lastfm-progress');
-  const bar = document.getElementById('lastfm-bar');
-  const progressLabel = document.getElementById('lastfm-progress-label');
-
-  if (btn.dataset.running === '1') {
-    btn.dataset.running = '0';
-    btn.textContent = '🎵 Sync ListenBrainz';
-    _trackSyncAbort = true;
-    return;
-  }
-
-  if (!window._sb) {
-    status.textContent = 'Supabase non connecté.';
-    status.className = 'status err';
-    return;
-  }
-
-  const LB_USER = 'terant';
-  const LB_BASE = 'https://api.listenbrainz.org/1/user/' + LB_USER;
-  const LB_CP_KEY = 'lb_track_sync_ts';
-  const PAGE_SIZE = 1000; // max autorisé par ListenBrainz
-
-  _trackSyncAbort = false;
-  btn.dataset.running = '1';
-  btn.textContent = '⏸ Pause ListenBrainz';
-  progress.style.display = 'block';
-  bar.style.width = '0%';
-  status.textContent = 'Connexion à ListenBrainz…';
-  status.className = 'status';
-
-  try {
-    // Récupérer le total de scrobbles
-    const infoRes = await fetch(`https://api.listenbrainz.org/1/user/${LB_USER}/listen-count`);
-    const infoData = await infoRes.json();
-    const totalListens = infoData?.payload?.count || 0;
-    const totalPages = Math.ceil(totalListens / PAGE_SIZE);
-
-    // Checkpoint : reprendre depuis un max_ts sauvegardé
-    let checkpoint = null;
-    try { checkpoint = JSON.parse(localStorage.getItem(LB_CP_KEY) || 'null'); } catch(e) {}
-    let maxTs = null; // null = depuis le début (les plus récents d'abord)
-    let pagesDone = 0;
-
-    if (checkpoint && confirm(`Reprendre la sync ListenBrainz depuis le checkpoint (${checkpoint.pagesDone} pages déjà traitées) ?`)) {
-      maxTs = checkpoint.maxTs;
-      pagesDone = checkpoint.pagesDone;
-      // Restaurer les counts
-      if (checkpoint.counts) {
-        checkpoint.counts.forEach(d => {
-          const kt = normalizeKey(d.a, d.t) + '|' + normalizeKey('', d.b || '');
-          _lastfmTrackCounts[kt] = { artist: d.a, track: d.t, album: d.b || '', plays: d.p, recording_mbid: d.m || null };
-        });
-      }
-    }
-
-    status.textContent = `ListenBrainz : ${totalListens.toLocaleString('fr-FR')} écoutes, ~${totalPages} pages`;
-
-    let done = false;
-    let withMbid = 0;
-
-    while (!done && !_trackSyncAbort) {
-      let url = `${LB_BASE}/listens?count=${PAGE_SIZE}`;
-      if (maxTs) url += `&max_ts=${maxTs}`;
-
-      let data, retries = 0;
-      while (retries < 3) {
-        try {
-          const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-          if (res.status === 429) {
-            progressLabel.textContent = 'Rate limit ListenBrainz, pause 10s…';
-            await new Promise(r => setTimeout(r, 10000));
-            retries++; continue;
-          }
-          data = await res.json();
-          break;
-        } catch(e) { retries++; await new Promise(r => setTimeout(r, 3000)); }
-      }
-
-      const listens = data?.payload?.listens || [];
-      if (!listens.length) { done = true; break; }
-
-      listens.forEach(l => {
-        const meta  = l.track_metadata || {};
-        const add   = meta.additional_info || {};
-        const mbMap = meta.mbid_mapping   || {};
-
-        const artist = (meta.artist_name || '').trim();
-        const track  = (meta.track_name  || '').trim();
-        const album  = (meta.release_name || add.release_name || '').trim();
-        const recMbid = mbMap.recording_mbid || add.recording_mbid || null;
-
-        if (!artist || !track) return;
-
-        const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-        if (!_lastfmTrackCounts[kt]) {
-          _lastfmTrackCounts[kt] = { artist, track, album, plays: 0, recording_mbid: null };
-        }
-        _lastfmTrackCounts[kt].plays++;
-        if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) {
-          _lastfmTrackCounts[kt].recording_mbid = recMbid;
-          withMbid++;
-        }
-
-        // Mettre à jour maxTs pour la page suivante (ListenBrainz pagine du plus récent au plus ancien)
-        const ts = l.listened_at || 0;
-        if (!maxTs || ts < maxTs) maxTs = ts;
-      });
-
-      pagesDone++;
-      const pct = Math.min(99, Math.round(pagesDone / totalPages * 100));
-      bar.style.width = pct + '%';
-      const nT = Object.keys(_lastfmTrackCounts).length;
-      progressLabel.textContent = `Page ${pagesDone}/${totalPages} — ${nT.toLocaleString('fr-FR')} morceaux distincts — ${withMbid.toLocaleString('fr-FR')} avec MBID`;
-
-      // Checkpoint toutes les 20 pages
-      if (pagesDone % 20 === 0) {
-        const compact = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, b: d.album, p: d.plays, m: d.recording_mbid }));
-        try { localStorage.setItem(LB_CP_KEY, JSON.stringify({ maxTs, pagesDone, counts: compact, savedAt: Date.now() })); } catch(e) {}
-      }
-
-      // Flush Supabase toutes les 50 pages
-      if (pagesDone % 50 === 0) {
-        progressLabel.textContent += ' — flush Supabase…';
-        await flushTrackCountsToSupabase();
-        invalidateCache();
-        updateNavBadges();
-      }
-
-      // Délai respectueux (ListenBrainz : max 15 req/s)
-      await new Promise(r => setTimeout(r, 100));
-    }
-
-    if (!_trackSyncAbort) {
-      progressLabel.textContent = 'Flush final vers Supabase…';
-      await flushTrackCountsToSupabase();
-      localStorage.removeItem(LB_CP_KEY);
-      bar.style.width = '100%';
-      const nT = Object.keys(_lastfmTrackCounts).length;
-      const pctMbid = Math.round(withMbid / nT * 100);
-      status.textContent = `✓ ListenBrainz sync terminée — ${nT.toLocaleString('fr-FR')} morceaux — ${withMbid.toLocaleString('fr-FR')} avec MBID (${pctMbid}%)`;
-      status.className = 'status ok';
-      toast(`ListenBrainz : ${nT.toLocaleString('fr-FR')} morceaux synchronisés`);
-      invalidateCache();
-      updateNavBadges();
-      if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) renderMissingTracks();
-    } else {
-      // Flush partiel sur pause
-      await flushTrackCountsToSupabase();
-      const compact = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, b: d.album, p: d.plays, m: d.recording_mbid }));
-      try { localStorage.setItem(LB_CP_KEY, JSON.stringify({ maxTs, pagesDone, counts: compact, savedAt: Date.now() })); } catch(e) {}
-      status.textContent = `⏸ Pausé à la page ${pagesDone}/${totalPages} — données partielles sauvegardées`;
-      status.className = 'status';
-    }
-
-  } catch(e) {
-    status.textContent = 'Erreur : ' + e.message;
-    status.className = 'status err';
-    console.error('startListenBrainzSync:', e);
-  } finally {
-    btn.dataset.running = '0';
-    btn.textContent = '🎵 Sync ListenBrainz';
-    progress.style.display = 'none';
-  }
-}
-
 
 async function fetchLastfmIncremental(fromTs) {
   const status = document.getElementById('status-lastfm');
@@ -4822,10 +4713,9 @@ async function flushTrackCountsToSupabase() {
   if (!window._sb || !Object.keys(_lastfmTrackCounts).length) return;
   try {
     const rows = Object.values(_lastfmTrackCounts).map(d => ({
-		artist: d.artist, track: d.track, album: d.album || '',
-		plays: d.plays, recording_mbid: d.recording_mbid || null,
-		updated_at: new Date().toISOString()
-		}));
+      artist: d.artist, track: d.track, album: d.album || '',
+      plays: d.plays, updated_at: new Date().toISOString()
+    }));
     // Upsert par tranches de 400 — clé (artist, track, album)
     for (let i = 0; i < rows.length; i += 400) {
       const { error } = await window._sb.from('lastfm_tracks')
@@ -4917,12 +4807,10 @@ async function fetchLastfmPage(page) {
         }
         // Index morceaux (track + album)
         if (track) {
-		const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-		if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
-		_lastfmTrackCounts[kt].plays++;
-		const recMbid = t.mbid_mapping?.recording_mbid || t.additional_info?.recording_mbid || null;
-		if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) _lastfmTrackCounts[kt].recording_mbid = recMbid;
-		}
+          const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
+          _lastfmTrackCounts[kt].plays++;
+        }
       });
 
       const pct = Math.round((currentPage / _lastfmTotalPages) * 100);
@@ -5463,9 +5351,7 @@ async function loadMusicBeeTracks() {
         }
       });
       const byFolder = all.reduce((acc, t) => { acc[t.folder||'album'] = (acc[t.folder||'album']||0)+1; return acc; }, {});
-      window._mbRecordingIds = new Set(all.filter(t => t.mb_recording_id).map(t => t.mb_recording_id));
-      console.log(`_mbRecordingIds : ${window._mbRecordingIds.size} pistes avec MBID`);
-	  console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés`, byFolder);
+      console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés`, byFolder);
       invalidateCache();
       updateNavBadges();
       if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) {
@@ -6262,10 +6148,10 @@ function removeLastfmAlias(albumId, aliasIndex) {
   toast('Alias last.fm supprimé');
 }
 
-let _missingListCache = [];
+let _missingListCache = null;
 
 function addToWishlistFromMissing(idx) {
-  const m = _missingListCache[idx];
+  const m = _missingListCache?.[idx];
   if (!m) return;
   addToWishlist(m.artist, m.album, '', 'lastfm', m.plays, 0, '');
 }
