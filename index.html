@@ -3109,7 +3109,9 @@ function openTrackAssocModal(idx) {
     `<strong>last.fm :</strong> ${esc(d.track)} — ${esc(d.artist)}`
     + (d.album ? ` <span style="color:var(--text3);font-size:11px;margin-left:6px">album : ${esc(d.album)}</span>` : '')
     + ` <span style="color:var(--accent);margin-left:8px;font-family:var(--mono);font-size:12px">${d.plays} écoutes</span>`;
-  document.getElementById('track-assoc-search').value = d.artist;
+  const artistWords = (d.artist || '').trim().split(/\s+/).slice(0, 2).join(' ');
+const titleWord   = (d.track  || '').trim().split(/\s+/)[0];
+document.getElementById('track-assoc-search').value = [artistWords, titleWord].filter(Boolean).join(' ');
   renderTrackAssocList();
   document.getElementById('modal-track-assoc').classList.add('open');
 }
