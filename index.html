@@ -3110,8 +3110,8 @@ function openTrackAssocModal(idx) {
     + (d.album ? ` <span style="color:var(--text3);font-size:11px;margin-left:6px">album : ${esc(d.album)}</span>` : '')
     + ` <span style="color:var(--accent);margin-left:8px;font-family:var(--mono);font-size:12px">${d.plays} écoutes</span>`;
   const artistWords = (d.artist || '').trim().split(/\s+/).slice(0, 2).join(' ');
-  const titleWord   = (d.track  || '').trim().split(/\s+/)[0];
-  document.getElementById('track-assoc-search').value = [artistWords, titleWord].filter(Boolean).join(' ');
+const titleWord   = (d.track  || '').trim().split(/\s+/)[0];
+document.getElementById('track-assoc-search').value = [artistWords, titleWord].filter(Boolean).join(' ');
   renderTrackAssocList();
   document.getElementById('modal-track-assoc').classList.add('open');
 }
@@ -3165,9 +3165,10 @@ function renderTrackAssocList() {
     const srcLabel = t.type === 'isolated'
       ? `<span class="badge ${fmtBadge[t.format]||'badge-digital'}" style="font-size:9px">${(t.format||'?').toUpperCase()}</span>`
       : `<span class="badge badge-cd" style="font-size:9px;background:var(--accent-dim);color:var(--accent);border-color:rgba(200,240,100,0.2)">Album</span>`;
+    const safeTitle = (t.title || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const onclick = t.type === 'isolated'
       ? `applyTrackAssoc('isolated',${t.id},'')`
-      : `applyTrackAssoc('album',${t.albumId},${JSON.stringify(t.title)})`;
+      : `applyTrackAssoc('album',${t.albumId},'${safeTitle}')`;
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);cursor:pointer;border:1px solid var(--border)" onclick="${onclick}">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
