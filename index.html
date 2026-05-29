@@ -3109,7 +3109,9 @@ function openTrackAssocModal(idx) {
     `<strong>last.fm :</strong> ${esc(d.track)} — ${esc(d.artist)}`
     + (d.album ? ` <span style="color:var(--text3);font-size:11px;margin-left:6px">album : ${esc(d.album)}</span>` : '')
     + ` <span style="color:var(--accent);margin-left:8px;font-family:var(--mono);font-size:12px">${d.plays} écoutes</span>`;
-  document.getElementById('track-assoc-search').value = (d.track || '').trim();
+  const artistWords = (d.artist || '').trim().split(/\s+/).slice(0, 2).join(' ');
+const titleWord   = (d.track  || '').trim().split(/\s+/)[0];
+document.getElementById('track-assoc-search').value = [artistWords, titleWord].filter(Boolean).join(' ');
   renderTrackAssocList();
   document.getElementById('modal-track-assoc').classList.add('open');
 }
@@ -3831,10 +3833,30 @@ async function importMusicBeeXML(input) {
     let albumsAdded = 0, albumsUpdated = 0;
 
     // ── Albums numériques : merge (on ne supprime pas les CDs Discogs) ──
-    // Réinitialiser les flags numériques des albums existants issus de MusicBee
-    // avant de les remettre à jour depuis le nouveau XML
+    // Construire d'abord l'index des clés présentes dans le XML courant
+    // pour ne réinitialiser les flags QUE sur les albums effectivement retrouvés.
+    // Un reset global effacerait les flags des albums dont le nom a légèrement changé
+    // ou qui se trouvent dans !_00_stock (stockItems) — ils ne seraient jamais restaurés.
+    const xmlGroupKeys = new Set();
+    Object.values(grouped).forEach(g => {
+      if (!g.artist && !g.album) return;
+      xmlGroupKeys.add(normalizeKey(g.artist, g.album));
+      xmlGroupKeys.add(normalizeKey(cleanDiscogsArtist(g.artist), g.album));
+      const noThe = (g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim();
+      if (noThe !== g.artist) xmlGroupKeys.add(normalizeKey(noThe, g.album));
+    });
+    // Reset ciblé : seulement les albums dont on va recalculer les flags depuis le XML
     albums.forEach(a => {
-      if (!a.cd) { a.flac = false; a.mp3 = false; a.digital = false; }
+      if (a.cd) return; // les CDs Discogs ne touchent jamais leurs flags ici
+      const k1 = normalizeKey(a.artist, a.album);
+      const k2 = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
+      const noThe = (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim();
+      const k3 = normalizeKey(noThe, a.album);
+      if (xmlGroupKeys.has(k1) || xmlGroupKeys.has(k2) || xmlGroupKeys.has(k3)) {
+        a.flac = false; a.mp3 = false; a.digital = false;
+      }
+      // Sinon : on conserve les flags existants (album absent du XML = nom changé,
+      // déplacé en stock, etc.) — mieux vaut garder l'info que la perdre.
     });
 
     Object.values(grouped).forEach(g => {
@@ -3842,7 +3864,8 @@ async function importMusicBeeXML(input) {
       const key = normalizeKey(g.artist, g.album);
       const existing = albums.find(a =>
         normalizeKey(a.artist, a.album) === key ||
-        normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key
+        normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key ||
+        normalizeKey((a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim(), a.album) === key
       );
       if (existing) {
         if (g.flac)    existing.flac    = true;
@@ -3922,7 +3945,7 @@ async function importMusicBeeXML(input) {
     // Afficher seulement un avertissement
     const noSupportAlbums = albums.filter(a => !a.cd && !a.flac && !a.mp3 && !a.digital && !a.forSale && !(a.note > 0));
     const removedAlbums = 0;
-    if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support détectés (non supprimés)`);
+    if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support après import XML (flags préservés si absent du XML)`);
 
 window._skipLoadAlbumTracks = true;
     const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracks);
@@ -4965,8 +4988,16 @@ async function saveTracklist(albumId, tracks_) {
   if (!window._sb || !tracks_.length) return;
   const source = tracks_[0]?.source || 'discogs';
   // Supprimer les anciennes entrées pour cette source
-  await window._sb.from('album_tracks').delete()
-    .eq('album_id', albumId).eq('source', source);
+  // (try/catch : album_tracks peut avoir une politique RLS ou CORS restrictive)
+  try {
+    await window._sb.from('album_tracks').delete()
+      .eq('album_id', albumId).eq('source', source);
+  } catch(e) {
+    console.warn('saveTracklist delete (ignoré — vérifiez RLS sur album_tracks):', e.message || e);
+    albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
+      .filter(t => t.source !== source).concat(tracks_);
+    return;
+  }
   // Dédoublonner avant insert (évite ON CONFLICT duplicate dans le même batch)
   const seen = new Set();
   const unique = tracks_.filter(t => {
@@ -5720,30 +5751,36 @@ function buildAllTracksList() {
     });
   });
 
-  // 2. Pistes des albums en stock via index normalizeKey → albumId
-const stockTrackIndex = new Map(); // normalizeKey → stockItem
-stockItems.forEach(s => {
-  stockTrackIndex.set(normalizeKey(s.artist, s.album), s);
-  stockTrackIndex.set(normalizeKey(cleanDiscogsArtist(s.artist), s.album), s);
-});
-
-// Parcourir albumTracksCache pour les ids qui ne correspondent pas à un album[]
-const albumIds = new Set(albums.map(a => a.id));
-Object.entries(albumTracksCache).forEach(([idStr, atracks]) => {
-  const id = parseInt(idStr);
-  if (albumIds.has(id)) return; // déjà traité en section 1
-  // Retrouver le stockItem correspondant à cet id
-  const stock = stockItems.find(s => s.id === id);
-  if (!stock) return;
-  const mbT = atracks.filter(t => t.source === 'musicbee');
-  const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
-  useT.forEach(t => {
-    result.push({ title: t.title, artist: stock.artist, album: stock.album, albumId: id,
-      source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
-      inStock: true });
-    if (t.source === 'musicbee') mbCount++;
-  });
-});
+  // 2. Pistes des albums en stock via _albumTracksByKey (keyed by normalizeKey stable)
+  // On NE PAS utiliser albumTracksCache[stockItem.id] car les IDs stock sont régénérés
+  // via uid() à chaque import XML — la liaison par ID est donc systématiquement cassée.
+  // _albumTracksByKey est peuplé soit depuis le XML import (importMusicBeeTracklists),
+  // soit depuis loadMusicBeeTracks (table musicbee_tracks Supabase) — clé toujours valide.
+  const stockKeys = getStockKeysSet();
+  const albumNormKeys = new Set(albums.map(a => normalizeKey(a.artist, a.album)));
+  if (window._albumTracksByKey) {
+    Object.values(window._albumTracksByKey).forEach(g => {
+      const gKey = normalizeKey(g.artist, g.album || '');
+      // Inclure seulement si c'est un album stock ET pas déjà dans section 1 (albums[])
+      if (!stockKeys.has(gKey)) return;
+      if (albumNormKeys.has(gKey)) return;
+      const stockItem = stockItems.find(s => normalizeKey(s.artist, s.album) === gKey);
+      // Filtrer les pistes musicbee en priorité
+      const mbT = (g.tracks || []).filter(t => !t.source || t.source === 'musicbee');
+      const useT = mbT.length ? mbT : (g.tracks || []);
+      useT.forEach(t => {
+        if (!t.title) return;
+        result.push({
+          title: t.title, artist: g.artist, album: g.album || '',
+          albumId: stockItem?.id || null,
+          source: 'musicbee', bitrate: t.bitrate || null,
+          duration: t.duration || null, play_count: t.play_count || null,
+          inStock: true,
+        });
+        mbCount++;
+      });
+    });
+  }
 
   // 3. Morceaux isolés
   tracks.forEach(t => {
