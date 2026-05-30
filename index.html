@@ -609,35 +609,53 @@ input[type="file"] { display: none; }
       </div>
 
       <div class="toolbar">
-        <input id="filter-artist" type="text" placeholder="Artiste…" oninput="currentPage=1;renderAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:140px" />
-        <input id="filter-album" type="text" placeholder="Album…" oninput="currentPage=1;renderAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:140px" />
+        <input id="filter-artist" type="text" placeholder="Artiste…" oninput="currentPage=1;renderAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px" />
+        <input id="filter-album" type="text" placeholder="Album…" oninput="currentPage=1;renderAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px" />
         <select id="filter-support" onchange="renderAlbums()">
           <option value="">Tous supports</option>
           <option value="cd">CD</option>
           <option value="flac">FLAC</option>
           <option value="mp3">MP3</option>
           <option value="digital">Numérique</option>
-          <option value="stock">📦 À écouter (stock)</option>
+          <option value="stock">📦 Stock</option>
         </select>
         <select id="filter-genre" onchange="renderAlbums()">
           <option value="">Tous genres</option>
         </select>
         <select id="filter-note" onchange="renderAlbums()">
-          <option value="">Toutes notes</option>
-          <option value="5">★★★★★ seulement</option>
-          <option value="4">★★★★ et plus</option>
-          <option value="3">★★★ et plus</option>
-          <option value="0">Non notés</option>
+          <option value="">Note MB</option>
+          <option value="5">MB ★★★★★</option>
+          <option value="4">MB ★★★★+</option>
+          <option value="3">MB ★★★+</option>
+          <option value="0">MB non notés</option>
+        </select>
+        <select id="filter-rym-note" onchange="renderAlbums()">
+          <option value="">Note RYM</option>
+          <option value="4.5">RYM ≥ 4.5</option>
+          <option value="4">RYM ≥ 4.0</option>
+          <option value="3.5">RYM ≥ 3.5</option>
+          <option value="3">RYM ≥ 3.0</option>
+          <option value="0">RYM non notés</option>
+        </select>
+        <select id="filter-min-plays" onchange="renderAlbums()">
+          <option value="">Écoutes</option>
+          <option value="1">≥ 1 écoute</option>
+          <option value="10">≥ 10</option>
+          <option value="25">≥ 25</option>
+          <option value="50">≥ 50</option>
+          <option value="100">≥ 100</option>
         </select>
         <select id="sort-col" onchange="renderAlbums()">
           <option value="artist">Tri : Artiste</option>
           <option value="album">Tri : Album</option>
           <option value="year">Tri : Année</option>
-          <option value="note">Tri : Note</option>
+          <option value="note">Tri : Note MB</option>
+          <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
         <div class="toolbar-right">
-          <button class="btn btn-sm" onclick="exportCSV()">↓ Export CSV</button>
+          <span id="albums-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportCSV()">↓ CSV</button>
         </div>
       </div>
 
@@ -649,9 +667,10 @@ input[type="file"] { display: none; }
               <th>Année</th>
               <th>Genre</th>
               <th>Supports</th>
-              <th>Note</th>
+              <th>Note MB</th>
+              <th>Note RYM</th>
               <th>Écoutes</th>
-              <th style="width:80px"></th>
+              <th style="width:60px"></th>
             </tr>
           </thead>
           <tbody id="album-tbody"></tbody>
@@ -2351,7 +2370,15 @@ function filteredAlbums() {
   const sf = document.getElementById('filter-support').value;
   const gf = document.getElementById('filter-genre').value;
   const nf = document.getElementById('filter-note').value;
+  const rymNf = document.getElementById('filter-rym-note')?.value || '';
+  const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
   const stockKeys = getStockKeysSet();
+
+  // Index RYM par clé normalisée (mis en cache)
+  if (!_cache.rymIndex) {
+    _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+  }
+  const rymIndex = _cache.rymIndex;
 
   return albums.filter(a => {
     // Toujours exclure les albums présents dans stockItems (sauf filtre stock explicite)
@@ -2368,17 +2395,36 @@ function filteredAlbums() {
     else if (sf === 'mp3') sm = a.mp3;
     else if (sf === 'digital') sm = a.flac || a.mp3 || a.digital;
     const gm = !gf || a.genre === gf;
+    // Filtre note MusicBee
     let nm = true;
     if (nf === '5') nm = a.note === 5;
     else if (nf === '4') nm = a.note >= 4;
     else if (nf === '3') nm = a.note >= 3;
     else if (nf === '0') nm = !a.note;
-    return match && am && albm && sm && gm && nm;
+    // Filtre note RYM
+    let rymMatch = true;
+    if (rymNf) {
+      const rymEntry = rymIndex.get(normalizeKey(a.artist, a.album))
+        || rymIndex.get(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+      if (rymNf === '0') rymMatch = !rymEntry || !rymEntry.rating;
+      else rymMatch = !!(rymEntry && rymEntry.rating >= parseFloat(rymNf));
+    }
+    // Filtre écoutes min
+    const playsMatch = (a.plays || 0) >= minPlays;
+    return match && am && albm && sm && gm && nm && rymMatch && playsMatch;
   });
 }
 
 function sortedAlbums(list) {
   const col = document.getElementById('sort-col').value;
+  if (col === 'rym') {
+    if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+    return [...list].sort((a, b) => {
+      const ra = _cache.rymIndex.get(normalizeKey(a.artist, a.album))?.rating || 0;
+      const rb = _cache.rymIndex.get(normalizeKey(b.artist, b.album))?.rating || 0;
+      return rb - ra;
+    });
+  }
   return [...list].sort((a, b) => {
     if (col === 'year') return (b.year||0) - (a.year||0);
     if (col === 'note') return (b.note||0) - (a.note||0);
@@ -2400,9 +2446,16 @@ function renderAlbums() {
   const slice = list.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const maxPlays = Math.max(1, ...albums.map(a => a.plays || 0));
 
+  // Index RYM (réutilise le cache de filteredAlbums si dispo)
+  if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+  const rymIndex = _cache.rymIndex;
+
+  const ctr = document.getElementById('albums-counter');
+  if (ctr) ctr.textContent = total.toLocaleString('fr-FR') + ' / ' + albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length.toLocaleString('fr-FR') + ' albums';
+
   const tbody = document.getElementById('album-tbody');
   if (!slice.length) {
-    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
     document.getElementById('page-info').textContent = '';
     return;
   }
@@ -2418,6 +2471,14 @@ function renderAlbums() {
       `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});event.stopPropagation()">★</button>`
     ).join('');
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
+
+    // Note RYM
+    const rymEntry = rymIndex.get(normalizeKey(a.artist, a.album))
+      || rymIndex.get(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+    const rymHtml = rymEntry?.rating
+      ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>`
+      : `<span style="color:var(--text3);font-size:11px">–</span>`;
+
     return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
       <td>
         <div class="artist-cell">
@@ -2432,6 +2493,7 @@ function renderAlbums() {
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td><div class="stars">${stars}</div></td>
+      <td>${rymHtml}</td>
       <td>
         <div class="plays-bar-wrap">
           <div class="plays-bar"><div class="plays-fill" style="width:${playsW}%"></div></div>
