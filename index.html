@@ -1135,6 +1135,11 @@ input[type="file"] { display: none; }
           <option value="25">≥ 25</option>
           <option value="50">≥ 50</option>
         </select>
+        <select id="filter-at-loved" onchange="renderAllTracks()">
+          <option value="">Last.fm</option>
+          <option value="loved">❤️ Lovés</option>
+          <option value="present">✅ Scrobblés</option>
+        </select>
         <select id="sort-at" onchange="renderAllTracks()">
           <option value="artist">Artiste A→Z</option>
           <option value="title">Titre A→Z</option>
@@ -1171,6 +1176,11 @@ input[type="file"] { display: none; }
           <option value="10">≥ 10</option>
           <option value="25">≥ 25</option>
           <option value="50">≥ 50</option>
+        </select>
+        <select id="filter-abt-loved" onchange="renderAlbumTracks()">
+          <option value="">Last.fm</option>
+          <option value="loved">❤️ Lovés</option>
+          <option value="present">✅ Scrobblés</option>
         </select>
         <select id="sort-abt" onchange="renderAlbumTracks()">
           <option value="artist">Artiste A→Z</option>
@@ -6043,6 +6053,7 @@ function renderAllTracks() {
   const folder  = document.getElementById('filter-at-folder')?.value||'';
   const nf      = document.getElementById('filter-at-note')?.value||'';
   const minPlays= parseInt(document.getElementById('filter-at-min-plays')?.value||'0')||0;
+  const lovedF  = document.getElementById('filter-at-loved')?.value||'';
   const sort    = document.getElementById('sort-at')?.value||'artist';
   const lfExact = getLfExactMap();
 
@@ -6099,6 +6110,9 @@ function renderAllTracks() {
     }
     // Filtre écoutes min
     if (minPlays > 0 && (lfExact.get(normalizeKey(t.artist,t.title))||0) < minPlays) return false;
+    // Filtre loved / scrobblé
+    if (lovedF === 'loved'   && !_lovedTracks.has(normalizeKey(t.artist, t.title))) return false;
+    if (lovedF === 'present' && !(lfExact.get(normalizeKey(t.artist, t.title))||0))  return false;
     return true;
   });
 
@@ -6120,6 +6134,7 @@ function renderAllTracks() {
   tbody.innerHTML = slice.map(t => {
     const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
     const note = t.note || _cache.mbNoteByKey.get(normalizeKey(t.artist, t.title)) || 0;
+    const isLoved = _lovedTracks.has(normalizeKey(t.artist, t.title));
     const noteHtml = note
       ? [1,2,3,4,5].map(i=>`<span style="font-size:11px;color:${note>=i?'var(--amber)':'var(--border2)'}">★</span>`).join('')
       : '<span style="color:var(--text3);font-size:11px">–</span>';
@@ -6138,7 +6153,7 @@ function renderAllTracks() {
     })();
     const folBadge = fol ? `<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${fol}</span>` : '–';
     return `<tr>
-      <td style="font-weight:500">${esc(t.title)}</td>
+      <td style="font-weight:500">${esc(t.title)}${isLoved ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : ''}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(t.album||'–')}</td>
       <td>${srcBadge}</td>
@@ -6175,6 +6190,7 @@ function renderAlbumTracks() {
   const albf    = (document.getElementById('filter-abt-album')?.value||'').toLowerCase().trim();
   const nf      = document.getElementById('filter-abt-note')?.value||'';
   const minPlays= parseInt(document.getElementById('filter-abt-min-plays')?.value||'0')||0;
+  const lovedF  = document.getElementById('filter-abt-loved')?.value||'';
   const sort    = document.getElementById('sort-abt')?.value||'artist';
   const lfExact = getLfExactMap();
 
@@ -6193,6 +6209,8 @@ function renderAlbumTracks() {
       if (nf==='0' && r>0)   return false;
     }
     if (minPlays > 0 && (lfExact.get(normalizeKey(t.artist,t.title))||0) < minPlays) return false;
+    if (lovedF === 'loved'   && !_lovedTracks.has(normalizeKey(t.artist, t.title))) return false;
+    if (lovedF === 'present' && !(lfExact.get(normalizeKey(t.artist, t.title))||0))  return false;
     return true;
   });
 
@@ -6211,12 +6229,13 @@ function renderAlbumTracks() {
   const slice = list.slice(0,300);
   if (!slice.length) { tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">💿</div>Importez le XML MusicBee pour charger les pistes</div></td></tr>'; return; }
   tbody.innerHTML = slice.map(t => {
-    const plays = lfExact.get(normalizeKey(t.artist,t.title)) || 0;
+    const plays   = lfExact.get(normalizeKey(t.artist,t.title)) || 0;
+    const isLoved = _lovedTracks.has(normalizeKey(t.artist, t.title));
     const noteHtml = t.rating
       ? [1,2,3,4,5].map(i=>`<span style="font-size:11px;color:${t.rating>=i?'var(--amber)':'var(--border2)'}">★</span>`).join('')
       : '<span style="color:var(--text3);font-size:11px">–</span>';
     return `<tr>
-      <td style="font-weight:500">${esc(t.title)}</td>
+      <td style="font-weight:500">${esc(t.title)}${isLoved ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : ''}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(t.album)}</td>
       <td>${noteHtml}</td>
