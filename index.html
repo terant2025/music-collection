@@ -655,7 +655,7 @@ input[type="file"] { display: none; }
         </select>
         <div class="toolbar-right">
           <span id="albums-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
-          <button class="btn btn-sm" onclick="exportCSV()">↓ CSV</button>
+          <button class="btn btn-sm" onclick="exportFilteredAlbumsCSV()">↓ CSV</button>
         </div>
       </div>
 
@@ -725,6 +725,7 @@ input[type="file"] { display: none; }
         </select>
         <div class="toolbar-right">
           <span id="tracks-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportFilteredTracksCSV()">↓ CSV</button>
           <button class="btn btn-accent" onclick="openTrackModal()">＋ Morceau</button>
         </div>
       </div>
@@ -771,6 +772,7 @@ input[type="file"] { display: none; }
           <option value="year">Tri : Année</option>
         </select>
         <button class="btn btn-sm" onclick="nav('albums');document.getElementById('modal-album').classList.add('open');openAlbumModal()">＋ Ajouter CD</button>
+        <button class="btn btn-sm" onclick="exportDiscoCSV()">↓ CSV</button>
       </div>
 
       <!-- Association modal trigger info -->
@@ -883,6 +885,7 @@ input[type="file"] { display: none; }
         </select>
         <div class="toolbar-right">
           <span id="missing-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportMissingAlbumsCSV()">↓ CSV</button>
         </div>
       </div>
       <div class="missing-grid" id="missing-grid"></div>
@@ -1078,6 +1081,7 @@ input[type="file"] { display: none; }
         <input id="filter-ok-artist" type="text" placeholder="Artiste…" oninput="renderOkAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
         <div class="toolbar-right">
           <span id="ok-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportOkAlbumsCSV()">↓ CSV</button>
         </div>
       </div>
       <div class="table-wrap"><table>
@@ -1093,6 +1097,7 @@ input[type="file"] { display: none; }
         <input id="filter-forsale-artist" type="text" placeholder="Artiste…" oninput="renderForSale()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
         <div class="toolbar-right">
           <span id="forsale-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportForSaleCSV()">↓ CSV</button>
         </div>
       </div>
       <div class="table-wrap"><table>
@@ -1149,6 +1154,7 @@ input[type="file"] { display: none; }
         </select>
         <div class="toolbar-right">
           <span id="at-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportAllTracksCSV()">↓ CSV</button>
         </div>
       </div>
       <div class="table-wrap"><table>
@@ -1191,6 +1197,7 @@ input[type="file"] { display: none; }
         </select>
         <div class="toolbar-right">
           <span id="abt-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="exportAlbumTracksCSV()">↓ CSV</button>
         </div>
       </div>
       <div class="table-wrap"><table>
@@ -2051,6 +2058,15 @@ async function loadFromSupabase() {
       }
       if (metaMap.lastfm_track_status) {
         try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {}
+      }
+      if (metaMap.lastfm_loved) {
+        try {
+          const arr = JSON.parse(metaMap.lastfm_loved);
+          _lovedTracks = new Set(arr);
+          try { localStorage.setItem('lastfm_loved', metaMap.lastfm_loved); } catch(e) {}
+          const countEl = document.getElementById('lastfm-loved-count');
+          if (countEl && _lovedTracks.size) countEl.textContent = `❤️ ${_lovedTracks.size} morceaux`;
+        } catch(e) { console.warn('lastfm_loved parse error:', e); }
       }
     }
     // Mettre à jour le label de dernière sync après chargement
@@ -4789,30 +4805,18 @@ const LASTFM_TRACK_CHECKPOINT_KEY = 'lastfm_track_checkpoint';
 let _lastfmTrackCounts = {}; // { normalizeKey(artist,track): { artist, track, plays } }
 let _lovedTracks = new Set(); // Set de normalizeKey(artist, track) pour les lovés
 
-// Charger les loved tracks depuis Supabase/localStorage au démarrage
+// Charger les loved tracks depuis localStorage au démarrage (fallback mode sans Supabase)
+// En mode Supabase, le chargement se fait dans loadFromSupabase via metaMap.lastfm_loved
 async function loadLovedTracks() {
-  // localStorage d'abord (rapide)
   try {
     const raw = localStorage.getItem('lastfm_loved');
     if (raw) {
       const arr = JSON.parse(raw);
       _lovedTracks = new Set(arr);
+      const countEl = document.getElementById('lastfm-loved-count');
+      if (countEl && _lovedTracks.size) countEl.textContent = `❤️ ${_lovedTracks.size} morceaux`;
     }
   } catch(e) {}
-  // Supabase si dispo (source de vérité)
-  if (window._sb) {
-    try {
-      const { data } = await window._sb.from('meta').select('value').eq('key', 'lastfm_loved').single();
-      if (data?.value) {
-        const arr = JSON.parse(data.value);
-        _lovedTracks = new Set(arr);
-        try { localStorage.setItem('lastfm_loved', data.value); } catch(e) {}
-      }
-    } catch(e) {}
-  }
-  // Mettre à jour le compteur affiché
-  const countEl = document.getElementById('lastfm-loved-count');
-  if (countEl && _lovedTracks.size) countEl.textContent = `❤️ ${_lovedTracks.size} morceaux`;
 }
 
 async function syncLovedTracks() {
@@ -7604,6 +7608,230 @@ function exportTracksCSV() {
   const rows = [header.join(','), ...tracks.map(t => toCSVRow([t.id, t.title, t.artist, t.album||'', t.format, t.duration||'', t.note||0]))];
   download('discothèque_morceaux.csv', rows.join('\n'), 'text/csv');
   toast('Export morceaux téléchargé ✓');
+}
+
+// ── Exports filtrés par section ──────────────────────────────────────────────
+
+function _csvDownload(filename, rows) {
+  const bom = '\uFEFF';
+  download(filename, bom + rows.map(r => r.map(v => {
+    const s = String(v ?? '');
+    return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n'), 'text/csv;charset=utf-8');
+}
+
+function _rymRating(artist, album) {
+  if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+  const r = _cache.rymIndex.get(normalizeKey(artist, album))
+    || _cache.rymIndex.get(normalizeKey(cleanDiscogsArtist(artist), album));
+  return r?.rating || '';
+}
+
+// Collection (tient compte de tous les filtres actifs)
+function exportFilteredAlbumsCSV() {
+  const lfExact = getLfExactMap();
+  const list = sortedAlbums(filteredAlbums());
+  const rows = [['Artiste','Album','Année','Genre','CD','FLAC','MP3','Digital','Note MB','Note RYM','Écoutes','Notes','Discogs ID']];
+  list.forEach(a => rows.push([
+    a.artist, a.album, a.year||'', a.genre||'',
+    a.cd?'oui':'', a.flac?'oui':'', a.mp3?'oui':'', a.digital?'oui':'',
+    a.note||'', _rymRating(a.artist, a.album),
+    a.plays||0, a.notes||'', a.discogsId||''
+  ]));
+  _csvDownload(`albums_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} albums exportés ✓`);
+}
+
+// Discographie (filtre actif)
+function exportDiscoCSV() {
+  const list = discoFilteredList();
+  const rows = [['Artiste','Album','Année','CD','FLAC','MP3','Digital','Backup num.','Note MB','Discogs ID']];
+  list.forEach(a => rows.push([
+    a.artist, a.album, a.year||'',
+    a.cd?'oui':'', a.flac?'oui':'', a.mp3?'oui':'', a.digital?'oui':'',
+    hasDigitalBackup(a)?'oui':'non',
+    a.note||'', a.discogsId||''
+  ]));
+  _csvDownload(`discographie_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} entrées exportées ✓`);
+}
+
+// Ok albums (filtre artiste actif)
+function exportOkAlbumsCSV() {
+  const q  = (document.getElementById('global-search').value||'').toLowerCase();
+  const af = (document.getElementById('filter-ok-artist')?.value||'').toLowerCase().trim();
+  const list = albums.filter(a => a.okFolder)
+    .filter(a => (!q||(a.artist+' '+a.album).toLowerCase().includes(q)) && (!af||a.artist.toLowerCase().includes(af)))
+    .sort((a,b)=>a.artist.localeCompare(b.artist,'fr'));
+  const rows = [['Artiste','Album','Année','Supports','Note MB','Écoutes']];
+  list.forEach(a => {
+    const sup = [a.cd?'CD':'',a.flac?'FLAC':'',a.mp3?'MP3':'',a.digital?'Digital':''].filter(Boolean).join('+');
+    rows.push([a.artist, a.album, a.year||'', sup, a.note||'', a.plays||0]);
+  });
+  _csvDownload(`ok_albums_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} albums exportés ✓`);
+}
+
+// À vendre (filtre artiste actif)
+function exportForSaleCSV() {
+  const q  = (document.getElementById('global-search').value||'').toLowerCase();
+  const af = (document.getElementById('filter-forsale-artist')?.value||'').toLowerCase().trim();
+  const list = albums.filter(a => a.forSale)
+    .filter(a => (!q||(a.artist+' '+a.album).toLowerCase().includes(q)) && (!af||a.artist.toLowerCase().includes(af)))
+    .sort((a,b)=>a.artist.localeCompare(b.artist,'fr'));
+  const rows = [['Artiste','Album','Année','Supports','Note MB','Discogs ID']];
+  list.forEach(a => {
+    const sup = [a.cd?'CD':'',a.flac?'FLAC':'',a.mp3?'MP3':'',a.digital?'Digital':''].filter(Boolean).join('+');
+    rows.push([a.artist, a.album, a.year||'', sup, a.note||'', a.discogsId||'']);
+  });
+  _csvDownload(`a_vendre_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} albums exportés ✓`);
+}
+
+// last.fm albums manquants (filtres actifs — utilise _missingListCache)
+function exportMissingAlbumsCSV() {
+  const list = _missingListCache || computeMissing();
+  const statusLabel = { ignored:'Ignoré', to_listen:'À écouter', wishlist:'Wishlist' };
+  const rows = [['Artiste','Album','Écoutes','Statut','Note RYM','Genre']];
+  list.forEach(m => {
+    const st = getLastfmStatus(m.artist, m.album);
+    rows.push([m.artist, m.album, m.plays, statusLabel[st]||'', _rymRating(m.artist, m.album), m.genre||'']);
+  });
+  _csvDownload(`lastfm_albums_manquants_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} albums exportés ✓`);
+}
+
+// Morceaux isolés (filtres actifs)
+function exportFilteredTracksCSV() {
+  const lfExact = getLfExactMap();
+  const q      = (document.getElementById('global-search').value||'').toLowerCase();
+  const af     = (document.getElementById('filter-track-artist')?.value||'').toLowerCase().trim();
+  const tf     = (document.getElementById('filter-track-title')?.value||'').toLowerCase().trim();
+  const albf   = (document.getElementById('filter-track-album')?.value||'').toLowerCase().trim();
+  const ff     = document.getElementById('filter-track-format')?.value||'';
+  const nf     = document.getElementById('filter-track-note')?.value||'';
+  const lf     = document.getElementById('filter-track-lastfm')?.value||'';
+  const minPlf = parseInt(document.getElementById('filter-track-min-plays')?.value||'0')||0;
+  const sortF  = document.getElementById('filter-track-sort')?.value||'artist';
+
+  let list = tracks.filter(t => {
+    const m   = !q    || (t.title+' '+t.artist+' '+(t.album||'')).toLowerCase().includes(q);
+    const am  = !af   || t.artist.toLowerCase().includes(af);
+    const tm  = !tf   || t.title.toLowerCase().includes(tf);
+    const alm = !albf || (t.album||'').toLowerCase().includes(albf);
+    const fm  = !ff   || t.format===ff;
+    let nm = true;
+    if (nf==='5') nm=t.note===5; else if(nf==='4') nm=t.note>=4; else if(nf==='3') nm=t.note>=3; else if(nf==='0') nm=!t.note;
+    const plays = lfExact.get(normalizeKey(t.artist,t.title))||0;
+    const isLoved = _lovedTracks.has(normalizeKey(t.artist,t.title));
+    let lfm = true;
+    if (lf==='present') lfm=plays>0; else if(lf==='absent') lfm=!plays; else if(lf==='loved') lfm=isLoved;
+    return m&&am&&tm&&alm&&fm&&nm&&lfm&&plays>=minPlf;
+  });
+  if (sortF==='plays') list.sort((a,b)=>(lfExact.get(normalizeKey(b.artist,b.title))||0)-(lfExact.get(normalizeKey(a.artist,a.title))||0));
+  else if (sortF==='title') list.sort((a,b)=>a.title.localeCompare(b.title,'fr'));
+  else if (sortF==='note')  list.sort((a,b)=>(b.note||0)-(a.note||0));
+  else list.sort((a,b)=>a.artist.localeCompare(b.artist,'fr'));
+
+  const rows = [['Titre','Artiste','Album','Format','Bitrate','Écoutes last.fm','Note MB','Lové']];
+  list.forEach(t => {
+    const plays = lfExact.get(normalizeKey(t.artist,t.title))||0;
+    const loved = _lovedTracks.has(normalizeKey(t.artist,t.title)) ? 'oui' : '';
+    rows.push([t.title, t.artist, t.album||'', t.format||'', t.bitrate||'', plays||'', t.note||'', loved]);
+  });
+  _csvDownload(`morceaux_isoles_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} morceaux exportés ✓`);
+}
+
+// Tous les morceaux (filtres actifs)
+function exportAllTracksCSV() {
+  const lfExact = getLfExactMap();
+  if (!_cache.albumById)   _cache.albumById   = new Map(albums.map(a=>[a.id,a]));
+  if (!_cache.stockKeySet) _cache.stockKeySet = new Set(stockItems.map(s=>normalizeKey(s.artist,s.album)));
+  if (!_cache.mbNoteByKey) {
+    _cache.mbNoteByKey = new Map();
+    albums.forEach(a => {
+      const mbT = (albumTracksCache[a.id]||[]).filter(t=>t.source==='musicbee');
+      const maxR = Math.max(0,...mbT.map(t=>t.rating||0));
+      if (maxR) _cache.mbNoteByKey.set(normalizeKey(a.artist,a.album), maxR);
+    });
+    tracks.forEach(t => { if(t.note) _cache.mbNoteByKey.set(normalizeKey(t.artist,t.title),t.note); });
+  }
+  const q       = (document.getElementById('global-search').value||'').toLowerCase();
+  const af      = (document.getElementById('filter-at-artist')?.value||'').toLowerCase().trim();
+  const tf      = (document.getElementById('filter-at-title')?.value||'').toLowerCase().trim();
+  const albf    = (document.getElementById('filter-at-album')?.value||'').toLowerCase().trim();
+  const sf      = document.getElementById('filter-at-source')?.value||'';
+  const folder  = document.getElementById('filter-at-folder')?.value||'';
+  const nf      = document.getElementById('filter-at-note')?.value||'';
+  const minPlays= parseInt(document.getElementById('filter-at-min-plays')?.value||'0')||0;
+  const lovedF  = document.getElementById('filter-at-loved')?.value||'';
+  const albumById   = _cache.albumById;
+  const stockKeySet = _cache.stockKeySet;
+
+  const list = buildAllTracksList().filter(t => {
+    if (q && !(t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q)) return false;
+    if (af   && !t.artist.toLowerCase().includes(af))  return false;
+    if (tf   && !t.title.toLowerCase().includes(tf))   return false;
+    if (albf && !t.album.toLowerCase().includes(albf)) return false;
+    if (sf) { if(sf==='musicbee'&&t.source!=='musicbee') return false; if(sf==='isolated'&&t.source!=='isolated') return false; }
+    if (folder) {
+      if (folder==='isolated') { if(t.source!=='isolated') return false; }
+      else if (folder==='stock') { const a=t.albumId?albumById.get(t.albumId):null; if(!t.inStock&&!(a&&stockKeySet.has(normalizeKey(a.artist,a.album)))) return false; }
+      else { const a=t.albumId?albumById.get(t.albumId):null; if(!a) return false;
+        if(folder==='discographie'&&!(a.cd||a.flac||a.mp3)) return false;
+        if(folder==='ok'&&!a.okFolder) return false; if(folder==='forsale'&&!a.forSale) return false; if(folder==='discogs'&&!a.cd) return false; }
+    }
+    if (nf) { const note=t.note||_cache.mbNoteByKey.get(normalizeKey(t.artist,t.title))||0; if(nf==='5'&&note!==5) return false; if(nf==='4'&&note<4) return false; if(nf==='3'&&note<3) return false; if(nf==='0'&&note>0) return false; }
+    if (minPlays>0 && (lfExact.get(normalizeKey(t.artist,t.title))||0)<minPlays) return false;
+    if (lovedF==='loved'   && !_lovedTracks.has(normalizeKey(t.artist,t.title))) return false;
+    if (lovedF==='present' && !(lfExact.get(normalizeKey(t.artist,t.title))||0))  return false;
+    return true;
+  });
+
+  const rows = [['Titre','Artiste','Album','Source','Dossier','Note MB','Écoutes','Bitrate','Lové']];
+  list.forEach(t => {
+    const plays = lfExact.get(normalizeKey(t.artist,t.title))||0;
+    const note  = t.note||_cache.mbNoteByKey.get(normalizeKey(t.artist,t.title))||'';
+    const loved = _lovedTracks.has(normalizeKey(t.artist,t.title))?'oui':'';
+    const fol   = t.inStock?'stock':(()=>{ const a=t.albumId?albumById.get(t.albumId):null; if(!a) return t.source==='isolated'?'top':''; if(a.forSale) return 'vendre'; if(a.okFolder) return 'ok'; if(a.cd) return 'discogs'; return 'album'; })();
+    rows.push([t.title, t.artist, t.album||'', t.source, fol, note, plays||'', t.bitrate||'', loved]);
+  });
+  _csvDownload(`tous_morceaux_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} morceaux exportés ✓`);
+}
+
+// Morceaux des albums (filtres actifs)
+function exportAlbumTracksCSV() {
+  const lfExact = getLfExactMap();
+  const q       = (document.getElementById('global-search').value||'').toLowerCase();
+  const af      = (document.getElementById('filter-abt-artist')?.value||'').toLowerCase().trim();
+  const tf      = (document.getElementById('filter-abt-title')?.value||'').toLowerCase().trim();
+  const albf    = (document.getElementById('filter-abt-album')?.value||'').toLowerCase().trim();
+  const nf      = document.getElementById('filter-abt-note')?.value||'';
+  const minPlays= parseInt(document.getElementById('filter-abt-min-plays')?.value||'0')||0;
+  const lovedF  = document.getElementById('filter-abt-loved')?.value||'';
+
+  const list = buildAlbumTracksList().filter(t => {
+    if (q && !(t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q)) return false;
+    if (af   && !t.artist.toLowerCase().includes(af))  return false;
+    if (tf   && !t.title.toLowerCase().includes(tf))   return false;
+    if (albf && !t.album.toLowerCase().includes(albf)) return false;
+    if (nf) { const r=t.rating||0; if(nf==='5'&&r!==5) return false; if(nf==='4'&&r<4) return false; if(nf==='3'&&r<3) return false; if(nf==='0'&&r>0) return false; }
+    if (minPlays>0 && (lfExact.get(normalizeKey(t.artist,t.title))||0)<minPlays) return false;
+    if (lovedF==='loved'   && !_lovedTracks.has(normalizeKey(t.artist,t.title))) return false;
+    if (lovedF==='present' && !(lfExact.get(normalizeKey(t.artist,t.title))||0))  return false;
+    return true;
+  });
+
+  const rows = [['Titre','Artiste','Album','Note MB','Écoutes','Bitrate','Durée','Lové']];
+  list.forEach(t => {
+    const plays = lfExact.get(normalizeKey(t.artist,t.title))||0;
+    const loved = _lovedTracks.has(normalizeKey(t.artist,t.title))?'oui':'';
+    rows.push([t.title, t.artist, t.album, t.rating||'', plays||'', t.bitrate||'', t.duration||'', loved]);
+  });
+  _csvDownload(`morceaux_albums_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  toast(`${list.length} pistes exportées ✓`);
 }
 
 function exportJSON() {
