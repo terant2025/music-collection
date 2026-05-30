@@ -707,6 +707,7 @@ input[type="file"] { display: none; }
           <option value="">Last.fm</option>
           <option value="present">✅ Dans last.fm</option>
           <option value="absent">🔍 Absents</option>
+          <option value="loved">❤️ Lovés</option>
         </select>
         <select id="filter-track-min-plays" onchange="renderTracks()">
           <option value="">Écoutes</option>
@@ -1261,7 +1262,8 @@ input[type="file"] { display: none; }
           <div class="format-hint" id="lastfm-sync-info">
             <strong>Clé API :</strong> last.fm/api/account/create<br>
             <strong>Nom d'utilisateur :</strong> votre pseudo last.fm<br>
-            <strong>Dernière sync :</strong> <span id="lastfm-last-sync-label">jamais</span>
+            <strong>Dernière sync :</strong> <span id="lastfm-last-sync-label">jamais</span><br>
+            <strong>Loved tracks :</strong> <span id="lastfm-loved-count">–</span>
           </div>
           <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
             <input type="text" id="lastfm-apikey" placeholder="Clé API (32 caractères)" value="e8aae3c9ca05ced8f56443c1108fdc65" style="font-family:var(--mono);font-size:11px">
@@ -1272,8 +1274,12 @@ input[type="file"] { display: none; }
             <button class="btn btn-sm" onclick="loadMoreLastfm()" id="btn-lastfm-more" style="display:none">⏸ Pause</button>
             <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
             <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux complète</button>
+            <button class="btn btn-sm" id="btn-loved-sync" onclick="syncLovedTracks()" title="Récupère vos morceaux lovés sur last.fm">❤️ Sync loved tracks</button>
           </div>
           <div class="status" id="status-lastfm"></div>
+          <div id="lastfm-loved-info" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:6px;display:none">
+            <span id="lastfm-loved-label"></span>
+          </div>
           <div id="lastfm-progress" style="margin-top:8px;display:none">
             <div style="height:3px;background:var(--bg4);border-radius:2px">
               <div id="lastfm-bar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
@@ -2633,9 +2639,11 @@ function renderTracks() {
     else if (nf==='0') nm = !t.note;
     const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
     const hasLf = plays > 0;
+    const isLoved = _lovedTracks.has(normalizeKey(t.artist, t.title));
     let lfm = true;
     if (lf==='present') lfm = hasLf;
     else if (lf==='absent') lfm = !hasLf;
+    else if (lf==='loved') lfm = isLoved;
     const plm = plays >= minPlf;
     return m && am && tm && alm && fm && nm && lfm && plm;
   });
@@ -2666,8 +2674,10 @@ function renderTracks() {
     const bitrateHtml = t.bitrate
       ? `<span class="mono" style="font-size:11px;color:var(--text3)">${t.bitrate}k</span>`
       : `<span style="color:var(--text3);font-size:11px">–</span>`;
+    const lovedBadge = _lovedTracks.has(normalizeKey(t.artist, t.title))
+      ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : '';
     return `<tr>
-      <td style="font-weight:500">${esc(t.title)}</td>
+      <td style="font-weight:500">${esc(t.title)}${lovedBadge}</td>
       <td style="color:var(--text2);font-size:13px">${esc(t.artist)}</td>
       <td style="color:var(--text3);font-size:12px">${esc(t.album||'–')}</td>
       <td><span class="badge ${fmtBadge[t.format]||'badge-digital'}">${(t.format||'?').toUpperCase()}</span></td>
@@ -4767,6 +4777,105 @@ async function fetchLastfmIncremental(fromTs) {
 const LASTFM_CHECKPOINT_KEY = 'lastfm_checkpoint';
 const LASTFM_TRACK_CHECKPOINT_KEY = 'lastfm_track_checkpoint';
 let _lastfmTrackCounts = {}; // { normalizeKey(artist,track): { artist, track, plays } }
+let _lovedTracks = new Set(); // Set de normalizeKey(artist, track) pour les lovés
+
+// Charger les loved tracks depuis Supabase/localStorage au démarrage
+async function loadLovedTracks() {
+  // localStorage d'abord (rapide)
+  try {
+    const raw = localStorage.getItem('lastfm_loved');
+    if (raw) {
+      const arr = JSON.parse(raw);
+      _lovedTracks = new Set(arr);
+    }
+  } catch(e) {}
+  // Supabase si dispo (source de vérité)
+  if (window._sb) {
+    try {
+      const { data } = await window._sb.from('meta').select('value').eq('key', 'lastfm_loved').single();
+      if (data?.value) {
+        const arr = JSON.parse(data.value);
+        _lovedTracks = new Set(arr);
+        try { localStorage.setItem('lastfm_loved', data.value); } catch(e) {}
+      }
+    } catch(e) {}
+  }
+  // Mettre à jour le compteur affiché
+  const countEl = document.getElementById('lastfm-loved-count');
+  if (countEl && _lovedTracks.size) countEl.textContent = `❤️ ${_lovedTracks.size} morceaux`;
+}
+
+async function syncLovedTracks() {
+  const btn    = document.getElementById('btn-loved-sync');
+  const status = document.getElementById('status-lastfm');
+  const infoEl = document.getElementById('lastfm-loved-info');
+  const label  = document.getElementById('lastfm-loved-label');
+  const apiKey = document.getElementById('lastfm-apikey').value.trim();
+  const user   = document.getElementById('lastfm-user').value.trim();
+  if (!apiKey || !user) { toast('Clé API et nom d\'utilisateur requis', 'error'); return; }
+
+  btn.disabled = true;
+  status.textContent = 'Récupération des loved tracks…';
+  status.className = 'status';
+
+  try {
+    let page = 1, total = 0, fetched = 0;
+    _lovedTracks = new Set();
+
+    while (true) {
+      await new Promise(r => setTimeout(r, 220));
+      const url = `${LASTFM_BASE}?method=user.getlovedtracks&user=${encodeURIComponent(user)}&api_key=${apiKey}&format=json&limit=200&page=${page}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.error) throw new Error(data.message || `Erreur last.fm ${data.error}`);
+
+      const loved = data.lovedtracks?.track || [];
+      const totalPages = parseInt(data.lovedtracks?.['@attr']?.totalPages || 1);
+      total = parseInt(data.lovedtracks?.['@attr']?.total || 0);
+
+      loved.forEach(t => {
+        const artist = String(t.artist?.name || t.artist?.['#text'] || '').trim();
+        const track  = String(t.name || '').trim();
+        if (artist && track) {
+          _lovedTracks.add(normalizeKey(artist, track));
+          // Aussi variante artiste nettoyé
+          const clean = cleanDiscogsArtist(artist);
+          if (clean !== artist) _lovedTracks.add(normalizeKey(clean, track));
+        }
+        fetched++;
+      });
+
+      status.textContent = `Loved tracks : page ${page}/${totalPages} — ${fetched} chargés…`;
+      if (page >= totalPages || !loved.length) break;
+      page++;
+    }
+
+    // Persister
+    const arr = [..._lovedTracks];
+    try { localStorage.setItem('lastfm_loved', JSON.stringify(arr)); } catch(e) {}
+    if (window._sb) {
+      await window._sb.from('meta').upsert(
+        { key: 'lastfm_loved', value: JSON.stringify(arr) },
+        { onConflict: 'key' }
+      );
+    }
+
+    status.textContent = `✓ ${fetched} loved tracks synchronisés`;
+    status.className = 'status ok';
+    if (infoEl) {
+      infoEl.style.display = 'block';
+      label.textContent = `❤️ ${fetched} loved tracks — dernière sync : ${new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'})}`;
+    }
+    invalidateCache();
+    if (document.getElementById('sec-tracks')?.classList.contains('active')) renderTracks();
+    toast(`❤️ ${fetched} loved tracks synchronisés`);
+  } catch(e) {
+    status.textContent = 'Erreur : ' + e.message;
+    status.className = 'status err';
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 function saveLastfmCheckpoint(currentPage, totalPages) {
   const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -7598,6 +7707,7 @@ function loadDemo() {
 // ===================== STARTUP =====================
 async function initApp() {
   loadLastfmTrackStatus();
+  loadLovedTracks();
   const restored = loadFromStorage();
   if (!restored) {
     loadDemo();
