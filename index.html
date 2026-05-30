@@ -5171,6 +5171,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       duration:        formatDuration(num(d, 'Total Time')),
       source:          'musicbee',
       folder,
+      trackArtist:     artist_ || null,  // artiste individuel (≠ Album Artist pour compilations)
       bitrate:         num(d, 'Bit Rate')    || null,
       sample_rate:     num(d, 'Sample Rate') || null,
       file_size:       num(d, 'Size')        || null,
@@ -5205,10 +5206,21 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       const artist = g.artist;
       const clean  = cleanDiscogsArtist(artist);
       const noThe  = artist.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-      // Pour chaque variante d'artiste, ajouter toutes les variantes de titre
+      // Pour chaque variante d'artiste (Album Artist), ajouter toutes les variantes de titre
       for (const art of [artist, clean, noThe]) {
         for (const k of normalizeKeyLoose(art, t.title)) {
           window._mbTrackKeys.add(k);
+        }
+      }
+      // Indexer aussi avec l'artiste individuel (crucial pour compilations)
+      // ex: Album Artist = "Various Artists", Artist = "Stéphane Grappelli"
+      if (t.trackArtist && t.trackArtist !== artist) {
+        const tClean = cleanDiscogsArtist(t.trackArtist);
+        const tNoThe = t.trackArtist.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+        for (const art of [t.trackArtist, tClean, tNoThe]) {
+          for (const k of normalizeKeyLoose(art, t.title)) {
+            window._mbTrackKeys.add(k);
+          }
         }
       }
     });
@@ -5282,17 +5294,20 @@ async function saveMusicBeeTracks(byKey) {
   Object.values(byKey).forEach(g => {
     g.tracks.forEach(t => {
       if (!t.title) return;
-      const an = normalizeKey(g.artist, '').replace('|||', '');
+      // Utiliser l'artiste individuel pour la dédup si dispo (compilations)
+      const effectiveArtist = (t.trackArtist && t.trackArtist !== g.artist) ? t.trackArtist : g.artist;
+      const an = normalizeKey(effectiveArtist, '').replace('|||', '');
       const tn = normalizeKey('', t.title).replace('|||', '');
       const pk = an + '|||' + tn;
       if (seenKeys.has(pk)) return;
       seenKeys.add(pk);
       rows.push({
-        artist:          g.artist,
+        artist:          effectiveArtist,
         album:           g.album  || null,
         title:           t.title,
         artist_norm:     an,
         title_norm:      tn,
+        track_artist:    t.trackArtist || null,
         folder:          t.folder || g.folder || 'album',
         position:        t.position    || null,
         duration:        t.duration    || null,
@@ -5328,7 +5343,7 @@ async function loadMusicBeeTracks() {
     while (true) {
       const { data, error } = await window._sb
         .from('musicbee_tracks')
-        .select('artist,album,title,artist_norm,title_norm,bitrate,play_count,rating,mb_recording_id,folder')
+        .select('artist,album,title,artist_norm,title_norm,bitrate,play_count,rating,mb_recording_id,folder,track_artist')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error) {
         const ignorable = ['PGRST205', '42501', 'PGRST301'];
@@ -5354,6 +5369,16 @@ async function loadMusicBeeTracks() {
         for (const art of [t.artist, clean, noThe]) {
           for (const k of normalizeKeyLoose(art, t.title)) {
             window._mbTrackKeys.add(k);
+          }
+        }
+        // Indexer aussi track_artist si différent (compilations)
+        if (t.track_artist && t.track_artist !== t.artist) {
+          const tClean = cleanDiscogsArtist(t.track_artist);
+          const tNoThe = t.track_artist.replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+          for (const art of [t.track_artist, tClean, tNoThe]) {
+            for (const k of normalizeKeyLoose(art, t.title)) {
+              window._mbTrackKeys.add(k);
+            }
           }
         }
         // _albumTracksByKey pour renderTrackAssocList (pistes d'albums uniquement)
