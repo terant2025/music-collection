@@ -2447,11 +2447,31 @@ function filteredAlbums() {
   }
   const rymIndex = _cache.rymIndex;
 
+  // Filtre stock : afficher directement les stockItems (source canonique)
+  if (sf === 'stock') {
+    return stockItems
+      .filter(s => {
+        const match = !q || (s.artist + ' ' + s.album + ' ' + (s.genre||'')).toLowerCase().includes(q);
+        const am   = !af   || s.artist.toLowerCase().includes(af);
+        const albm = !albf || s.album.toLowerCase().includes(albf);
+        const gm   = !gf   || s.genre === gf;
+        let nm = true;
+        if (nf==='5') nm=s.note===5; else if(nf==='4') nm=s.note>=4; else if(nf==='3') nm=s.note>=3; else if(nf==='0') nm=!s.note;
+        return match && am && albm && gm && nm;
+      })
+      .map(s => ({
+        id: s.id, artist: s.artist, album: s.album, year: s.year||'',
+        genre: s.genre||'', note: s.note||0, plays: 0, notes: s.notes||'',
+        flac: s.format==='flac', mp3: s.format==='mp3',
+        digital: s.format==='digital'||s.format==='autre',
+        cd: false, _isStockItem: true,
+      }));
+  }
+
   return albums.filter(a => {
-    // Toujours exclure les albums présents dans stockItems (sauf filtre stock explicite)
+    // Exclure les albums présents dans stockItems
     const isInStock = stockKeys.has(normalizeKey(a.artist, a.album));
-    if (sf !== 'stock' && isInStock) return false;
-    if (sf === 'stock') return isInStock;
+    if (isInStock) return false;
 
     const match = !q || (a.artist + ' ' + a.album + ' ' + (a.genre||'')).toLowerCase().includes(q);
     const am = !af || a.artist.toLowerCase().includes(af);
@@ -2528,15 +2548,21 @@ function renderAlbums() {
   }
 
   tbody.innerHTML = slice.map(a => {
+    const isStock = !!a._isStockItem;
     const badges = [
       a.cd ? '<span class="badge badge-cd">💿 CD</span>' : '',
       a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
       a.mp3 ? '<span class="badge badge-mp3">MP3</span>' : '',
       a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
+      isStock ? '<span class="badge badge-stock">📦 Stock</span>' : '',
     ].filter(Boolean).join('');
-    const stars = [1,2,3,4,5].map(i =>
-      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});event.stopPropagation()">★</button>`
-    ).join('');
+    const stars = isStock
+      ? [1,2,3,4,5].map(i =>
+          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateStock(${a.id},${i});event.stopPropagation()">★</button>`
+        ).join('')
+      : [1,2,3,4,5].map(i =>
+          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});event.stopPropagation()">★</button>`
+        ).join('');
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
 
     // Note RYM
@@ -2546,13 +2572,18 @@ function renderAlbums() {
       ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>`
       : `<span style="color:var(--text3);font-size:11px">–</span>`;
 
-    return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
+    const onclickRow = isStock ? `openStockModal(${a.id})` : `editAlbum(${a.id})`;
+    const deleteBtn  = isStock
+      ? `<button class="btn btn-sm btn-danger" onclick="deleteStockItem(${a.id})" title="Supprimer">✕</button>`
+      : `<button class="btn btn-sm btn-danger" onclick="deleteAlbum(${a.id})" title="Supprimer">✕</button>`;
+
+    return `<tr onclick="${onclickRow}" style="cursor:pointer">
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}</div>
-            <div class="sub">${esc(a.artist)}${a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
+            <div class="sub">${esc(a.artist)}${!isStock && a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
           </div>
         </div>
       </td>
@@ -2568,7 +2599,7 @@ function renderAlbums() {
         </div>
       </td>
       <td onclick="event.stopPropagation()">
-        <button class="btn btn-sm btn-danger" onclick="deleteAlbum(${a.id})" title="Supprimer">✕</button>
+        ${deleteBtn}
       </td>
     </tr>`;
   }).join('');
@@ -2766,11 +2797,18 @@ function getOwnedKeysSet() {
     const clean = cleanDiscogsArtist(a.artist);
     _cache.ownedKeys.add(normalizeKey(a.artist, a.album));
     _cache.ownedKeys.add(normalizeKey(clean, a.album));
-    // Variante sans "The" au début pour matcher "The Black Keys" ↔ "Black Keys"
     const withoutThe = clean.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
     if (withoutThe !== clean) _cache.ownedKeys.add(normalizeKey(withoutThe, a.album));
     if (a.lastfmAliases) a.lastfmAliases.forEach(k => _cache.ownedKeys.add(k));
     if (a.mb_release_id) _cache.ownedMbIds.add(a.mb_release_id);
+  });
+  // Inclure aussi les albums en stock (déjà "possédés", juste pas encore écoutés)
+  stockItems.forEach(s => {
+    const clean = cleanDiscogsArtist(s.artist);
+    _cache.ownedKeys.add(normalizeKey(s.artist, s.album));
+    _cache.ownedKeys.add(normalizeKey(clean, s.album));
+    const withoutThe = clean.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
+    if (withoutThe !== clean) _cache.ownedKeys.add(normalizeKey(withoutThe, s.album));
   });
   return _cache.ownedKeys;
 }
@@ -6637,6 +6675,7 @@ function deleteStockItem(id) {
   stockItems = stockItems.filter(s => s.id !== id);
   invalidateCache();
   renderStock();
+  if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
   saveToStorage();
   toast('Retiré du stock');
 }
@@ -6718,7 +6757,12 @@ function renderStock() {
 
 function rateStock(id, note) {
   const s = stockItems.find(x => x.id === id);
-  if (s) { s.note = s.note === note ? 0 : note; renderStock(); saveToStorage(); }
+  if (s) {
+    s.note = s.note === note ? 0 : note;
+    renderStock();
+    if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
+    saveToStorage();
+  }
 }
 
 function exportStockCSV() {
@@ -6814,10 +6858,15 @@ function discoFilteredList() {
 
   let list = [];
   if (filter === 'no-cd') {
-    list = getNumericWithoutCD();
+    // Numériques sans CD : exclure ok et à vendre aussi
+    list = getNumericWithoutCD().filter(a => !a.okFolder && !a.forSale);
   } else {
-    // Exclure les albums du stock de la discographie
-    list = albums.filter(a => a.cd && !stockKeys.has(normalizeKey(a.artist, a.album)));
+    // Seulement les CDs du dossier Discographie (pas stock, pas ok, pas à vendre)
+    list = albums.filter(a => a.cd
+      && !stockKeys.has(normalizeKey(a.artist, a.album))
+      && !a.okFolder
+      && !a.forSale
+    );
     if (filter === 'missing') list = list.filter(a => !hasDigitalBackup(a));
     if (filter === 'ok') list = list.filter(a => hasDigitalBackup(a));
   }
@@ -6832,12 +6881,13 @@ function discoFilteredList() {
 }
 
 function renderDiscographie() {
-  const all = albums.filter(a => a.cd);
-  const saved = all.filter(a => hasDigitalBackup(a));
-  const missingNum = getCDsWithoutBackup();
-  const noCD = getNumericWithoutCD();
+  const stockKeys = getStockKeysSet();
+  const discoOnly = albums.filter(a => a.cd && !stockKeys.has(normalizeKey(a.artist, a.album)) && !a.okFolder && !a.forSale);
+  const saved = discoOnly.filter(a => hasDigitalBackup(a));
+  const missingNum = discoOnly.filter(a => !hasDigitalBackup(a));
+  const noCD = getNumericWithoutCD().filter(a => !a.okFolder && !a.forSale);
 
-  document.getElementById('disco-total').textContent = all.length;
+  document.getElementById('disco-total').textContent = discoOnly.length;
   document.getElementById('disco-saved').textContent = saved.length;
   document.getElementById('disco-missing-num').textContent = missingNum.length;
   document.getElementById('disco-missing-cd').textContent = noCD.length;
