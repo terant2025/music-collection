@@ -2318,6 +2318,38 @@ function normalizeKey(artist, album) {
   return norm(artist) + '|||' + norm(album);
 }
 
+// Retourne plusieurs variantes normalisées pour un artiste :
+// - brut, nettoyé Discogs, sans The/A, artiste principal (avant feat/with/&/;)
+// Utilisé pour élargir les comparaisons artist→artist
+function artistVariants(artist) {
+  const v = new Set();
+  if (!artist) return v;
+  const addNorm = s => { if (s && s.trim()) v.add(normalizeKey(s.trim(), '').replace('|||', '')); };
+  addNorm(artist);
+  // Discogs "(N)" et virgule inversion
+  const clean = cleanDiscogsArtist(artist);
+  addNorm(clean);
+  // Sans "The " / "A " en tête
+  addNorm(clean.replace(/^The\s+/i, '').replace(/^A\s+/i, ''));
+  // Artiste principal : couper au premier séparateur de collaboration
+  // "Asian Dub Foundation feat. Sinéad O'Connor" → "Asian Dub Foundation"
+  // "Ben Harper and The Blind Boys of Alabama"   → "Ben Harper"
+  // "Beethoven; Eugen Duvier"                    → "Beethoven"
+  // "Lonnie Johnson with Victoria Spivey"        → "Lonnie Johnson"
+  // "Kevin Ayers & The Whole World"              → "Kevin Ayers"
+  // "Molina & Johnson"                           → "Molina"
+  // "Jeff Buckley & Gary Lucas"                  → "Jeff Buckley"
+  const primaryMatch = clean.match(/^(.+?)\s*(?:feat\.?|ft\.?|featuring|\bwith\b|\band\b|&|;)/i);
+  if (primaryMatch) addNorm(primaryMatch[1]);
+  // "Various Artists" / "Various" → unifier sous les deux formes
+  const n = normalizeKey(clean, '').replace('|||', '');
+  if (n === 'various artists' || n === 'various') {
+    v.add('various artists');
+    v.add('various');
+  }
+  return v;
+}
+
 // Version "souple" : tente plusieurs variantes de normalisation pour matcher
 // Retourne true si au moins une variante de keyA correspond à une variante de keyB
 function normalizeKeyLoose(artist, title) {
@@ -2794,21 +2826,21 @@ function getOwnedKeysSet() {
   _cache.ownedKeys = new Set();
   _cache.ownedMbIds = new Set();
   albums.forEach(a => {
-    const clean = cleanDiscogsArtist(a.artist);
+    const albumNorm = normalizeKey('', a.album).replace('|||', '');
+    for (const av of artistVariants(a.artist)) {
+      _cache.ownedKeys.add(av + '|||' + albumNorm);
+    }
     _cache.ownedKeys.add(normalizeKey(a.artist, a.album));
-    _cache.ownedKeys.add(normalizeKey(clean, a.album));
-    const withoutThe = clean.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-    if (withoutThe !== clean) _cache.ownedKeys.add(normalizeKey(withoutThe, a.album));
     if (a.lastfmAliases) a.lastfmAliases.forEach(k => _cache.ownedKeys.add(k));
     if (a.mb_release_id) _cache.ownedMbIds.add(a.mb_release_id);
   });
   // Inclure aussi les albums en stock (déjà "possédés", juste pas encore écoutés)
   stockItems.forEach(s => {
-    const clean = cleanDiscogsArtist(s.artist);
+    const albumNorm = normalizeKey('', s.album).replace('|||', '');
+    for (const av of artistVariants(s.artist)) {
+      _cache.ownedKeys.add(av + '|||' + albumNorm);
+    }
     _cache.ownedKeys.add(normalizeKey(s.artist, s.album));
-    _cache.ownedKeys.add(normalizeKey(clean, s.album));
-    const withoutThe = clean.replace(/^The\s+/i, '').replace(/^A\s+/i, '');
-    if (withoutThe !== clean) _cache.ownedKeys.add(normalizeKey(withoutThe, s.album));
   });
   return _cache.ownedKeys;
 }
@@ -3673,9 +3705,11 @@ document.addEventListener('change', e => {
 // Discogs ajoute ces suffixes pour distinguer les homonymes
 function cleanDiscogsArtist(raw) {
   return (raw || '')
-    .replace(/\s*\(\d+\)\s*$/, '')      // enlever (2), (12) en fin de nom
+    .replace(/\s*\(\d+\)\s*$/, '')          // enlever (2), (12) en fin de nom
     .replace(/^(.+),\s*The\s*$/i, 'The $1') // "Black Keys, The" → "The Black Keys"
-    .replace(/^(.+),\s*A\s*$/i, 'A $1')    // "Band, A" → "A Band"
+    .replace(/^(.+),\s*A\s*$/i, 'A $1')     // "Band, A" → "A Band"
+    // "Various" seul → "Various Artists" pour uniformiser avec MusicBee
+    .replace(/^Various$/i, 'Various Artists')
     .trim();
 }
 
@@ -3700,9 +3734,18 @@ async function importDiscogs(input) {
       const label = row['label'] || '';
       const catno = row['catno'] || '';
 
-      // Appariement par discogsId d'abord (le plus fiable), puis par clé normalisée
+      // Appariement par discogsId d'abord (le plus fiable), puis par variantes artiste+album
       let existing = discogsId ? albums.find(a => a.discogsId === discogsId) : null;
-      if (!existing) existing = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
+      if (!existing) {
+        const albumNorm = normalizeKey('', album).replace('|||', '');
+        for (const av of artistVariants(artist)) {
+          existing = albums.find(a => normalizeKey(a.artist, a.album) === av + '|||' + albumNorm
+            || normalizeKey(cleanDiscogsArtist(a.artist), a.album) === av + '|||' + albumNorm);
+          if (existing) break;
+        }
+        // Fallback clé standard
+        if (!existing) existing = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
+      }
 
       if (existing) {
         if (isCd) existing.cd = true;
@@ -4017,33 +4060,41 @@ async function importMusicBeeXML(input) {
     const xmlGroupKeys = new Set();
     Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
+      const albumNorm = normalizeKey('', g.album).replace('|||', '');
       xmlGroupKeys.add(normalizeKey(g.artist, g.album));
-      xmlGroupKeys.add(normalizeKey(cleanDiscogsArtist(g.artist), g.album));
-      const noThe = (g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim();
-      if (noThe !== g.artist) xmlGroupKeys.add(normalizeKey(noThe, g.album));
+      for (const av of artistVariants(g.artist)) xmlGroupKeys.add(av + '|||' + albumNorm);
     });
     // Reset ciblé : seulement les albums dont on va recalculer les flags depuis le XML
     albums.forEach(a => {
       if (a.cd) return; // les CDs Discogs ne touchent jamais leurs flags ici
-      const k1 = normalizeKey(a.artist, a.album);
-      const k2 = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
-      const noThe = (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim();
-      const k3 = normalizeKey(noThe, a.album);
-      if (xmlGroupKeys.has(k1) || xmlGroupKeys.has(k2) || xmlGroupKeys.has(k3)) {
+      const albumNorm = normalizeKey('', a.album).replace('|||', '');
+      const hits = [normalizeKey(a.artist, a.album), ...Array.from(artistVariants(a.artist)).map(av => av + '|||' + albumNorm)];
+      if (hits.some(k => xmlGroupKeys.has(k))) {
         a.flac = false; a.mp3 = false; a.digital = false;
       }
-      // Sinon : on conserve les flags existants (album absent du XML = nom changé,
-      // déplacé en stock, etc.) — mieux vaut garder l'info que la perdre.
+    });
+
+    // Pré-indexer albums par toutes leurs variantes artiste+album pour O(1) lookup
+    const albumByVariantKey = new Map();
+    albums.forEach(a => {
+      const albumNorm = normalizeKey('', a.album).replace('|||', '');
+      albumByVariantKey.set(normalizeKey(a.artist, a.album), a);
+      for (const av of artistVariants(a.artist)) {
+        const k = av + '|||' + albumNorm;
+        if (!albumByVariantKey.has(k)) albumByVariantKey.set(k, a);
+      }
     });
 
     Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
-      const key = normalizeKey(g.artist, g.album);
-      const existing = albums.find(a =>
-        normalizeKey(a.artist, a.album) === key ||
-        normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key ||
-        normalizeKey((a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim(), a.album) === key
-      );
+      const albumNorm = normalizeKey('', g.album).replace('|||', '');
+      let existing = albumByVariantKey.get(normalizeKey(g.artist, g.album));
+      if (!existing) {
+        for (const av of artistVariants(g.artist)) {
+          existing = albumByVariantKey.get(av + '|||' + albumNorm);
+          if (existing) break;
+        }
+      }
       if (existing) {
         if (g.flac)    existing.flac    = true;
         if (g.mp3)     existing.mp3     = true;
@@ -6797,6 +6848,11 @@ function getDigitalKeysSet() {
   if (_cache.digitalKeysSet) return _cache.digitalKeysSet;
   _cache.digitalKeysSet = new Set();
   albums.filter(a => a.flac || a.mp3 || a.digital).forEach(a => {
+    // Indexer avec toutes les variantes artiste pour maximiser les rapprochements
+    for (const av of artistVariants(a.artist)) {
+      _cache.digitalKeysSet.add(av + '|||' + normalizeKey('', a.album).replace('|||', ''));
+    }
+    // Aussi la clé standard complète
     _cache.digitalKeysSet.add(normalizeKey(a.artist, a.album));
     _cache.digitalKeysSet.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
   });
@@ -6805,9 +6861,13 @@ function getDigitalKeysSet() {
 
 function getCDKeysSet() {
   if (_cache.cdKeysSet) return _cache.cdKeysSet;
-  _cache.cdKeysSet = new Set(
-    albums.filter(a => a.cd).map(a => normalizeKey(a.artist, a.album))
-  );
+  _cache.cdKeysSet = new Set();
+  albums.filter(a => a.cd).forEach(a => {
+    _cache.cdKeysSet.add(normalizeKey(a.artist, a.album));
+    for (const av of artistVariants(a.artist)) {
+      _cache.cdKeysSet.add(av + '|||' + normalizeKey('', a.album).replace('|||', ''));
+    }
+  });
   return _cache.cdKeysSet;
 }
 
@@ -6819,8 +6879,10 @@ function hasDigitalBackup(album) {
     if (linked && (linked.flac || linked.mp3 || linked.digital)) return true;
   }
   const digitalKeys = getDigitalKeysSet();
-  if (digitalKeys.has(normalizeKey(album.artist, album.album))) return true;
-  if (digitalKeys.has(normalizeKey(cleanDiscogsArtist(album.artist), album.album))) return true;
+  const albumNorm = normalizeKey('', album.album).replace('|||', '');
+  for (const av of artistVariants(album.artist)) {
+    if (digitalKeys.has(av + '|||' + albumNorm)) return true;
+  }
   return false;
 }
 
@@ -6839,11 +6901,16 @@ function getNumericWithoutCD() {
   _cache.numericWithoutCD = albums
     .filter(a => (a.flac || a.mp3 || a.digital) && !a.cd)
     .filter(a => {
-      if (cdKeys.has(normalizeKey(a.artist, a.album))) return false;
+      // Déjà associé manuellement à un CD
       if (linkedNumIds.has(a.id)) {
         const link = associations.find(assoc => assoc.numId === a.id);
         const cdAlbum = link ? albums.find(b => b.id === link.cdId) : null;
         if (cdAlbum && cdAlbum.cd) return false;
+      }
+      // Vérifier toutes les variantes artiste × album
+      const albumNorm = normalizeKey('', a.album).replace('|||', '');
+      for (const av of artistVariants(a.artist)) {
+        if (cdKeys.has(av + '|||' + albumNorm)) return false;
       }
       return true;
     });
