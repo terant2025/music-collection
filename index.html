@@ -4182,11 +4182,28 @@ async function importMusicBeeXML(input) {
     parts.push(`${stockDelta} en stock`);
     status.textContent = `✓ XML : ${parts.join(' — ')}`;
     status.className = 'status ok';
-    // Ne pas supprimer automatiquement — risque trop élevé si detectFolder rate des dossiers
-    // Afficher seulement un avertissement
-    const noSupportAlbums = albums.filter(a => !a.cd && !a.flac && !a.mp3 && !a.digital && !a.forSale && !(a.note > 0));
-    const removedAlbums = 0;
-    if (noSupportAlbums.length) console.warn(`${noSupportAlbums.length} albums sans support après import XML (flags préservés si absent du XML)`);
+    // Albums numériques fantômes : plus aucun support après le reset ciblé
+    // = étaient dans MusicBee avant, plus maintenant (renommés, déplacés, supprimés)
+    // On propose la suppression avec confirmation
+    const ghostAlbums = albums.filter(a =>
+      !a.cd && !a.flac && !a.mp3 && !a.digital
+      && !a.forSale && !a.okFolder
+      && !(a.note > 0)
+      && !stockItems.find(s => normalizeKey(s.artist, s.album) === normalizeKey(a.artist, a.album))
+    );
+    let removedAlbums = 0;
+    if (ghostAlbums.length) {
+      const listStr = ghostAlbums.slice(0, 20).map(a => `• ${a.artist} — ${a.album}`).join('\n')
+        + (ghostAlbums.length > 20 ? `\n… et ${ghostAlbums.length - 20} autres` : '');
+      if (confirm(
+        `${ghostAlbums.length} album${ghostAlbums.length > 1 ? 's' : ''} n'ont plus aucun support après l'import ` +
+        `(ni CD, ni numérique) :\n\n${listStr}\n\nSupprimer ces entrées ?`
+      )) {
+        const ghostIds = new Set(ghostAlbums.map(a => a.id));
+        albums = albums.filter(a => !ghostIds.has(a.id));
+        removedAlbums = ghostAlbums.length;
+      }
+    }
 
 window._skipLoadAlbumTracks = true;
     const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracks);
