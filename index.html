@@ -1358,6 +1358,7 @@ input[type="file"] { display: none; }
           <input type="file" id="file-reimport-json" accept=".json" onchange="reimportJSON(this)">
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
+          <button class="btn" onclick="runDeduplication()">🔧 Fusionner les doublons</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
@@ -4174,6 +4175,7 @@ async function importMusicBeeXML(input) {
           forSale: g.forSaleFolder || false,
           mb_release_id: g.mbReleaseId || undefined,
           release_date:  g.releaseDate  || undefined });
+        console.log(`[XML import] NOUVEAU : "${g.artist}" — "${g.album}" (clé: ${normalizeKey(g.artist, g.album)})`);
         albumsAdded++;
       }
     });
@@ -4223,6 +4225,17 @@ async function importMusicBeeXML(input) {
     if (albumsAdded || albumsUpdated) parts.push(`${albumsAdded} albums ajoutés, ${albumsUpdated} mis à jour`);
     parts.push(`${trackDelta} morceaux isolés`);
     parts.push(`${stockDelta} en stock`);
+
+    // Déduplication automatique après import (fusionne les doublons Various/Various Artists etc.)
+    const beforeDedup = albums.length;
+    deduplicateAlbums();
+    const dedupRemoved = beforeDedup - albums.length;
+    if (dedupRemoved > 0) {
+      parts.push(`${dedupRemoved} doublon${dedupRemoved > 1 ? 's' : ''} fusionné${dedupRemoved > 1 ? 's' : ''}`);
+      console.log(`[XML import] Déduplication : ${dedupRemoved} doublons supprimés`);
+    }
+
+    console.log(`[XML import] Résumé : ${albumsAdded} nouveaux, ${albumsUpdated} mis à jour, ${albums.length} total`);
     status.textContent = `✓ XML : ${parts.join(' — ')}`;
     status.className = 'status ok';
     // Albums numériques fantômes : plus aucun support après le reset ciblé
@@ -7777,7 +7790,28 @@ async function importRYMHtml(input) {
   input.value = '';
 }
 
-// ===================== REIMPORT CSV =====================
+// Déduplication manuelle déclenchée par le bouton — avec rapport et sync Supabase
+async function runDeduplication() {
+  const before = albums.length;
+  deduplicateAlbums();
+  const removed = before - albums.length;
+  invalidateCache();
+  if (removed > 0) {
+    await saveToSupabase();
+    renderAlbums();
+    updateNavBadges();
+    toast(`🔧 ${removed} doublon${removed > 1 ? 's' : ''} fusionné${removed > 1 ? 's' : ''} et synchronisé${removed > 1 ? 's' : ''}`);
+  } else {
+    toast('Aucun doublon détecté');
+  }
+  const status = document.getElementById('status-json-reimport');
+  if (status) {
+    status.textContent = removed > 0
+      ? `✓ ${removed} doublon${removed > 1 ? 's' : ''} supprimé${removed > 1 ? 's' : ''} — ${albums.length} albums restants`
+      : `✓ Aucun doublon — ${albums.length} albums`;
+    status.className = 'status ok';
+  }
+}
 async function reimportCSV(input) {
   const file = input.files[0]; if (!file) return;
   const status = document.getElementById('status-reimport');
