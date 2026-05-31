@@ -7417,26 +7417,54 @@ function getRYMThreshold() {
   return sel ? parseFloat(sel.value) : 3.5;
 }
 
-// Albums notés >= seuil sur RYM mais absents de la collection (CD ou numérique)
+// Index partagé de tout ce qui est "possédé" pour les rapprochements RYM.
+// Couvre : albums[] (CD, num, okFolder, forSale) + stockItems[]
+// Utilise artistVariants pour gérer feat./with/&/;/Various/casse/The
+function getOwnedRymKeys() {
+  if (_cache.ownedRymKeys) return _cache.ownedRymKeys;
+  const keys = new Set();
+  const mbIds = new Set();
+
+  const indexEntry = (artist, album, mb_release_id) => {
+    const albumNorm = normalizeKey('', album).replace('|||', '');
+    for (const av of artistVariants(artist)) {
+      keys.add(av + '|||' + albumNorm);
+    }
+    // Clé standard complète (sans passer par artistVariants, garde-fou)
+    keys.add(normalizeKey(artist, album));
+    if (mb_release_id) mbIds.add(mb_release_id);
+  };
+
+  // Tous les albums avec un support quelconque (y compris ok, à vendre)
+  albums.forEach(a => {
+    if (a.cd || a.flac || a.mp3 || a.digital || a.okFolder || a.forSale) {
+      indexEntry(a.artist, a.album, a.mb_release_id);
+    }
+  });
+
+  // Stock : possédés numériquement, juste pas encore dans la collection principale
+  stockItems.forEach(s => indexEntry(s.artist, s.album, null));
+
+  _cache.ownedRymKeys = { keys, mbIds };
+  return _cache.ownedRymKeys;
+}
+
+// Albums notés >= seuil sur RYM mais absents de la collection (CD, numérique, stock, ok, à vendre)
 function computeRYMMissing() {
   if (_cache.rymMissing) return _cache.rymMissing;
   if (!rymData.length) return (_cache.rymMissing = []);
   const threshold = getRYMThreshold();
-  // Index par clé normalisée + par mb_release_id
-  const ownedKeys = new Set();
-  const ownedMbIds = new Set();
-  albums.filter(a => a.cd || a.flac || a.mp3 || a.digital).forEach(a => {
-    ownedKeys.add(normalizeKey(a.artist, a.album));
-    ownedKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
-    if (a.mb_release_id) ownedMbIds.add(a.mb_release_id);
-  });
+  const { keys: ownedKeys, mbIds: ownedMbIds } = getOwnedRymKeys();
   const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
   _cache.rymMissing = rymData
     .filter(r => r.rating >= threshold)
     .filter(r => {
-      const key = normalizeKey(r.artist, r.album);
-      if (ownedKeys.has(key)) return false;
-      if (associatedRymKeys.has(key)) return false;
+      const albumNorm = normalizeKey('', r.album).replace('|||', '');
+      // Vérifier toutes les variantes artiste du côté RYM
+      for (const av of artistVariants(r.artist)) {
+        if (ownedKeys.has(av + '|||' + albumNorm)) return false;
+      }
+      if (associatedRymKeys.has(normalizeKey(r.artist, r.album))) return false;
       if (r.mb_release_id && ownedMbIds.has(r.mb_release_id)) return false;
       return true;
     })
@@ -7444,41 +7472,45 @@ function computeRYMMissing() {
   return _cache.rymMissing;
 }
 
-// Entrées RYM sans note (rating absent ou 0)
+// Entrées RYM sans note (rating absent ou 0) — uniquement celles qui sont possédées
+// (inutile d'afficher des non-notés pour des albums qu'on n'a pas)
 function computeRYMUnrated() {
   if (_cache.rymUnrated) return _cache.rymUnrated;
   if (!rymData.length) return (_cache.rymUnrated = []);
+  const { keys: ownedKeys } = getOwnedRymKeys();
   const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
   _cache.rymUnrated = rymData
     .filter(r => !r.rating || r.rating === 0)
-    .filter(r => !associatedRymKeys.has(normalizeKey(r.artist, r.album)))
+    .filter(r => {
+      // Garder seulement si possédé ou associé
+      if (associatedRymKeys.has(normalizeKey(r.artist, r.album))) return true;
+      const albumNorm = normalizeKey('', r.album).replace('|||', '');
+      for (const av of artistVariants(r.artist)) {
+        if (ownedKeys.has(av + '|||' + albumNorm)) return true;
+      }
+      return false;
+    })
     .sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album, 'fr'));
   return _cache.rymUnrated;
 }
 
-// Entrées RYM avec ownership renseigné mais introuvables dans albums (Discogs/Discographie)
+// Entrées RYM avec ownership renseigné mais introuvables dans la collection complète
+// (albums[], stockItems[], okFolder, forSale — avec toutes variantes artiste)
 function computeRYMOrphans() {
   if (_cache.rymOrphans) return _cache.rymOrphans;
   if (!rymData.length) return (_cache.rymOrphans = []);
-  // Index des albums possédés (cd/discogs) par clé normalisée
-  const ownedKeys = new Set();
-  albums.forEach(a => {
-    if (a.cd || a.discogsId) {
-      ownedKeys.add(normalizeKey(a.artist, a.album));
-      ownedKeys.add(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
-    }
-  });
-  // Index des associations manuelles déjà faites
+  const { keys: ownedKeys } = getOwnedRymKeys();
   const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
   _cache.rymOrphans = rymData
     .filter(r => {
       const own = (r.ownership || '').trim().toLowerCase();
       if (!own) return false; // pas d'ownership → on n'inclut pas
       const key = normalizeKey(r.artist, r.album);
-      // Déjà associé manuellement → OK, pas orphelin
       if (associatedRymKeys.has(key)) return false;
-      // Retrouvé dans la collection → pas orphelin
-      if (ownedKeys.has(key)) return false;
+      const albumNorm = normalizeKey('', r.album).replace('|||', '');
+      for (const av of artistVariants(r.artist)) {
+        if (ownedKeys.has(av + '|||' + albumNorm)) return false;
+      }
       return true;
     })
     .sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album, 'fr'));
