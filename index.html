@@ -1788,16 +1788,48 @@ async function sbUpsert(table, rows, onConflict) {
   }
 }
 
-// Dédoublonner le tableau albums en mémoire (garde l'entrée avec l'id max)
+// Dédoublonner le tableau albums en mémoire
+// Utilise artistVariants pour fusionner ex. "Various" et "Various Artists", "EELS" et "Eels"
 function deduplicateAlbums() {
-  const seen = new Map();
-  albums.forEach(a => {
-    const k = (a.artist + '|' + a.album).toLowerCase().trim();
-    const prev = seen.get(k);
-    if (!prev || a.id > prev.id) seen.set(k, a);
-  });
+  const seen = new Map(); // clé normalisée → entrée retenue
   const before = albums.length;
-  albums = Array.from(seen.values());
+
+  albums.forEach(a => {
+    const albumNorm = normalizeKey('', a.album).replace('|||', '');
+    // Clé canonique : variante normalisée la plus courte (stable)
+    let canonKey = null;
+    for (const av of artistVariants(a.artist)) {
+      const k = av + '|||' + albumNorm;
+      if (!canonKey) canonKey = k;
+      // Si une entrée existe déjà pour cette variante, fusionner
+      const prev = seen.get(k);
+      if (prev) {
+        // Garder l'entrée avec l'id le plus élevé (la plus récente) mais fusionner les formats
+        const [keep, drop] = a.id > prev.id ? [a, prev] : [prev, a];
+        keep.cd      = keep.cd      || drop.cd;
+        keep.flac    = keep.flac    || drop.flac;
+        keep.mp3     = keep.mp3     || drop.mp3;
+        keep.digital = keep.digital || drop.digital;
+        if (!keep.discogsId && drop.discogsId) keep.discogsId = drop.discogsId;
+        if (!keep.year  && drop.year)  keep.year  = drop.year;
+        if (!keep.genre && drop.genre) keep.genre = drop.genre;
+        if (!keep.note  && drop.note)  keep.note  = drop.note;
+        // Mettre à jour toutes les variantes pour pointer vers keep
+        for (const av2 of artistVariants(keep.artist)) seen.set(av2 + '|||' + albumNorm, keep);
+        for (const av2 of artistVariants(drop.artist)) seen.set(av2 + '|||' + albumNorm, keep);
+        canonKey = null; // déjà indexé
+        break;
+      }
+    }
+    if (canonKey !== null) {
+      // Nouvelle entrée : indexer toutes ses variantes
+      for (const av of artistVariants(a.artist)) seen.set(av + '|||' + albumNorm, a);
+    }
+  });
+
+  // Reconstruire albums[] sans doublons (valeurs uniques du Map)
+  const unique = [...new Set(seen.values())];
+  albums = unique;
   if (albums.length < before) console.log(`Dédoublonnage : ${before - albums.length} doublons supprimés`);
 }
 
@@ -4109,12 +4141,23 @@ async function importMusicBeeXML(input) {
         }
       }
       if (existing) {
+        // Toujours mettre à jour les flags format depuis le XML (source de vérité MusicBee)
         if (g.flac)    existing.flac    = true;
         if (g.mp3)     existing.mp3     = true;
         if (g.digital) existing.digital = true;
-        if (!existing.year  && g.year)  existing.year  = g.year;
-        if (!existing.genre && g.genre) existing.genre = g.genre;
-        if (g.maxRating && !existing.note) existing.note = g.maxRating;
+        // Mettre à jour les métadonnées tags si le XML les renseigne
+        if (g.year)  existing.year  = g.year;
+        if (g.genre) existing.genre = g.genre;
+        // Note : toujours prendre la plus haute entre XML et valeur existante
+        if (g.maxRating) existing.note = Math.max(existing.note || 0, g.maxRating);
+        // Normaliser l'artiste : si le XML donne une version plus propre/canonique,
+        // mettre à jour pour éviter des doublons aux prochains imports
+        // (ex: 'Various' → 'Various Artists', 'EELS' → 'Eels')
+        if (g.artist && normalizeKey(g.artist, '') !== normalizeKey(existing.artist, '')) {
+          // Conserver la version qui correspond à Discogs si l'album a un discogsId
+          if (!existing.discogsId) existing.artist = g.artist;
+        }
+        // Compilation / trackArtists
         existing.isCompilation = g.isCompilation || existing.isCompilation;
         if (g.trackArtists?.length) existing.trackArtists = Array.isArray(g.trackArtists) ? g.trackArtists.slice(0,20) : [...g.trackArtists].slice(0,20);
         if (g.okFolder)      existing.okFolder = true;
