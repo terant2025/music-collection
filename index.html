@@ -766,6 +766,13 @@ input[type="file"] { display: none; }
           <option value="ok">✅ Sauvegardés</option>
           <option value="no-cd">🔵 Numériques sans CD</option>
         </select>
+        <select id="disco-filter-type" onchange="renderDiscographie()">
+          <option value="">Tous types</option>
+          <option value="no-va">Hors compilations</option>
+          <option value="va">Compilations seules</option>
+          <option value="no-ep">Hors EPs/singles</option>
+          <option value="studio">Albums studio seuls</option>
+        </select>
         <select id="disco-sort" onchange="renderDiscographie()">
           <option value="artist">Tri : Artiste</option>
           <option value="album">Tri : Album</option>
@@ -2331,16 +2338,22 @@ function artistVariants(artist) {
   addNorm(clean);
   // Sans "The " / "A " en tête
   addNorm(clean.replace(/^The\s+/i, '').replace(/^A\s+/i, ''));
-  // Artiste principal : couper au premier séparateur de collaboration
+  // Artiste principal : couper au premier séparateur de collaboration clair
   // "Asian Dub Foundation feat. Sinéad O'Connor" → "Asian Dub Foundation"
-  // "Ben Harper and The Blind Boys of Alabama"   → "Ben Harper"
+  // "Ben Harper and The Blind Boys of Alabama"   → "Ben Harper"   (and The)
   // "Beethoven; Eugen Duvier"                    → "Beethoven"
   // "Lonnie Johnson with Victoria Spivey"        → "Lonnie Johnson"
   // "Kevin Ayers & The Whole World"              → "Kevin Ayers"
   // "Molina & Johnson"                           → "Molina"
   // "Jeff Buckley & Gary Lucas"                  → "Jeff Buckley"
-  const primaryMatch = clean.match(/^(.+?)\s*(?:feat\.?|ft\.?|featuring|\bwith\b|\band\b|&|;)/i);
-  if (primaryMatch) addNorm(primaryMatch[1]);
+  // PAS "Diving With Andy" → "Diving"  (trop court, nom propre seul)
+  // PAS "Antony and the Johnsons" → "Antony"  (le groupe s'appelle vraiment comme ça)
+  const primaryMatch = clean.match(
+    /^(.+?)\s*(?:feat\.?|ft\.?|featuring|\bwith\b\s+[A-Z]|&\s+(?:The\b|[A-Z][a-z])|;\s*[A-Z]|,\s*[A-Z][a-z])/
+  );
+  if (primaryMatch && primaryMatch[1].trim().split(/\s+/).length >= 2) {
+    addNorm(primaryMatch[1]);
+  }
   // "Various Artists" / "Various" → unifier sous les deux formes
   const n = normalizeKey(clean, '').replace('|||', '');
   if (n === 'various artists' || n === 'various') {
@@ -6919,16 +6932,21 @@ function getNumericWithoutCD() {
 
 function discoFilteredList() {
   const filter = document.getElementById('disco-filter')?.value || 'all';
+  const typeFilter = document.getElementById('disco-filter-type')?.value || '';
   const sort = document.getElementById('disco-sort')?.value || 'artist';
   const q = document.getElementById('global-search').value.toLowerCase();
   const stockKeys = getStockKeysSet();
 
+  // Détecte une compilation (Various Artists / Various)
+  const isVA = a => /^various/i.test(a.artist) || a.isCompilation;
+  // Détecte un EP / single / rarités / live / compilation de titres
+  const EP_RE = /\b(EP|single|b[\-\s]?sides?|bonus|raret[eé]s?|best\s+of|collection|sampler|vol\.?|volume|#\d|\bcd\s*\d|\blive\b|bootleg|demo|anthology|greatest\s+hits|the\s+singles|box\s+set)\b/i;
+  const isEP = a => EP_RE.test(a.album) || /^\[/.test(a.album);
+
   let list = [];
   if (filter === 'no-cd') {
-    // Numériques sans CD : exclure ok et à vendre aussi
     list = getNumericWithoutCD().filter(a => !a.okFolder && !a.forSale);
   } else {
-    // Seulement les CDs du dossier Discographie (pas stock, pas ok, pas à vendre)
     list = albums.filter(a => a.cd
       && !stockKeys.has(normalizeKey(a.artist, a.album))
       && !a.okFolder
@@ -6937,6 +6955,12 @@ function discoFilteredList() {
     if (filter === 'missing') list = list.filter(a => !hasDigitalBackup(a));
     if (filter === 'ok') list = list.filter(a => hasDigitalBackup(a));
   }
+
+  // Filtre par type
+  if (typeFilter === 'no-va')   list = list.filter(a => !isVA(a));
+  if (typeFilter === 'va')      list = list.filter(a => isVA(a));
+  if (typeFilter === 'no-ep')   list = list.filter(a => !isEP(a));
+  if (typeFilter === 'studio')  list = list.filter(a => !isVA(a) && !isEP(a));
 
   if (q) list = list.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
 
