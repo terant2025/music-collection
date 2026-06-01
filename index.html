@@ -5665,6 +5665,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   const toSave = [];
   let matched = 0, unmatched = 0;
   const unmatchedSample = [];
+  const DIAG2 = ['adele', 'air', '7ebra', 'activity', 'adam green', 'alice in chains', 'alvvays'];
   Object.values(byKey).forEach(g => {
     if (!g.album || g.album.startsWith('__isolated__')) return;
     const albumNorm = normalizeKey('', g.album).replace('|||', '');
@@ -5676,6 +5677,21 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       }
     }
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
+
+    // Log diagnostic
+    const artistNorm2 = normalizeKey(g.artist, '').replace('|||','');
+    if (DIAG2.some(d => artistNorm2.startsWith(d))) {
+      console.log('[tl-diag] "' + g.artist + '" — "' + g.album + '" folder=' + g.folder + ' found=' + !!albumObj + ' key=' + normalizeKey(g.artist,g.album));
+      if (!albumObj) {
+        // Show what's in albumIndex for this artist
+        const variants = [...artistVariants(g.artist)];
+        variants.forEach(av => {
+          const k = av + '|||' + albumNorm;
+          const v = albumIndex.get(k);
+          console.log('  tried: ' + k + ' → ' + (v ? v.artist + ' — ' + v.album : 'NOT FOUND'));
+        });
+      }
+    }
     if (albumObj) {
       albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
         .filter(t => t.source !== 'musicbee').concat(g.tracks);
