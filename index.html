@@ -5641,9 +5641,10 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   }, {});
   console.log(`_mbTrackKeys : ${window._mbTrackKeys.size} clés pour ${totalTracks} pistes`, byFolder);
 
-  // ── Tenter aussi le matching albums[] pour albumTracksCache (vue Discographie) ─
+  // ── Tenter aussi le matching albums[] + stockItems[] pour albumTracksCache ─
+  // Les albums en stock ont aussi leurs pistes dans byKey — il faut les indexer
   const albumIndex = new Map();
-  albums.forEach(a => {
+  const _indexIntoAlbumIndex = (a) => {
     const albumNorm = normalizeKey('', a.album).replace('|||', '');
     albumIndex.set(normalizeKey(a.artist, a.album), a);
     for (const av of artistVariants(a.artist)) {
@@ -5651,7 +5652,9 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       if (!albumIndex.has(k)) albumIndex.set(k, a);
     }
     if (a.mb_release_id) albumIndex.set('mbid:' + a.mb_release_id, a);
-  });
+  };
+  albums.forEach(a => _indexIntoAlbumIndex(a));
+  stockItems.forEach(s => _indexIntoAlbumIndex(s));
 
   const toSave = [];
   let matched = 0, unmatched = 0;
