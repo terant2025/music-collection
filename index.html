@@ -4141,6 +4141,12 @@ async function importMusicBeeXML(input) {
           if (existing) break;
         }
       }
+      // Log diagnostic pour les albums connus non retrouvés
+      const DIAG = ['adele', 'air', '7ebra', 'activity', 'adam green', 'alice in chains', 'alvvays'];
+      const artistNorm = normalizeKey(g.artist, '').replace('|||','');
+      if (DIAG.some(d => artistNorm.startsWith(d))) {
+        console.log(`[diag] "${g.artist}" — "${g.album}" folder=${g.folder} existing=${!!existing} key=${normalizeKey(g.artist,g.album)}`);
+      }
       if (existing) {
         // Toujours mettre à jour les flags format depuis le XML (source de vérité MusicBee)
         if (g.flac)    existing.flac    = true;
