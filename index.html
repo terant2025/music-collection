@@ -4270,7 +4270,16 @@ window._skipLoadAlbumTracks = true;
     renderAlbums(); renderTracks(); renderStock();
     const removedStr = removedAlbums ? `, ${removedAlbums} supprimés` : '';
     toast(`MusicBee XML : ${albumsAdded} nouveaux, ${trackDelta} morceaux, ${stockDelta} stock${removedStr}`);
-    saveToStorage();
+
+    // Sauvegarde directe (sans debounce) pour garantir que Supabase reçoit toutes les mises à jour
+    if (window._sb) {
+      status.textContent += ' — synchronisation Supabase…';
+      setSaveIndicator('saving');
+      await saveToSupabase();
+      status.textContent = status.textContent.replace(' — synchronisation Supabase…', ' — ✓ synchronisé');
+    } else {
+      _saveToStorageImpl();
+    }
   } catch(e) {
     status.textContent = 'Erreur : ' + e.message;
     status.className = 'status err';
@@ -5635,20 +5644,28 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   // ── Tenter aussi le matching albums[] pour albumTracksCache (vue Discographie) ─
   const albumIndex = new Map();
   albums.forEach(a => {
+    const albumNorm = normalizeKey('', a.album).replace('|||', '');
     albumIndex.set(normalizeKey(a.artist, a.album), a);
-    albumIndex.set(normalizeKey(cleanDiscogsArtist(a.artist), a.album), a);
-    const withoutThe = (a.artist || '').replace(/^The\s+/i, '').trim();
-    if (withoutThe !== a.artist) albumIndex.set(normalizeKey(withoutThe, a.album), a);
+    for (const av of artistVariants(a.artist)) {
+      const k = av + '|||' + albumNorm;
+      if (!albumIndex.has(k)) albumIndex.set(k, a);
+    }
     if (a.mb_release_id) albumIndex.set('mbid:' + a.mb_release_id, a);
   });
 
   const toSave = [];
   let matched = 0, unmatched = 0;
+  const unmatchedSample = [];
   Object.values(byKey).forEach(g => {
-    const gKey = normalizeKey(g.artist, g.album);
-    let albumObj = albumIndex.get(gKey)
-      || albumIndex.get(normalizeKey(cleanDiscogsArtist(g.artist), g.album))
-      || albumIndex.get(normalizeKey((g.artist || '').replace(/^The\s+/i, '').trim(), g.album));
+    if (!g.album || g.album.startsWith('__isolated__')) return;
+    const albumNorm = normalizeKey('', g.album).replace('|||', '');
+    let albumObj = albumIndex.get(normalizeKey(g.artist, g.album));
+    if (!albumObj) {
+      for (const av of artistVariants(g.artist)) {
+        albumObj = albumIndex.get(av + '|||' + albumNorm);
+        if (albumObj) break;
+      }
+    }
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
     if (albumObj) {
       albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
@@ -5657,8 +5674,10 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       matched++;
     } else {
       unmatched++;
+      if (unmatchedSample.length < 20) unmatchedSample.push(`"${g.artist}" — "${g.album}"`);
     }
   });
+  if (unmatchedSample.length) console.log('importMusicBeeTracklists — ' + unmatched + ' non matchés :\n' + unmatchedSample.join('\n'));
 
   // ── Sauvegarder dans Supabase en arrière-plan ────────────────────────────────
   // 1. album_tracks (inchangé — pour la vue Discographie)
