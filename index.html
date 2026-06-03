@@ -1764,12 +1764,12 @@ async function connectSupabase(anonKey) {
     const setupEl = document.getElementById('supabase-setup');
     if (setupEl) setupEl.style.display = 'none';
     const loaded = await loadFromSupabase();
-    if (!loaded) await saveToSupabase();
+    // Ne pas sauvegarder si la collection est vide (ex: après migration — évite de purger les associations)
+    if (!loaded && albums.length > 0) await saveToSupabase();
     _dataReady = true;
     renderAlbums(); renderTracks(); updateNavBadges();
     setSaveIndicator('saved');
-    toast('🟢 Supabase connecté');
-    // Sync last.fm automatique en arrière-plan (silencieuse si déjà à jour)
+    toast(loaded ? '🟢 Supabase connecté' : '🟢 Supabase connecté — importe ton XML MusicBee pour peupler la collection');
     setTimeout(() => autoSyncLastfm(), 2000);
     return true;
   } catch(e) {
@@ -1960,7 +1960,30 @@ async function loadFromSupabase() {
       if (batch.length < 1000) break;
       albPage++;
     }
-    if (!alb.length) return false;
+    if (!alb.length) {
+      // Table vide = après migration ou première utilisation — pas une erreur
+      console.log('Albums table vide — prêt pour import XML');
+      stockItems = [];
+      // Charger quand même les associations, meta, lastfm depuis Supabase
+      const { data: assoc } = await window._sb.from('associations').select('*');
+      associations = (assoc || []).map(a => ({ cdKey: a.cd_key, numKey: a.num_key }));
+      const { data: rymAssoc } = await window._sb.from('rym_associations').select('*');
+      rymAssociations = (rymAssoc || []).map(a => ({ rymKey: a.rym_key, albumKey: a.album_key }));
+      const { data: metaRows } = await window._sb.from('meta').select('key,value');
+      if (metaRows) {
+        const metaMap = Object.fromEntries(metaRows.map(r => [r.key, r.value]));
+        if (metaMap.lastfm_sync_ts) localStorage.setItem(LASTFM_SYNC_KEY, metaMap.lastfm_sync_ts);
+        if (metaMap.wishlist_data) { try { const wd = JSON.parse(metaMap.wishlist_data); if (wd.albums?.length) wishlist = wd.albums; if (wd.tracks?.length) trackWishlist = wd.tracks; } catch(e) {} }
+        if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
+        if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
+        if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
+      }
+      loadLastfmFromSupabase();
+      const { data: rym } = await window._sb.from('rym_data').select('*');
+      rymData = (rym || []).map(d => ({ artist: d.artist, album: d.album, rating: d.rating, ownership: d.ownership || '', year: d.year || '', genre: d.genre || '' }));
+      setSaveIndicator('saved');
+      return true; // succès — collection vide est un état valide
+    }
 
     albums = alb.map(a => {
       let folders = [];
@@ -8246,7 +8269,8 @@ async function initApp() {
   loadLastfmTrackStatus();
   loadLovedTracks();
   const restored = loadFromStorage();
-  if (!restored) {
+  // Ne charger la démo que si pas de Supabase et pas de données locales
+  if (!restored && !window._sb) {
     loadDemo();
     saveToStorage();
   }
