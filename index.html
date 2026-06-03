@@ -1786,11 +1786,21 @@ function skipSupabase() {
 }
 
 // Chunk helper : Supabase limite les upserts à ~500 lignes
+// Dédoublonne par clé de conflit avant envoi pour éviter "ON CONFLICT DO UPDATE command cannot affect row a second time"
 async function sbUpsert(table, rows, onConflict) {
   if (!rows.length) return;
+  // Dédoublonner par clé de conflit (peut être composite : "a,b")
+  const conflictCols = onConflict.split(',').map(c => c.trim());
+  const seen = new Map();
+  rows.forEach(r => {
+    const k = conflictCols.map(c => String(r[c] ?? '')).join('|||');
+    // Garder la dernière occurrence (plus récente)
+    seen.set(k, r);
+  });
+  const deduped = [...seen.values()];
   const size = 400;
-  for (let i = 0; i < rows.length; i += size) {
-    const { error } = await window._sb.from(table).upsert(rows.slice(i, i + size), { onConflict });
+  for (let i = 0; i < deduped.length; i += size) {
+    const { error } = await window._sb.from(table).upsert(deduped.slice(i, i + size), { onConflict });
     if (error) throw error;
   }
 }
@@ -4241,14 +4251,23 @@ async function importMusicBeeXML(input) {
     parts.push(`${trackDelta} morceaux isolés`);
     parts.push(`${stockDelta} en stock`);
 
-    // Déduplication automatique après import (fusionne les doublons Various/Various Artists etc.)
+    // Déduplication par ID stable avant sauvegarde Supabase
     const beforeDedup = albums.length;
-    deduplicateAlbums();
-    const dedupRemoved = beforeDedup - albums.length;
-    if (dedupRemoved > 0) {
-      parts.push(`${dedupRemoved} doublon${dedupRemoved > 1 ? 's' : ''} fusionné${dedupRemoved > 1 ? 's' : ''}`);
-      console.log(`[XML import] Déduplication : ${dedupRemoved} doublons supprimés`);
-    }
+    const albById = new Map();
+    albums.forEach(a => {
+      const prev = albById.get(a.id);
+      if (!prev) { albById.set(a.id, a); return; }
+      // Fusionner : garder la version la plus complète
+      if (!prev.discogsId && a.discogsId) prev.discogsId = a.discogsId;
+      if (!prev.year && a.year) prev.year = a.year;
+      if (!prev.genre && a.genre) prev.genre = a.genre;
+      prev.has_cd = prev.has_cd || a.has_cd;
+      if (!prev.format && a.format) prev.format = a.format;
+      // Fusionner folders
+      (a.folders || []).forEach(f => { if (!prev.folders) prev.folders = []; if (!prev.folders.includes(f)) prev.folders.push(f); });
+    });
+    albums = [...albById.values()];
+    if (albums.length < beforeDedup) console.log(`[XML import] ${beforeDedup - albums.length} doublons fusionnés par ID stable`);
 
     console.log(`[XML import] Résumé : ${albumsAdded} nouveaux, ${albumsUpdated} mis à jour, ${albums.length} total`);
     status.textContent = `✓ XML : ${parts.join(' — ')}`;
