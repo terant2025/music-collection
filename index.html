@@ -5412,18 +5412,15 @@ async function fetchMusicBrainzRelease(mbId) {
 async function saveTracklist(albumId, tracks_) {
   if (!window._sb || !tracks_.length) return;
   const source = tracks_[0]?.source || 'discogs';
-  // Supprimer les anciennes entrées pour cette source
-  // (try/catch : album_tracks peut avoir une politique RLS ou CORS restrictive)
   try {
     await window._sb.from('album_tracks').delete()
       .eq('album_id', albumId).eq('source', source);
   } catch(e) {
-    console.warn('saveTracklist delete (ignoré — vérifiez RLS sur album_tracks):', e.message || e);
+    console.warn('saveTracklist delete (ignoré):', e.message || e);
     albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
       .filter(t => t.source !== source).concat(tracks_);
     return;
   }
-  // Dédoublonner avant insert (évite ON CONFLICT duplicate dans le même batch)
   const seen = new Set();
   const unique = tracks_.filter(t => {
     const k = (t.title||'').toLowerCase().trim() + '|' + (t.position||'');
@@ -5431,14 +5428,21 @@ async function saveTracklist(albumId, tracks_) {
     seen.add(k); return true;
   });
   const rows = unique.map(t => ({
-    album_id: albumId, position: t.position||'', title: t.title||'',
-    duration: t.duration||'', source: t.source,
-    bitrate: t.bitrate||null, sample_rate: t.sample_rate||null,
-    file_size: t.file_size||null, play_count: t.play_count||null,
-    last_played: t.last_played||null, date_added: t.date_added||null,
-    composer: t.composer||null, isrc: t.isrc||null,
+    album_id:        String(albumId), // toujours text désormais
+    position:        t.position||'',
+    title:           t.title||'',
+    duration:        t.duration||'',
+    source:          t.source,
+    bitrate:         t.bitrate||null,
+    sample_rate:     t.sample_rate||null,
+    file_size:       t.file_size||null,
+    play_count:      t.play_count||null,
+    last_played:     t.last_played||null,
+    date_added:      t.date_added||null,
+    composer:        t.composer||null,
+    isrc:            t.isrc||null,
     mb_recording_id: t.mb_recording_id||null,
-    disc_number: t.disc_number||null,
+    disc_number:     t.disc_number||null,
   }));
   for (let i = 0; i < rows.length; i += 100) {
     const { error } = await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
@@ -5859,20 +5863,19 @@ async function loadMusicBeeTracks() {
   } catch(e) { console.warn('loadMusicBeeTracks:', e); }
 }
 
-// Charger les tracklists depuis Supabase au démarrage
 async function loadAlbumTracks() {
   if (!window._sb) return;
   if (window._skipLoadAlbumTracks) return;
   try {
     let all = [], page = 0;
     while (true) {
-      const { data, error } = await window._sb.from('album_tracks').select('album_id,position,title,duration,source,bitrate,sample_rate,file_size,play_count,last_played,date_added,composer,isrc,mb_recording_id')
+      const { data, error } = await window._sb.from('album_tracks')
+        .select('album_id,position,title,duration,source,bitrate,sample_rate,file_size,play_count,last_played,date_added,composer,isrc,mb_recording_id,disc_number')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error) {
-        // Table absente ou RLS non configurée — ignorer silencieusement
         const ignorable = ['PGRST205', '42501', 'PGRST301'];
         if (ignorable.includes(error.code) || error.message?.includes('does not exist') || error.status === 400) {
-          console.info('album_tracks : table non accessible — vérifiez les policies RLS dans Supabase');
+          console.info('album_tracks : table non accessible');
         } else {
           console.warn('loadAlbumTracks:', error);
         }
@@ -5886,8 +5889,10 @@ async function loadAlbumTracks() {
     if (all.length) {
       albumTracksCache = {};
       all.forEach(t => {
-        if (!albumTracksCache[t.album_id]) albumTracksCache[t.album_id] = [];
-        albumTracksCache[t.album_id].push({
+        // album_id est maintenant un text stable (normalizeKey ou mb:...)
+        const aid = String(t.album_id);
+        if (!albumTracksCache[aid]) albumTracksCache[aid] = [];
+        albumTracksCache[aid].push({
           position: t.position, title: t.title, duration: t.duration, source: t.source,
           bitrate: t.bitrate, sample_rate: t.sample_rate, file_size: t.file_size,
           play_count: t.play_count, last_played: t.last_played, date_added: t.date_added,
@@ -5897,22 +5902,19 @@ async function loadAlbumTracks() {
       });
       console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
 
-      // Reconstruire _albumTracksByKey
+      // Reconstruire _albumTracksByKey depuis albumTracksCache + albums[]
       window._albumTracksByKey = window._albumTracksByKey || {};
       albums.forEach(a => {
         const atracks = (albumTracksCache[a.id] || []).filter(t => t.source === 'musicbee');
         if (!atracks.length) return;
-        [
-          normalizeKey(a.artist, a.album),
-          normalizeKey(cleanDiscogsArtist(a.artist), a.album),
-          normalizeKey((a.artist || '').replace(/^The\s+/i, '').trim(), a.album),
-        ].forEach(key => {
-          if (!window._albumTracksByKey[key]) {
-            window._albumTracksByKey[key] = { artist: a.artist, album: a.album, tracks: atracks };
+        const albumNorm = normalizeKey('', a.album).replace('|||', '');
+        for (const av of artistVariants(a.artist)) {
+          const k = av + '|||' + albumNorm;
+          if (!window._albumTracksByKey[k]) {
+            window._albumTracksByKey[k] = { artist: a.artist, album: a.album, tracks: atracks };
           }
-        });
+        }
       });
-      console.log(`_albumTracksByKey reconstruit : ${Object.keys(window._albumTracksByKey).length} albums`);
 
       if (_dataReady) {
         invalidateCache();
