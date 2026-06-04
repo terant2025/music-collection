@@ -1850,8 +1850,15 @@ function deduplicateAlbums() {
   if (albums.length < before) console.log(`Dédoublonnage : ${before - albums.length} doublons supprimés`);
 }
 
+let _savingToSupabase = false;
 async function saveToSupabase() {
   if (!window._sb) return;
+  if (_savingToSupabase) { 
+    // Relancer après la sauvegarde en cours
+    setTimeout(() => saveToSupabase(), 1000);
+    return;
+  }
+  _savingToSupabase = true;
   setSaveIndicator('saving');
   const now = new Date().toISOString();
   try {
@@ -1896,7 +1903,16 @@ async function saveToSupabase() {
     if (toDelete.length) console.log(`Supabase : ${toDelete.length} albums supprimés`);
 
     // ── Tracks isolés (PK composite artist_norm+title_norm) ──────────────────
-    const trackRows = tracks.map(t => ({
+    // Dédoublonner par PK avant upsert
+    const trackDedup = new Map();
+    tracks.forEach(t => {
+      const an = t.artistNorm || normalizeKey(t.artist, '').replace('|||', '');
+      const tn = t.titleNorm  || normalizeKey('', t.title).replace('|||', '');
+      const k = an + '|||' + tn;
+      const prev = trackDedup.get(k);
+      if (!prev || (t.note || 0) > (prev.note || 0)) trackDedup.set(k, t);
+    });
+    const trackRows = [...trackDedup.values()].map(t => ({
       artist_norm:     t.artistNorm || normalizeKey(t.artist, '').replace('|||', ''),
       title_norm:      t.titleNorm  || normalizeKey('', t.title).replace('|||', ''),
       artist:          t.artist,
@@ -1952,6 +1968,8 @@ async function saveToSupabase() {
   } catch(e) {
     setSaveIndicator('error');
     console.error('Supabase save error:', e);
+  } finally {
+    _savingToSupabase = false;
   }
 }
 
@@ -4107,25 +4125,51 @@ async function importMusicBeeXML(input) {
       }
     });
 
-    // Pré-indexer albums par toutes leurs variantes artiste+album pour O(1) lookup
+    // Pré-indexer albums par clés exactes pour O(1) lookup
+    // On n'utilise PAS artistVariants ici — trop de faux positifs (clés "volées")
     const albumByVariantKey = new Map();
     albums.forEach(a => {
-      const albumNorm = normalizeKey('', a.album).replace('|||', '');
-      albumByVariantKey.set(normalizeKey(a.artist, a.album), a);
-      for (const av of artistVariants(a.artist)) {
-        const k = av + '|||' + albumNorm;
-        if (!albumByVariantKey.has(k)) albumByVariantKey.set(k, a);
+      // ID stable
+      if (!albumByVariantKey.has(a.id)) albumByVariantKey.set(a.id, a);
+      // normalizeKey exact
+      const exactKey = normalizeKey(a.artist, a.album);
+      if (!albumByVariantKey.has(exactKey)) albumByVariantKey.set(exactKey, a);
+      // Discogs nettoyé
+      const cleanKey = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
+      if (!albumByVariantKey.has(cleanKey)) albumByVariantKey.set(cleanKey, a);
+      // Sans The/A
+      const noTheKey = normalizeKey((a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim(), a.album);
+      if (!albumByVariantKey.has(noTheKey)) albumByVariantKey.set(noTheKey, a);
+      // Various/Various Artists
+      const normArt = normalizeKey(a.artist,'').replace('|||','');
+      if (normArt === 'various' || normArt === 'various artists') {
+        ['various', 'various artists'].forEach(v => {
+          const k = v + '|||' + normalizeKey('', a.album).replace('|||','');
+          if (!albumByVariantKey.has(k)) albumByVariantKey.set(k, a);
+        });
       }
+      if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
     });
 
     Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
-      const albumNorm = normalizeKey('', g.album).replace('|||', '');
-      let existing = albumByVariantKey.get(normalizeKey(g.artist, g.album));
+      // Lookup par clés exactes (mêmes que l'index)
+      const gExact   = normalizeKey(g.artist, g.album);
+      const gClean   = normalizeKey(cleanDiscogsArtist(g.artist), g.album);
+      const gNoThe   = normalizeKey((g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim(), g.album);
+      const gId      = stableAlbumId(g.artist, g.album, g.mbReleaseId);
+      let existing = albumByVariantKey.get(gId)
+        || albumByVariantKey.get(gExact)
+        || albumByVariantKey.get(gClean)
+        || albumByVariantKey.get(gNoThe);
+      if (!existing && g.mbReleaseId) existing = albumByVariantKey.get('mbid:' + g.mbReleaseId);
+      // Various Artists ↔ Various
       if (!existing) {
-        for (const av of artistVariants(g.artist)) {
-          existing = albumByVariantKey.get(av + '|||' + albumNorm);
-          if (existing) break;
+        const normArt = normalizeKey(g.artist,'').replace('|||','');
+        if (normArt === 'various' || normArt === 'various artists') {
+          const albumNorm = normalizeKey('', g.album).replace('|||','');
+          existing = albumByVariantKey.get('various|||' + albumNorm)
+            || albumByVariantKey.get('various artists|||' + albumNorm);
         }
       }
 
@@ -4207,34 +4251,45 @@ async function importMusicBeeXML(input) {
         };
       });
 
-    // ── Stock : intégrer dans albums[] avec folder='stock' ──
-    // Conserver notes des entrées stock existantes
+    // ── Stock : mettre à jour folders dans albums[] ──
+    // Les albums stock sont dans grouped (si folder=album) ou stockAlbums (si folder=stock)
+    // On ne retire plus les stock de albums[] — on met juste à jour leurs folders
     const existingStockMeta = {};
     albums.filter(a => a.folders?.includes('stock')).forEach(a => {
       existingStockMeta[normalizeKey(a.artist, a.album)] = { note: a.note || 0, notes: a.notes || '' };
     });
-    // Retirer les anciennes entrées stock de albums[]
-    albums = albums.filter(a => !a.folders?.includes('stock') || a.has_cd);
-    // Réintégrer depuis XML
+    // Retirer le flag 'stock' des albums existants (sera recalculé depuis XML)
+    albums.forEach(a => {
+      if (a.folders) a.folders = a.folders.filter(f => f !== 'stock');
+    });
+    // Réintégrer depuis XML stockAlbums
     stockAlbums.forEach(s => {
       const k = normalizeKey(s.artist, s.album);
+      const albumNorm = normalizeKey('', s.album).replace('|||', '');
       const meta = existingStockMeta[k] || { note: 0, notes: '' };
-      // Chercher si existe déjà dans albums (ex: album aussi en discographie)
-      let ex = albumByVariantKey.get(k);
-      if (!ex) for (const av of artistVariants(s.artist)) { ex = albumByVariantKey.get(av + '|||' + normalizeKey('', s.album).replace('|||','')); if (ex) break; }
+      // Chercher dans albums[] (peut avoir été ajouté par grouped ou stocké précédemment)
+      let ex = albums.find(a => a.id === k || a.id === stableAlbumId(s.artist, s.album, null));
+      if (!ex) {
+        for (const av of artistVariants(s.artist)) {
+          ex = albums.find(a => a.id === av + '|||' + albumNorm);
+          if (ex) break;
+        }
+      }
       if (ex) {
         if (!ex.folders) ex.folders = [];
         if (!ex.folders.includes('stock')) ex.folders.push('stock');
+        if (meta.note && !ex.note) ex.note = meta.note;
+        if (meta.notes && !ex.notes) ex.notes = meta.notes;
       } else {
+        const newId = stableAlbumId(s.artist, s.album, null);
         albums.push({
-          id:      stableAlbumId(s.artist, s.album, null),
+          id:      newId,
           artist:  s.artist, album: s.album,
           year:    s.year || '', genre: s.genre || '',
           folders: ['stock'],
           has_cd:  false, format: s.format || 'flac',
           note:    meta.note, notes: meta.notes,
           plays:   0, isCompilation: false,
-          // compat
           cd: false, flac: s.format==='flac', mp3: s.format==='mp3', digital: false,
           okFolder: false, forSale: false,
         });
