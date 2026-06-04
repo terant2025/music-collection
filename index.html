@@ -2641,10 +2641,10 @@ function renderAlbums() {
     ].filter(Boolean).join('');
     const stars = isStock
       ? [1,2,3,4,5].map(i =>
-          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateStock(${a.id},${i});event.stopPropagation()">★</button>`
+          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateStock('${a.id}',${i});event.stopPropagation()">★</button>`
         ).join('')
       : [1,2,3,4,5].map(i =>
-          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});event.stopPropagation()">★</button>`
+          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${a.id}',${i});event.stopPropagation()">★</button>`
         ).join('');
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
 
@@ -2657,8 +2657,8 @@ function renderAlbums() {
 
     const onclickRow = isStock ? `openStockModal(${a.id})` : `editAlbum(${a.id})`;
     const deleteBtn  = isStock
-      ? `<button class="btn btn-sm btn-danger" onclick="deleteStockItem(${a.id})" title="Supprimer">✕</button>`
-      : `<button class="btn btn-sm btn-danger" onclick="deleteAlbum(${a.id})" title="Supprimer">✕</button>`;
+      ? `<button class="btn btn-sm btn-danger" onclick="deleteStockItem('${a.id}')" title="Supprimer">✕</button>`
+      : `<button class="btn btn-sm btn-danger" onclick="deleteAlbum('${a.id}')" title="Supprimer">✕</button>`;
 
     return `<tr onclick="${onclickRow}" style="cursor:pointer">
       <td>
@@ -2725,13 +2725,13 @@ function updateArtistFilter() {
 }
 
 function rateAlbum(id, note) {
-  const a = albums.find(x => x.id === id);
+  const a = albums.find(x => x.id === id || x.id === String(id));
   if (a) { a.note = a.note === note ? 0 : note; renderAlbums(); saveToStorage(); }
 }
 
 function deleteAlbum(id) {
   if (!confirm('Supprimer cet album ?')) return;
-  albums = albums.filter(a => a.id !== id);
+  albums = albums.filter(a => a.id !== id && a.id !== String(id));
   renderAlbums();
   saveToStorage();
   toast('Album supprimé');
@@ -3127,7 +3127,7 @@ function renderLastfmAssocList() {
       a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
       a.mp3  ? '<span class="badge badge-mp3">MP3</span>'   : '',
     ].filter(Boolean).join(' ');
-    return `<div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg3);border-radius:var(--radius);cursor:pointer" onclick="applyLastfmAssoc(${a.id})">
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg3);border-radius:var(--radius);cursor:pointer" onclick="applyLastfmAssoc('${a.id}')">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div>
         <div style="font-size:11px;color:var(--text2)">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
@@ -3538,7 +3538,7 @@ function openAlbumModal() {
 }
 
 function editAlbum(id) {
-  const a = albums.find(x => x.id === id);
+  const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   document.getElementById('edit-id').value = id;
   document.getElementById('modal-album-title').textContent = 'Modifier l\'album';
@@ -6225,7 +6225,7 @@ function renderOkAlbums() {
   const tbody = document.getElementById('ok-tbody');
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
-  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderOkAlbums()">★</button>`).join('');
+  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${a.id}',${i});renderOkAlbums()">★</button>`).join('');
   tbody.innerHTML = list.map(a => `<tr>
     <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
@@ -6233,13 +6233,13 @@ function renderOkAlbums() {
     <td><div class="stars">${stars(a)}</div></td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="addToWishlist('${esc(a.artist).replace(/'/g,"\'")}','${esc(a.album).replace(/'/g,"\'")}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
-      <button class="btn btn-sm btn-danger" onclick="markOkDone(${a.id})" title="Retirer de Ok">✕</button>
+      <button class="btn btn-sm btn-danger" onclick="markOkDone('${a.id}')" title="Retirer de Ok">✕</button>
     </td>
   </tr>`).join('');
 }
 
 function markOkDone(id) {
-  const a = albums.find(x => x.id === id);
+  const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   a.okFolder = false;
   invalidateCache(); saveToStorage(); renderOkAlbums(); updateNavBadges();
@@ -6260,25 +6260,25 @@ function renderForSale() {
   const tbody = document.getElementById('forsale-tbody');
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
-  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderForSale()">★</button>`).join('');
+  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${a.id}',${i});renderForSale()">★</button>`).join('');
   tbody.innerHTML = list.map(a => `<tr>
     <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
-    <td><button class="btn btn-sm" onclick="unmarkForSale(${a.id})" title="Retirer">✓</button></td>
+    <td><button class="btn btn-sm" onclick="unmarkForSale('${a.id}')" title="Retirer">✓</button></td>
   </tr>`).join('');
 }
 
 function markForSale(id) {
-  const a = albums.find(x => x.id === id);
+  const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   a.forSale = true;
   invalidateCache(); saveToStorage(); renderDiscographie(); renderForSale(); updateNavBadges();
   toast(`${a.artist} — ${a.album} marqué à vendre`);
 }
 function unmarkForSale(id) {
-  const a = albums.find(x => x.id === id);
+  const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   a.forSale = false;
   invalidateCache(); saveToStorage(); renderForSale(); updateNavBadges();
@@ -6799,7 +6799,7 @@ function addToWishlistFromRYMIdx(idx) {
   addToWishlist(r.artist, r.album, r.year || '', 'rym', plays, r.rating || 0, '');
 }
 function addToWishlistFromStock(stockId) {
-  const s = stockItems.find(x => x.id === stockId);
+  const s = stockItems.find(x => x.id === stockId || x.id === String(stockId));
   if (!s) return;
   addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, 0, s.notes || '');
 }
@@ -6936,7 +6936,8 @@ function saveStockItem() {
 
 function deleteStockItem(id) {
   if (!confirm('Retirer cet album du stock ?')) return;
-  stockItems = stockItems.filter(s => s.id !== id);
+  albums = albums.filter(a => a.id !== id && a.id !== String(id));
+  stockItems = stockItems.filter(s => s.id !== id && s.id !== String(id));
   invalidateCache();
   renderStock();
   if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
@@ -6945,7 +6946,7 @@ function deleteStockItem(id) {
 }
 
 function moveStockToCollection(id) {
-  const s = stockItems.find(x => x.id === id);
+  const s = stockItems.find(x => x.id === id || x.id === String(id));
   if (!s) return;
   const fmt = s.format || 'flac';
   albums.push({
@@ -6993,11 +6994,11 @@ function renderStock() {
 
   const fmtBadge = { flac: 'badge-flac', mp3: 'badge-mp3', digital: 'badge-digital', autre: 'badge-digital' };
   const stars = s => [1,2,3,4,5].map(i =>
-    `<button class="star ${(s.note||0)>=i?'on':''}" onclick="rateStock(${s.id},${i});event.stopPropagation()">★</button>`
+    `<button class="star ${(s.note||0)>=i?'on':''}" onclick="rateStock('${s.id}',${i});event.stopPropagation()">★</button>`
   ).join('');
 
   tbody.innerHTML = list.map(s => `
-    <tr onclick="openStockModal(${s.id})" style="cursor:pointer">
+    <tr onclick="openStockModal('${s.id}')" style="cursor:pointer">
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${initials(s.artist)}</div>
@@ -7012,15 +7013,15 @@ function renderStock() {
       <td><span class="badge ${fmtBadge[s.format]||'badge-digital'}">${(s.format||'?').toUpperCase()}</span></td>
       <td><div class="stars">${stars(s)}</div></td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px">
-        <button class="btn btn-sm" onclick="moveStockToCollection(${s.id})" title="Déplacer vers la collection">→ Collecter</button>
-        <button class="btn btn-sm" onclick="addToWishlistFromStock(${s.id})" title="Ajouter à la wishlist">🎯</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteStockItem(${s.id})">✕</button>
+        <button class="btn btn-sm" onclick="moveStockToCollection('${s.id}')" title="Déplacer vers la collection">→ Collecter</button>
+        <button class="btn btn-sm" onclick="addToWishlistFromStock('${s.id}')" title="Ajouter à la wishlist">🎯</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteStockItem('${s.id}')">✕</button>
       </td>
     </tr>`).join('');
 }
 
 function rateStock(id, note) {
-  const s = stockItems.find(x => x.id === id);
+  const s = stockItems.find(x => x.id === id || x.id === String(id));
   if (s) {
     s.note = s.note === note ? 0 : note;
     renderStock();
@@ -7202,11 +7203,13 @@ function renderDiscographie() {
   const filter = document.getElementById('disco-filter')?.value || 'all';
 
   tbody.innerHTML = slice.map(a => {
-    const isCD = !!a.cd;
-    const isDigital = !!(a.flac || a.mp3 || a.digital);
+    const isCD = !!(a.cd || a.has_cd);
+    const isDigital = !!(a.format || a.flac || a.mp3 || a.digital);
     const hasNum = hasDigitalBackup(a);
-    const linkedId = getLinkedNumId(a.id);
-    const linked = linkedId ? albums.find(b => b.id === linkedId) : null;
+    // Associations : clés texte stables
+    const aKey = a.id; // id = normalizeKey stable
+    const linkedKeys = getLinkedNumKeys(aKey);
+    const linked = linkedKeys.length ? albumByKey(linkedKeys[0]) : null;
 
     // Statut
     let statusBadge = '';
@@ -7220,26 +7223,28 @@ function renderDiscographie() {
 
     // Supports liés
     const numBadges = [];
-    if (a.flac || (linked && linked.flac)) numBadges.push('<span class="badge badge-flac">FLAC</span>');
-    if (a.mp3 || (linked && linked.mp3)) numBadges.push('<span class="badge badge-mp3">MP3</span>');
-    if (a.digital || (linked && linked.digital)) numBadges.push('<span class="badge badge-digital">Digital</span>');
+    const fmt = a.format;
+    if (fmt==='flac' || a.flac || (linked && (linked.format==='flac'||linked.flac))) numBadges.push('<span class="badge badge-flac">FLAC</span>');
+    if (fmt==='mp3'  || a.mp3  || (linked && (linked.format==='mp3' ||linked.mp3)))  numBadges.push('<span class="badge badge-mp3">MP3</span>');
+    if (fmt==='digital'||a.digital||(linked&&(linked.format==='digital'||linked.digital))) numBadges.push('<span class="badge badge-digital">Digital</span>');
     if (linked) numBadges.push(`<span class="badge" style="background:var(--purple-dim);color:var(--purple);border:1px solid rgba(176,140,255,0.2)">🔗 ${esc(linked.album)}</span>`);
 
-    // Bouton associer (seulement pour CDs sans backup ou backup partiel)
+    // Bouton associer — passer l'id (texte) entre guillemets
+    const safeId = aKey.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     const assocBtn = isCD
-      ? `<button class="btn btn-sm" onclick="openAssocModal(${a.id})" title="Associer à une entrée numérique">🔗 Associer</button>`
-      : (isDigital && !linkedId)
-        ? `<button class="btn btn-sm" onclick="openAssocModalReverse(${a.id})" title="Associer à un CD Discogs">💿 Lier CD</button>`
+      ? `<button class="btn btn-sm" onclick="openAssocModal('${safeId}')" title="Associer à une entrée numérique">🔗 Associer</button>`
+      : (isDigital && !linkedKeys.length)
+        ? `<button class="btn btn-sm" onclick="openAssocModalReverse('${safeId}')" title="Associer à un CD Discogs">💿 Lier CD</button>`
         : '';
-    const unlinkBtn = linkedId
-      ? `<button class="btn btn-sm btn-danger" onclick="removeAssociation(${a.id})" title="Supprimer l'association">✕</button>`
+    const unlinkBtn = linkedKeys.length
+      ? `<button class="btn btn-sm btn-danger" onclick="removeAssociation('${safeId}')" title="Supprimer l'association">✕</button>`
       : '';
 
     const stars = [1,2,3,4,5].map(i =>
-      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum(${a.id},${i});renderDiscographie();event.stopPropagation()">★</button>`
+      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${safeId}',${i});renderDiscographie();event.stopPropagation()">★</button>`
     ).join('');
 
-    return `<tr onclick="editAlbum(${a.id})" style="cursor:pointer">
+    return `<tr onclick="editAlbum('${safeId}')" style="cursor:pointer">
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${albumAvatar(a)}</div>
@@ -7255,7 +7260,7 @@ function renderDiscographie() {
       <td><div class="stars">${stars}</div></td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
         ${assocBtn}${unlinkBtn}
-        <button class="btn btn-sm" onclick="event.stopPropagation();markForSale(${a.id})" title="${a.forSale?'Déjà à vendre':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
+        <button class="btn btn-sm" onclick="event.stopPropagation();markForSale('${safeId}')" title="${a.forSale?'Déjà à vendre':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
       </td>
     </tr>`;
   }).join('');
@@ -7503,7 +7508,7 @@ function renderRYMAssocList() {
     ].filter(Boolean).join('');
     const bg = score >= 3 ? 'var(--accent-dim)' : 'var(--bg3)';
     const matchLabel = score >= 3 ? '<span style="font-size:10px;color:var(--accent);font-family:var(--mono);margin-left:6px">≈ match</span>' : '';
-    return `<div onclick="applyRYMAssociation(${a.id})" style="background:${bg};border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
+    return `<div onclick="applyRYMAssociation('${a.id}')" style="background:${bg};border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
       <div style="flex:1">
         <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(a.album)}${matchLabel}</div>
         <div style="font-size:11px;color:var(--text2)">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
