@@ -5770,13 +5770,20 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     if (DIAG2.some(d => artistNorm2.startsWith(d))) {
       console.log('[tl-diag] "' + g.artist + '" — "' + g.album + '" folder=' + g.folder + ' found=' + !!albumObj + ' key=' + normalizeKey(g.artist,g.album));
       if (!albumObj) {
-        // Show what's in albumIndex for this artist
-        const variants = [...artistVariants(g.artist)];
-        variants.forEach(av => {
-          const k = av + '|||' + albumNorm;
-          const v = albumIndex.get(k);
-          console.log('  tried: ' + k + ' → ' + (v ? v.artist + ' — ' + v.album : 'NOT FOUND'));
-        });
+        // Show what keys were tried and if album exists in albums[] directly
+        const directMatch = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(g.artist, g.album));
+        if (directMatch) {
+          console.log('  IN albums[] : id=' + directMatch.id + ' artist=' + directMatch.artist + ' album=' + directMatch.album + ' folders=' + JSON.stringify(directMatch.folders));
+          console.log('  albumIndex has id? ' + albumIndex.has(directMatch.id));
+          console.log('  albumIndex has exact key? ' + albumIndex.has(normalizeKey(directMatch.artist, directMatch.album)));
+        } else {
+          console.log('  NOT IN albums[] either');
+          const variants = [normalizeKey(g.artist, '').replace('|||','')];
+          variants.forEach(av => {
+            const k = av + '|||' + normalizeKey('', g.album).replace('|||','');
+            console.log('  tried: ' + k + ' → ' + (albumIndex.get(k) ? albumIndex.get(k).artist + ' — ' + albumIndex.get(k).album : 'NOT FOUND'));
+          });
+        }
       }
     }
     if (albumObj) {
