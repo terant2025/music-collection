@@ -4158,20 +4158,31 @@ async function importMusicBeeXML(input) {
       const gClean   = normalizeKey(cleanDiscogsArtist(g.artist), g.album);
       const gNoThe   = normalizeKey((g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim(), g.album);
       const gId      = stableAlbumId(g.artist, g.album, g.mbReleaseId);
-      let existing = albumByVariantKey.get(gId)
-        || albumByVariantKey.get(gExact)
-        || albumByVariantKey.get(gClean)
-        || albumByVariantKey.get(gNoThe);
-      if (!existing && g.mbReleaseId) existing = albumByVariantKey.get('mbid:' + g.mbReleaseId);
+
+      // Valider le match : l'album trouvé doit avoir la même clé normalisée album
+      // pour éviter les faux positifs (ex: variante noThe d'un artiste différent)
+      const gAlbumNorm = normalizeKey('', g.album).replace('|||', '');
+      const isValidMatch = (a) => {
+        if (!a) return false;
+        const aAlbumNorm = normalizeKey('', a.album).replace('|||', '');
+        return aAlbumNorm === gAlbumNorm;
+      };
+
+      let existing = null;
+      const candidates = [
+        albumByVariantKey.get(gId),
+        albumByVariantKey.get(gExact),
+        albumByVariantKey.get(gClean),
+        albumByVariantKey.get(gNoThe),
+        g.mbReleaseId ? albumByVariantKey.get('mbid:' + g.mbReleaseId) : null,
+      ];
       // Various Artists ↔ Various
-      if (!existing) {
-        const normArt = normalizeKey(g.artist,'').replace('|||','');
-        if (normArt === 'various' || normArt === 'various artists') {
-          const albumNorm = normalizeKey('', g.album).replace('|||','');
-          existing = albumByVariantKey.get('various|||' + albumNorm)
-            || albumByVariantKey.get('various artists|||' + albumNorm);
-        }
+      const normArt = normalizeKey(g.artist,'').replace('|||','');
+      if (normArt === 'various' || normArt === 'various artists') {
+        candidates.push(albumByVariantKey.get('various|||' + gAlbumNorm));
+        candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
       }
+      existing = candidates.find(isValidMatch) || null;
 
       // Calculer les folders de cet album depuis le XML
       const newFolders = [];
