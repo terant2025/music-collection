@@ -4184,7 +4184,13 @@ async function importMusicBeeXML(input) {
       }
       existing = candidates.find(isValidMatch) || null;
 
-      // Calculer les folders de cet album depuis le XML
+      if (normalizeKey(g.artist, g.album) === 'adele|||21') {
+        console.log('[ADELE DEBUG] gId=' + gId + ' gExact=' + gExact);
+        console.log('[ADELE DEBUG] albumByVariantKey.get(gId)=' + JSON.stringify(albumByVariantKey.get(gId)?.album));
+        console.log('[ADELE DEBUG] albumByVariantKey.get(gExact)=' + JSON.stringify(albumByVariantKey.get(gExact)?.album));
+        console.log('[ADELE DEBUG] existing=' + JSON.stringify(existing?.album) + ' isValid=' + isValidMatch(existing));
+        console.log('[ADELE DEBUG] albums.length=' + albums.length + ' contains adele?=' + !!albums.find(a => normalizeKey(a.artist,a.album) === 'adele|||21'));
+      }
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
       if (g.forSaleFolder) newFolders.push('forsale');
