@@ -4101,7 +4101,12 @@ async function importMusicBeeXML(input) {
       }
     });
 
-    let albumsAdded = 0, albumsUpdated = 0;
+    // Diagnostic post-grouped
+    const DIAG_KEYS = ['adele|||21','activity|||spirit in the room','adam green|||that fucking feeling','7ebra|||daybreak'];
+    DIAG_KEYS.forEach(k => {
+      console.log('[grouped-check] ' + k + ': ' + (grouped[k] ? 'IN grouped (artist='+grouped[k].artist+')' : 'NOT IN grouped') + ' | stockAlbums: ' + (stockAlbums.find(s=>normalizeKey(s.artist,s.album)===k)?'YES':'NO'));
+    });
+    console.log('[grouped-check] grouped total:', Object.keys(grouped).length, 'stockAlbums:', stockAlbums.length, 'isolated:', isolatedTracks.length);
 
     // ── Albums numériques : merge (on ne supprime pas les CDs Discogs) ──
     // Construire d'abord l'index des clés présentes dans le XML courant
