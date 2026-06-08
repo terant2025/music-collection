@@ -1679,9 +1679,10 @@ const PAGE_SIZE = 30;
 let nextId = 1; // conservé pour tracks isolés uniquement
 let _saveTimer = null;
 
-// Génère un ID stable pour un album : mb_release_id si dispo, sinon normalizeKey
+// Génère un ID stable pour un album : toujours normalizeKey(artist, album)
+// On n'utilise PAS mb_release_id comme ID — trop instable (Picard re-tague)
+// Le MBID est stocké séparément dans mb_release_id pour les lookups optionnels
 function stableAlbumId(artist, album, mb_release_id) {
-  if (mb_release_id) return 'mb:' + mb_release_id;
   return normalizeKey(artist, album);
 }
 
@@ -4101,13 +4102,6 @@ async function importMusicBeeXML(input) {
       }
     });
 
-    // Diagnostic post-grouped
-    const DIAG_KEYS = ['adele|||21','activity|||spirit in the room','adam green|||that fucking feeling','7ebra|||daybreak'];
-    DIAG_KEYS.forEach(k => {
-      console.log('[grouped-check] ' + k + ': ' + (grouped[k] ? 'IN grouped (artist='+grouped[k].artist+')' : 'NOT IN grouped') + ' | stockAlbums: ' + (stockAlbums.find(s=>normalizeKey(s.artist,s.album)===k)?'YES':'NO'));
-    });
-    console.log('[grouped-check] grouped total:', Object.keys(grouped).length, 'stockAlbums:', stockAlbums.length, 'isolated:', isolatedTracks.length);
-
     // ── Albums numériques : merge (on ne supprime pas les CDs Discogs) ──
     // Construire d'abord l'index des clés présentes dans le XML courant
     // pour ne réinitialiser les flags QUE sur les albums effectivement retrouvés.
@@ -4188,14 +4182,6 @@ async function importMusicBeeXML(input) {
         candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
       }
       existing = candidates.find(isValidMatch) || null;
-
-      if (normalizeKey(g.artist, g.album) === 'adele|||21') {
-        console.log('[ADELE DEBUG] gId=' + gId + ' gExact=' + gExact);
-        console.log('[ADELE DEBUG] albumByVariantKey.get(gId)=' + JSON.stringify(albumByVariantKey.get(gId)?.album));
-        console.log('[ADELE DEBUG] albumByVariantKey.get(gExact)=' + JSON.stringify(albumByVariantKey.get(gExact)?.album));
-        console.log('[ADELE DEBUG] existing=' + JSON.stringify(existing?.album) + ' isValid=' + isValidMatch(existing));
-        console.log('[ADELE DEBUG] albums.length=' + albums.length + ' contains adele?=' + !!albums.find(a => normalizeKey(a.artist,a.album) === 'adele|||21'));
-      }
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
       if (g.forSaleFolder) newFolders.push('forsale');
@@ -5774,7 +5760,6 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   const toSave = [];
   let matched = 0, unmatched = 0;
   const unmatchedSample = [];
-  const DIAG2 = ['adele', 'air', '7ebra', 'activity', 'adam green', 'alice in chains', 'alvvays'];
   Object.values(byKey).forEach(g => {
     if (!g.album || g.album.startsWith('__isolated__')) return;
     const albumNorm = normalizeKey('', g.album).replace('|||', '');
@@ -5790,20 +5775,15 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     // Log diagnostic
     const artistNorm2 = normalizeKey(g.artist, '').replace('|||','');
     if (DIAG2.some(d => artistNorm2.startsWith(d))) {
-      console.log('[tl-diag] "' + g.artist + '" — "' + g.album + '" folder=' + g.folder + ' found=' + !!albumObj + ' key=' + normalizeKey(g.artist,g.album));
       if (!albumObj) {
         // Show what keys were tried and if album exists in albums[] directly
         const directMatch = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(g.artist, g.album));
         if (directMatch) {
-          console.log('  IN albums[] : id=' + directMatch.id + ' artist=' + directMatch.artist + ' album=' + directMatch.album + ' folders=' + JSON.stringify(directMatch.folders));
-          console.log('  albumIndex has id? ' + albumIndex.has(directMatch.id));
-          console.log('  albumIndex has exact key? ' + albumIndex.has(normalizeKey(directMatch.artist, directMatch.album)));
+
         } else {
-          console.log('  NOT IN albums[] either');
           const variants = [normalizeKey(g.artist, '').replace('|||','')];
           variants.forEach(av => {
             const k = av + '|||' + normalizeKey('', g.album).replace('|||','');
-            console.log('  tried: ' + k + ' → ' + (albumIndex.get(k) ? albumIndex.get(k).artist + ' — ' + albumIndex.get(k).album : 'NOT FOUND'));
           });
         }
       }
