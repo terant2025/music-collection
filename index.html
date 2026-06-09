@@ -4157,6 +4157,9 @@ async function importMusicBeeXML(input) {
       if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
     });
 	console.log('grouped keys count:', Object.keys(grouped).length, '| exemple:', Object.keys(grouped).slice(0,3));
+	const okCount = Object.values(grouped).filter(g => g.okFolder).length;
+	const forSaleCount = Object.values(grouped).filter(g => g.forSaleFolder).length;
+	console.log('grouped: ok:', okCount, '| forsale:', forSaleCount);
 	let albumsAdded = 0, albumsUpdated = 0;
 	Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
@@ -5664,7 +5667,8 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     const isCompilation = isCompilTag || albumArtist === 'Various Artists';
     const artist = isCompilation ? 'Various Artists' : (albumArtist || artist_ || '');
     const album  = str(d, 'Album') || '';
-
+	const adeleKey = Object.keys(byKey).find(k => k.includes('adele'));
+	if (adeleKey) console.log('byKey adele:', byKey[adeleKey].folder, byKey[adeleKey].tracks.length, 'pistes');
     // Détecter le dossier pour annoter (informatif seulement)
     const pathParts = location.replace(/\\/g, '/').split('/');
     let folder = 'album';
