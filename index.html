@@ -5922,6 +5922,62 @@ async function loadMusicBeeTracks() {
         }
       });
       const byFolder = all.reduce((acc, t) => { acc[t.folder||'album'] = (acc[t.folder||'album']||0)+1; return acc; }, {});
+      // Peupler albumTracksCache depuis les données musicbee_tracks
+      // (équivalent de ce que fait importMusicBeeTracklists après un import XML)
+      const mbAlbumIndex = new Map();
+      albums.forEach(a => {
+        const key = normalizeKey(a.artist, a.album);
+        if (!mbAlbumIndex.has(key)) mbAlbumIndex.set(key, a);
+        const cleanKey = normalizeKey(cleanDiscogsArtist(a.artist), a.album);
+        if (!mbAlbumIndex.has(cleanKey)) mbAlbumIndex.set(cleanKey, a);
+        const noTheKey = normalizeKey((a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,''), a.album);
+        if (!mbAlbumIndex.has(noTheKey)) mbAlbumIndex.set(noTheKey, a);
+        if (a.mb_release_id) mbAlbumIndex.set('mbid:' + a.mb_release_id, a);
+        // Various Artists
+        const normArt = normalizeKey(a.artist,'').replace('|||','');
+        if (normArt === 'various' || normArt === 'various artists') {
+          ['various', 'various artists'].forEach(v => {
+            const k2 = v + '|||' + normalizeKey('', a.album).replace('|||','');
+            if (!mbAlbumIndex.has(k2)) mbAlbumIndex.set(k2, a);
+          });
+        }
+      });
+
+      // Grouper les pistes par (artist, album) pour les injecter dans albumTracksCache
+      const mbByAlbumKey = new Map();
+      all.forEach(t => {
+        if (!t.album || t.folder === 'isolated') return;
+        const key = normalizeKey(t.artist, t.album);
+        if (!mbByAlbumKey.has(key)) mbByAlbumKey.set(key, []);
+        mbByAlbumKey.get(key).push({
+          position: null, title: t.title, duration: null, source: 'musicbee',
+          bitrate: t.bitrate, sample_rate: null, file_size: null,
+          play_count: t.play_count, last_played: null, date_added: null,
+          composer: null, isrc: null, mb_recording_id: t.mb_recording_id,
+          disc_number: t.disc_number, rating: t.rating,
+        });
+      });
+
+      mbByAlbumKey.forEach((tracks_, key) => {
+        let albumObj = mbAlbumIndex.get(key);
+        if (!albumObj) {
+          // Essayer variantes artiste
+          const [artistPart, albumPart] = key.split('|||');
+          for (const [k2, a] of mbAlbumIndex) {
+            if (k2.endsWith('|||' + albumPart) && (
+              k2.startsWith(artistPart) || artistPart.startsWith(k2.split('|||')[0])
+            )) { albumObj = a; break; }
+          }
+        }
+        if (albumObj) {
+          const existing = albumTracksCache[albumObj.id] || [];
+          const hasMb = existing.some(t => t.source === 'musicbee');
+          if (!hasMb) {
+            albumTracksCache[albumObj.id] = existing.concat(tracks_);
+          }
+        }
+      });
+
       console.log(`musicbee_tracks chargés : ${all.length} pistes → ${window._mbTrackKeys.size} clés`, byFolder);
       invalidateCache();
       updateNavBadges();
