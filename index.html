@@ -5773,22 +5773,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     }
     if (!albumObj && g.mbReleaseId) albumObj = albumIndex.get('mbid:' + g.mbReleaseId);
 
-    // Log diagnostic
-    const artistNorm2 = normalizeKey(g.artist, '').replace('|||','');
-    if (DIAG2.some(d => artistNorm2.startsWith(d))) {
-      if (!albumObj) {
-        // Show what keys were tried and if album exists in albums[] directly
-        const directMatch = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(g.artist, g.album));
-        if (directMatch) {
 
-        } else {
-          const variants = [normalizeKey(g.artist, '').replace('|||','')];
-          variants.forEach(av => {
-            const k = av + '|||' + normalizeKey('', g.album).replace('|||','');
-          });
-        }
-      }
-    }
     if (albumObj) {
       albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
         .filter(t => t.source !== 'musicbee').concat(g.tracks);
