@@ -3582,7 +3582,10 @@ async function fetchMissingCovers(albumList) {
     if (!_coverFetchRunning) break;
     try {
       await new Promise(r => setTimeout(r, 220));
-      const artist = cleanDiscogsArtist(album.artist);
+      // Nettoyer l'artiste : prendre la première partie avant "; " (tags multi-valeurs MusicBee)
+      // et appliquer cleanDiscogsArtist (retire "(2)", inverse "X, The", etc.)
+      const rawArtist = (album.artist || '').split(/\s*;\s*/)[0].trim();
+      const artist = cleanDiscogsArtist(rawArtist);
       const url = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album.album)}&api_key=${lfKey}&format=json`;
       const res = await fetch(url);
       if (!res.ok) continue;
@@ -3641,7 +3644,8 @@ async function fetchCoverForModal() {
     // 2. last.fm : album.getinfo retourne des URLs lastfm.freetls.fastly.net directes
     if (!coverUrl && artistName) {
       const lfKey = 'e8aae3c9ca05ced8f56443c1108fdc65';
-      const lfUrl = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(cleanDiscogsArtist(artistName))}&album=${encodeURIComponent(albumName)}&api_key=${lfKey}&format=json`;
+      const rawArtistModal = (artistName || '').split(/\s*;\s*/)[0].trim();
+      const lfUrl = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(cleanDiscogsArtist(rawArtistModal))}&album=${encodeURIComponent(albumName)}&api_key=${lfKey}&format=json`;
       const res = await fetch(lfUrl);
       if (res.ok) {
         const data = await res.json();
