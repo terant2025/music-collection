@@ -3573,6 +3573,9 @@ async function fetchMissingCovers(albumList) {
   const lfKey = 'e8aae3c9ca05ced8f56443c1108fdc65';
   const missing = (albumList || albums).filter(a =>
     !a.cover_url && (a.flac || a.mp3 || a.digital || a.cd) && a.artist && a.album
+    && !a.album.startsWith('byxsp')
+    && a.album.trim().length > 1
+    && a.artist.trim().length > 1
   );
   if (!missing.length) { _coverFetchRunning = false; return; }
   console.log(`Auto covers : ${missing.length} pochettes manquantes`);
@@ -5789,7 +5792,18 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     }
   });
   if (unmatchedSample.length) console.log('importMusicBeeTracklists — ' + unmatched + ' non matchés :\n' + unmatchedSample.join('\n'));
-
+  // Diagnostic dossiers des non-matchés
+  const unmatchedFolders = {};
+  Object.values(byKey).forEach(g => {
+    if (!g.album || g.album.startsWith('__isolated__')) return;
+    const albumNorm = normalizeKey('', g.album).replace('|||', '');
+    let found = false;
+    for (const [k] of albumIndex) {
+      if (k.endsWith('|||' + albumNorm)) { found = true; break; }
+    }
+    if (!found) unmatchedFolders[g.folder] = (unmatchedFolders[g.folder]||0) + 1;
+  });
+  console.log('Non-matchés par dossier:', unmatchedFolders);
   // ── Sauvegarder dans Supabase en arrière-plan ────────────────────────────────
   // 1. album_tracks (inchangé — pour la vue Discographie)
   if (window._sb && toSave.length) {
