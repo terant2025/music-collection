@@ -4578,9 +4578,8 @@ async function importM3U(input) {
       }
     }
 
-    let albumsAdded = 0, albumsUpdated = 0, tracksAdded = 0, tracksUpdated = 0, stockAdded = 0, stockUpdated = 0;
-	
-    Object.values(grouped).forEach(g => {
+	let albumsAdded = 0, albumsUpdated = 0, tracksAdded = 0, tracksUpdated = 0, stockAdded = 0, stockUpdated = 0;
+
     // Albums normaux
     Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
