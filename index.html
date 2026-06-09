@@ -5796,18 +5796,17 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   const unmatchedAlbumSample = [];
   Object.values(byKey).forEach(g => {
     if (!g.album || g.album.startsWith('__isolated__') || g.folder !== 'album') return;
-    if (unmatchedAlbumSample.length >= 10) return;
-    const albumNorm = normalizeKey('', g.album).replace('|||', '');
+    if (unmatchedAlbumSample.length >= 5) return;
     const gExact = normalizeKey(g.artist, g.album);
     const gClean = normalizeKey(cleanDiscogsArtist(g.artist), g.album);
     const inAlbumIndex = albumIndex.has(gExact) || albumIndex.has(gClean);
     const inAlbums = albums.some(a => normalizeKey(a.artist, a.album) === gExact);
     if (!inAlbumIndex) {
-      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inAlbums:${inAlbums} | exactKey:"${gExact}"`);
+      const sampleTrack = g.tracks[0];
+      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inAlbums:${inAlbums}\n  path: ${sampleTrack?.location||sampleTrack?.title||'?'}`);
     }
   });
   console.log('Non-matchés album (sample):\n' + unmatchedAlbumSample.join('\n'));
-  console.log('Non-matchés par dossier:', unmatchedFolders);
   // ── Sauvegarder dans Supabase en arrière-plan ────────────────────────────────
   // 1. album_tracks (inchangé — pour la vue Discographie)
   if (window._sb && toSave.length) {
