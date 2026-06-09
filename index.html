@@ -4156,7 +4156,7 @@ async function importMusicBeeXML(input) {
       }
       if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
     });
-
+	console.log('grouped keys count:', Object.keys(grouped).length, '| exemple:', Object.keys(grouped).slice(0,3));
 	let albumsAdded = 0, albumsUpdated = 0;
 	Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
