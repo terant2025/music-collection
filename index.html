@@ -5802,8 +5802,10 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     const inAlbumIndex = albumIndex.has(gExact) || albumIndex.has(gClean);
     const inAlbums = albums.some(a => normalizeKey(a.artist, a.album) === gExact);
     if (!inAlbumIndex) {
-      const sampleTrack = g.tracks[0];
-      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inAlbums:${inAlbums}\n  path: ${sampleTrack?.location||sampleTrack?.title||'?'}`);
+      // Chercher dans albums[] avec une recherche plus souple
+      const albumNorm2 = normalizeKey('', g.album).replace('|||','');
+      const closeMatch = albums.find(a => normalizeKey('',a.album).replace('|||','') === albumNorm2);
+      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inAlbums:${inAlbums} | closeMatch:${closeMatch ? '"'+closeMatch.artist+'" id:'+closeMatch.id : 'none'}`);
     }
   });
   console.log('Non-matchés album (sample):\n' + unmatchedAlbumSample.join('\n'));
