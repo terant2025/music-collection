@@ -4150,7 +4150,8 @@ async function importMusicBeeXML(input) {
       if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
     });
 
-    Object.values(grouped).forEach(g => {
+	let albumsAdded = 0, albumsUpdated = 0;
+	Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
       // Lookup par clés exactes (mêmes que l'index)
       const gExact   = normalizeKey(g.artist, g.album);
@@ -4578,7 +4579,8 @@ async function importM3U(input) {
     }
 
     let albumsAdded = 0, albumsUpdated = 0, tracksAdded = 0, tracksUpdated = 0, stockAdded = 0, stockUpdated = 0;
-
+	
+    Object.values(grouped).forEach(g => {
     // Albums normaux
     Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
