@@ -5792,7 +5792,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     }
   });
   if (unmatchedSample.length) console.log('importMusicBeeTracklists — ' + unmatched + ' non matchés :\n' + unmatchedSample.join('\n'));
-  // Diagnostic étendu : pour les non-matchés folder='album', afficher pourquoi
+  // Diagnostic étendu : pour les non-matchés folder='album'
   const unmatchedAlbumSample = [];
   Object.values(byKey).forEach(g => {
     if (!g.album || g.album.startsWith('__isolated__') || g.folder !== 'album') return;
@@ -5800,12 +5800,10 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     const albumNorm = normalizeKey('', g.album).replace('|||', '');
     const gExact = normalizeKey(g.artist, g.album);
     const gClean = normalizeKey(cleanDiscogsArtist(g.artist), g.album);
-    const inAlbumIndex = albumByVariantKey.has(gExact) || albumByVariantKey.has(gClean);
-    const inGrouped = !!Object.keys(grouped).find(k => k === gExact);
-    // Chercher dans albums[] directement
-    const inAlbums = albums.some(a => normalizeKey(a.artist, a.album) === gExact || normalizeKey(a.artist, a.album) === gClean);
+    const inAlbumIndex = albumIndex.has(gExact) || albumIndex.has(gClean);
+    const inAlbums = albums.some(a => normalizeKey(a.artist, a.album) === gExact);
     if (!inAlbumIndex) {
-      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inGrouped:${inGrouped} | inAlbums:${inAlbums} | exactKey:"${gExact}"`);
+      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inAlbums:${inAlbums} | exactKey:"${gExact}"`);
     }
   });
   console.log('Non-matchés album (sample):\n' + unmatchedAlbumSample.join('\n'));
