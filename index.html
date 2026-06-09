@@ -4156,10 +4156,6 @@ async function importMusicBeeXML(input) {
       }
       if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
     });
-	console.log('grouped keys count:', Object.keys(grouped).length, '| exemple:', Object.keys(grouped).slice(0,3));
-	const okCount = Object.values(grouped).filter(g => g.okFolder).length;
-	const forSaleCount = Object.values(grouped).filter(g => g.forSaleFolder).length;
-	console.log('grouped: ok:', okCount, '| forsale:', forSaleCount);
 	let albumsAdded = 0, albumsUpdated = 0;
 	Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
@@ -5667,9 +5663,7 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     const isCompilation = isCompilTag || albumArtist === 'Various Artists';
     const artist = isCompilation ? 'Various Artists' : (albumArtist || artist_ || '');
     const album  = str(d, 'Album') || '';
-	const adeleKey = Object.keys(byKey).find(k => k.includes('adele'));
-	if (adeleKey) console.log('byKey adele:', byKey[adeleKey].folder, byKey[adeleKey].tracks.length, 'pistes');
-    // Détecter le dossier pour annoter (informatif seulement)
+	// Détecter le dossier pour annoter (informatif seulement)
     const pathParts = location.replace(/\\/g, '/').split('/');
     let folder = 'album';
     if (locationLow.includes('!_00_stock'))                                           folder = 'stock';
@@ -5796,23 +5790,6 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
     }
   });
   if (unmatchedSample.length) console.log('importMusicBeeTracklists — ' + unmatched + ' non matchés :\n' + unmatchedSample.join('\n'));
-  // Diagnostic étendu : pour les non-matchés folder='album'
-  const unmatchedAlbumSample = [];
-  Object.values(byKey).forEach(g => {
-    if (!g.album || g.album.startsWith('__isolated__') || g.folder !== 'album') return;
-    if (unmatchedAlbumSample.length >= 5) return;
-    const gExact = normalizeKey(g.artist, g.album);
-    const gClean = normalizeKey(cleanDiscogsArtist(g.artist), g.album);
-    const inAlbumIndex = albumIndex.has(gExact) || albumIndex.has(gClean);
-    const inAlbums = albums.some(a => normalizeKey(a.artist, a.album) === gExact);
-    if (!inAlbumIndex) {
-      // Chercher dans albums[] avec une recherche plus souple
-      const albumNorm2 = normalizeKey('', g.album).replace('|||','');
-      const closeMatch = albums.find(a => normalizeKey('',a.album).replace('|||','') === albumNorm2);
-      unmatchedAlbumSample.push(`"${g.artist}" — "${g.album}" | inAlbums:${inAlbums} | closeMatch:${closeMatch ? '"'+closeMatch.artist+'" id:'+closeMatch.id : 'none'}`);
-    }
-  });
-  console.log('Non-matchés album (sample):\n' + unmatchedAlbumSample.join('\n'));
   // ── Sauvegarder dans Supabase en arrière-plan ────────────────────────────────
   // 1. album_tracks (inchangé — pour la vue Discographie)
   if (window._sb && toSave.length) {
