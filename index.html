@@ -2530,11 +2530,7 @@ function filteredAlbums() {
   const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
   const stockKeys = getStockKeysSet();
 
-  // Index RYM par clé normalisée (mis en cache)
-  if (!_cache.rymIndex) {
-    _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
-  }
-  const rymIndex = _cache.rymIndex;
+
 
   // Filtre stock : afficher directement les stockItems (source canonique)
   if (sf === 'stock') {
@@ -2995,11 +2991,11 @@ function saveToStorage() {
 function renderMissing() {
   const list = computeMissing();
 
-  // Index RYM mis en cache au niveau module (pas recréé à chaque appel)
-  if (!_cache.rymIndexMissing) {
-    _cache.rymIndexMissing = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+  // Index RYM unique — partagé entre filtre et rendu
+  if (!_cache.rymIndex) {
+    _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
   }
-  const rymIndex = _cache.rymIndexMissing;
+  const rymIndex = _cache.rymIndex;
 
   const globalQ = document.getElementById('global-search').value.toLowerCase();
   const af     = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
