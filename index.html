@@ -881,7 +881,12 @@ input[type="file"] { display: none; }
           <option value="">Tous genres</option>
         </select>
         <select id="filter-missing-rym" onchange="renderMissing()">
-          <option value="">Tous</option>
+          <option value="">Note RYM</option>
+          <option value="5">RYM ★★★★★ (5)</option>
+          <option value="4.5">RYM ≥ 4.5</option>
+          <option value="4">RYM ≥ 4.0</option>
+          <option value="3">RYM ≥ 3.0</option>
+          <option value="low">RYM ≤ 2.5</option>
           <option value="rym">Noté sur RYM</option>
           <option value="norym">Non noté RYM</option>
         </select>
@@ -3030,6 +3035,14 @@ function renderMissing() {
     if (m.plays < minP) return false;
     if (rymF === 'rym'   && !hasRym) return false;
     if (rymF === 'norym' &&  hasRym) return false;
+    if (rymF === 'low') {
+      const rating = rymIndex.get(key)?.rating || 0;
+      if (!hasRym || rating > 2.5) return false;
+    } else if (rymF && !isNaN(parseFloat(rymF))) {
+      const threshold = parseFloat(rymF);
+      const rating = rymIndex.get(key)?.rating || 0;
+      if (!hasRym || rating < threshold) return false;
+    }
     return true;
   });
 
