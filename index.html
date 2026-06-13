@@ -3032,8 +3032,8 @@ function renderMissing() {
       || rymIndex.get(normalizeKey(cleanDiscogsArtist(m.artist), m.album))
       || rymIndex.get(normalizeKey((m.artist||'').replace(/^The\s+/i,''), m.album));
     const hasRymEntry = !!rymEntry;
-    if (rymF === 'rym'   && !hasRymEntry) return false;
-    if (rymF === 'norym' &&  hasRymEntry) return false;
+    if (rymF === 'rym'   && !(hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
+    if (rymF === 'norym' && (hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
     if (rymF === 'low') {
       if (!hasRymEntry || (rymEntry.rating || 0) > 2.5) return false;
     } else if (rymF && !isNaN(parseFloat(rymF))) {
