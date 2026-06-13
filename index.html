@@ -2090,8 +2090,16 @@ async function loadFromSupabase() {
     loadLastfmFromSupabase();
 
     // ── rymData ───────────────────────────────────────────────────────────────
-    const { data: rym } = await window._sb.from('rym_data').select('*');
-    rymData = (rym || []).map(d => ({
+    let rymAll = [], rymPage = 0;
+    while (true) {
+      const { data: rymBatch } = await window._sb.from('rym_data').select('*')
+        .range(rymPage * 1000, (rymPage + 1) * 1000 - 1);
+      if (!rymBatch || !rymBatch.length) break;
+      rymAll = rymAll.concat(rymBatch);
+      if (rymBatch.length < 1000) break;
+      rymPage++;
+    }
+    rymData = rymAll.map(d => ({
       artist: d.artist, album: d.album, rating: d.rating,
       ownership: d.ownership || '', year: d.year || '', genre: d.genre || ''
     }));
