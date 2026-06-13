@@ -3017,7 +3017,6 @@ function renderMissing() {
 
   let filtered = list.filter(m => {
     const key = normalizeKey(m.artist, m.album);
-    const hasRym = rymIndex.has(key);
     const genre = (m.genre || '').toLowerCase();
     const st = _lastfmStatus[key] || ''; // accès direct au lieu de getLastfmStatus()
     if (statusF === 'none'      && st)               return false;
@@ -3029,15 +3028,17 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    if (rymF === 'rym'   && !hasRym) return false;
-    if (rymF === 'norym' &&  hasRym) return false;
+    const rymEntry = rymIndex.get(key)
+      || rymIndex.get(normalizeKey(cleanDiscogsArtist(m.artist), m.album))
+      || rymIndex.get(normalizeKey((m.artist||'').replace(/^The\s+/i,''), m.album));
+    const hasRymEntry = !!rymEntry;
+    if (rymF === 'rym'   && !hasRymEntry) return false;
+    if (rymF === 'norym' &&  hasRymEntry) return false;
     if (rymF === 'low') {
-      const rating = rymIndex.get(key)?.rating || 0;
-      if (!hasRym || rating > 2.5) return false;
+      if (!hasRymEntry || (rymEntry.rating || 0) > 2.5) return false;
     } else if (rymF && !isNaN(parseFloat(rymF))) {
       const threshold = parseFloat(rymF);
-      const rating = rymIndex.get(key)?.rating || 0;
-      if (!hasRym || rating < threshold) return false;
+      if (!hasRymEntry || (rymEntry.rating || 0) < threshold) return false;
     }
     return true;
   });
@@ -3071,7 +3072,10 @@ function renderMissing() {
     for (; i < end; i++) {
       const m = filtered[i];
       const idx = i;
-      const rymEntry = rymIndex.get(normalizeKey(m.artist, m.album));
+      const _rk = normalizeKey(m.artist, m.album);
+      const rymEntry = rymIndex.get(_rk)
+        || rymIndex.get(normalizeKey(cleanDiscogsArtist(m.artist), m.album))
+        || rymIndex.get(normalizeKey((m.artist||'').replace(/^The\s+/i,''), m.album));
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
         : '';
