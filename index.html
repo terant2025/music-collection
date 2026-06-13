@@ -2103,6 +2103,7 @@ async function loadFromSupabase() {
       artist: d.artist, album: d.album, rating: d.rating,
       ownership: d.ownership || '', year: d.year || '', genre: d.genre || ''
     }));
+    delete _cache.rymIndex; // forcer la reconstruction avec les données complètes
 
     // ── Meta ──────────────────────────────────────────────────────────────────
     const { data: metaRows } = await window._sb.from('meta').select('key,value');
@@ -3000,7 +3001,7 @@ function renderMissing() {
   const list = computeMissing();
 
   // Index RYM unique — partagé entre filtre et rendu
-  if (!_cache.rymIndex) {
+  if (!_cache.rymIndex || _cache.rymIndex.size === 0) {
     _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
   }
   const rymIndex = _cache.rymIndex;
