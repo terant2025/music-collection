@@ -2950,6 +2950,7 @@ function computeMissing() {
   _cache.missing = lastfmData
     .filter(d => {
       if (!d.artist || !d.album) return false;
+      if (typeof d.album !== 'string' || d.album === '[object Object]') return false;
       if (owned.has(normalizeKey(d.artist, d.album))) return false;
       if (d.mb_release_id && ownedMbIds.has(d.mb_release_id)) return false;
       return true;
@@ -3005,12 +3006,19 @@ function saveToStorage() {
 function renderMissing() {
   const list = computeMissing();
 
-  // Index RYM unique — partagé entre filtre et rendu
+// Index RYM avec variantes artiste
   if (!_cache.rymIndex) {
-    _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+    _cache.rymIndex = new Map();
+    rymData.forEach(r => {
+      const albumNorm = normalizeKey('', r.album).replace('|||', '');
+      for (const av of artistVariants(r.artist)) {
+        const k = av + '|||' + albumNorm;
+        if (!_cache.rymIndex.has(k)) _cache.rymIndex.set(k, r);
+      }
+      _cache.rymIndex.set(normalizeKey(r.artist, r.album), r);
+    });
   }
   const rymIndex = _cache.rymIndex;
-
   const globalQ = document.getElementById('global-search').value.toLowerCase();
   const af     = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
   const albf   = (document.getElementById('filter-missing-album')?.value  || '').toLowerCase().trim();
@@ -3042,9 +3050,14 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    const rymEntry = rymIndex.get(key)
-      || rymIndex.get(normalizeKey(cleanDiscogsArtist(m.artist), m.album))
-      || rymIndex.get(normalizeKey((m.artist||'').replace(/^The\s+/i,''), m.album));
+    const _rymAlbNorm = normalizeKey('', m.album).replace('|||', '');
+    let rymEntry = rymIndex.get(key);
+    if (!rymEntry) {
+      for (const av of artistVariants(m.artist)) {
+        rymEntry = rymIndex.get(av + '|||' + _rymAlbNorm);
+        if (rymEntry) break;
+      }
+    }
     const hasRymEntry = !!rymEntry;
     if (rymF === 'rym'   && !(hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
     if (rymF === 'norym' && (hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
@@ -3087,9 +3100,14 @@ function renderMissing() {
       const m = filtered[i];
       const idx = i;
       const _rk = normalizeKey(m.artist, m.album);
-      const rymEntry = rymIndex.get(_rk)
-        || rymIndex.get(normalizeKey(cleanDiscogsArtist(m.artist), m.album))
-        || rymIndex.get(normalizeKey((m.artist||'').replace(/^The\s+/i,''), m.album));
+      const _rymAlbNorm2 = normalizeKey('', m.album).replace('|||', '');
+      let rymEntry = rymIndex.get(_rk);
+      if (!rymEntry) {
+        for (const av of artistVariants(m.artist)) {
+          rymEntry = rymIndex.get(av + '|||' + _rymAlbNorm2);
+          if (rymEntry) break;
+        }
+      }
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
         : '';
