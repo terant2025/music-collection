@@ -1304,6 +1304,7 @@ input[type="file"] { display: none; }
             <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
             <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux complète</button>
             <button class="btn btn-sm" id="btn-loved-sync" onclick="syncLovedTracks()" title="Récupère vos morceaux lovés sur last.fm">❤️ Sync loved tracks</button>
+            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Synchroniser albums et morceaux depuis ListenBrainz (MBIDs prioritaires)">🔵 Sync ListenBrainz</button>
           </div>
           <div class="status" id="status-lastfm"></div>
           <div id="lastfm-loved-info" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:6px;display:none">
@@ -3294,6 +3295,9 @@ function computeMissingTracks() {
       // Statut ignoré ou associé manuellement
       const st = _lastfmTrackStatus[keyTrack];
       if (st?.status === 'ignored' || st?.status === 'linked') return false;
+      // Matching prioritaire par recording_mbid (ListenBrainz)
+      const recMbid = d.recording_mbid;
+      if (recMbid && window._mbRecordingIds?.has(recMbid)) return false;
       // Morceau isolé
       if (isOwned(d.artist, d.track, ownedIsolated)) return false;
       // Dans musicbee_tracks / albumTracksCache
@@ -5268,6 +5272,175 @@ async function syncLovedTracks() {
   }
 }
 
+// ===================== LISTENBRAINZ SYNC =====================
+const LB_BASE = 'https://api.listenbrainz.org/1';
+
+async function syncListenBrainz() {
+  const btn    = document.getElementById('btn-lb-sync');
+  const status = document.getElementById('status-lastfm');
+  const user   = (document.getElementById('lastfm-user')?.value || 'terant').trim();
+  btn.disabled = true;
+  status.textContent = 'ListenBrainz : récupération des stats…';
+  status.className = 'status';
+
+  try {
+    // ── 1. Stats albums (releases) ─────────────────────────────────────────
+    let releasesAll = [];
+    for (let offset = 0; offset < 10000; offset += 1000) {
+      await new Promise(r => setTimeout(r, 300));
+      const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/releases?range=all_time&count=1000&offset=${offset}`;
+      const res = await fetch(url);
+      if (!res.ok) { console.warn('LB releases', res.status); break; }
+      const data = await res.json();
+      const releases = data.payload?.releases || [];
+      if (!releases.length) break;
+      releasesAll = releasesAll.concat(releases);
+      status.textContent = `ListenBrainz : ${releasesAll.length} albums chargés…`;
+      if (releases.length < 1000) break;
+    }
+
+    // ── 2. Stats morceaux (recordings) ────────────────────────────────────
+    let recordingsAll = [];
+    for (let offset = 0; offset < 10000; offset += 1000) {
+      await new Promise(r => setTimeout(r, 300));
+      const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/recordings?range=all_time&count=1000&offset=${offset}`;
+      const res = await fetch(url);
+      if (!res.ok) { console.warn('LB recordings', res.status); break; }
+      const data = await res.json();
+      const recs = data.payload?.recordings || [];
+      if (!recs.length) break;
+      recordingsAll = recordingsAll.concat(recs);
+      status.textContent = `ListenBrainz : ${releasesAll.length} albums, ${recordingsAll.length} morceaux chargés…`;
+      if (recs.length < 1000) break;
+    }
+
+    status.textContent = `LB : ${releasesAll.length} albums, ${recordingsAll.length} morceaux — matching en cours…`;
+
+    // ── 3. Index MBID albums de la collection ─────────────────────────────
+    const mbReleaseIndex = new Map();
+    albums.forEach(a => {
+      if (a.mb_release_id) mbReleaseIndex.set(a.mb_release_id, a);
+    });
+
+    // ── 4. Appliquer play counts albums ───────────────────────────────────
+    let matchedByMbid = 0, matchedByKey = 0, unmatched = 0;
+
+    releasesAll.forEach(r => {
+      const artist      = (r.artist_name || '').trim();
+      const album       = (r.release_name || '').trim();
+      const plays       = r.listen_count || 0;
+      const releaseMbid = r.release_mbid || '';
+      if (!artist || !album) return;
+
+      // Priorité 1 : matching par release_mbid
+      let found = releaseMbid ? mbReleaseIndex.get(releaseMbid) : null;
+
+      // Priorité 2 : normalizeKey + variantes artiste
+      if (!found) {
+        const albumNorm = normalizeKey('', album).replace('|||', '');
+        for (const av of artistVariants(artist)) {
+          found = albums.find(a => {
+            if (normalizeKey('', a.album).replace('|||', '') !== albumNorm) return false;
+            return artistVariants(a.artist).has(av);
+          });
+          if (found) break;
+        }
+      }
+      // Priorité 3 : clé exacte
+      if (!found) found = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
+
+      if (found) {
+        if (releaseMbid) matchedByMbid++; else matchedByKey++;
+        found.plays = Math.max(found.plays || 0, plays);
+        if (releaseMbid && !found.mb_release_id) {
+          found.mb_release_id = releaseMbid;
+          mbReleaseIndex.set(releaseMbid, found);
+        }
+      } else {
+        unmatched++;
+      }
+
+      // Mettre à jour / créer entrée dans lastfmData
+      const k = normalizeKey(artist, album);
+      const existing = lastfmData.find(d => normalizeKey(d.artist, d.album) === k);
+      if (existing) {
+        existing.plays = Math.max(existing.plays || 0, plays);
+        if (releaseMbid && !existing.release_mbid) existing.release_mbid = releaseMbid;
+      } else {
+        lastfmData.push({ artist, album, plays, release_mbid: releaseMbid });
+      }
+    });
+
+    // ── 5. Appliquer play counts morceaux + enrichir recording_mbid ───────
+    // Index recording_mbid depuis les pistes musicbee connues
+    if (!window._mbRecordingIds) {
+      window._mbRecordingIds = new Set();
+      // Peupler depuis albumTracksCache
+      Object.values(albumTracksCache).flat().forEach(t => {
+        if (t.mb_recording_id) window._mbRecordingIds.add(t.mb_recording_id);
+      });
+      // Peupler depuis tracks isolées
+      tracks.forEach(t => { if (t.mb_recording_id) window._mbRecordingIds.add(t.mb_recording_id); });
+    }
+
+    recordingsAll.forEach(rec => {
+      const artist  = (rec.artist_name || '').trim();
+      const track   = (rec.track_name  || '').trim();
+      const album   = (rec.release_name || '').trim();
+      const plays   = rec.listen_count || 0;
+      const recMbid = rec.recording_mbid || '';
+      if (!artist || !track) return;
+
+      const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+      if (!_lastfmTrackCounts[kt]) {
+        _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
+      }
+      _lastfmTrackCounts[kt].plays = Math.max(_lastfmTrackCounts[kt].plays || 0, plays);
+      if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) {
+        _lastfmTrackCounts[kt].recording_mbid = recMbid;
+      }
+    });
+
+    // ── 6. Sauvegarder ────────────────────────────────────────────────────
+    invalidateCache();
+
+    if (window._sb) {
+      // lastfm_data enrichi
+      const dedup = new Map();
+      lastfmData.forEach(d => {
+        const k = d.artist + '|||' + d.album;
+        if (!dedup.has(k) || (d.plays || 0) > (dedup.get(k).plays || 0)) dedup.set(k, d);
+      });
+      const lfRows = [...dedup.values()].map(d => ({
+        artist: d.artist, album: d.album,
+        plays: d.plays || 0,
+        updated_at: new Date().toISOString()
+      }));
+      await sbUpsert('lastfm_data', lfRows, 'artist,album');
+
+      // lastfm_tracks enrichis avec recording_mbid
+      await flushTrackCountsToSupabase();
+    }
+
+    saveToStorage();
+    renderAlbums();
+    invalidateCache();
+    updateNavBadges();
+
+    const summary = `${releasesAll.length} albums (${matchedByMbid} par MBID, ${matchedByKey} par nom, ${unmatched} non matchés) · ${recordingsAll.length} morceaux`;
+    status.textContent = `✓ ListenBrainz synchronisé — ${summary}`;
+    status.className = 'status ok';
+    toast(`🔵 LB : ${matchedByMbid + matchedByKey} albums matchés, ${recordingsAll.length} morceaux`);
+
+  } catch(e) {
+    status.textContent = 'Erreur ListenBrainz : ' + e.message;
+    status.className = 'status err';
+    console.error('syncListenBrainz:', e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function saveLastfmCheckpoint(currentPage, totalPages) {
   const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays }));
   try {
@@ -6014,6 +6187,12 @@ async function loadMusicBeeTracks() {
           });
         }
       });
+      // Construire _mbRecordingIds — Set des recording_mbid possédés
+      // Utilisé par computeMissingTracks pour le matching MBID prioritaire (LB)
+      window._mbRecordingIds = new Set();
+      all.forEach(t => { if (t.mb_recording_id) window._mbRecordingIds.add(t.mb_recording_id); });
+      console.log(`_mbRecordingIds : ${window._mbRecordingIds.size} MBIDs depuis musicbee_tracks`);
+
       const byFolder = all.reduce((acc, t) => { acc[t.folder||'album'] = (acc[t.folder||'album']||0)+1; return acc; }, {});
       // Peupler albumTracksCache depuis les données musicbee_tracks
       // (équivalent de ce que fait importMusicBeeTracklists après un import XML)
