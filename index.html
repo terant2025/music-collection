@@ -4713,6 +4713,7 @@ const LASTFM_SYNC_KEY = 'lastfm_last_sync';
 // Sync automatique last.fm au démarrage — silencieuse, incrémentale uniquement
 async function autoSyncLastfm() {
   if (!_lastfmApiKey || !_lastfmUser) return;
+  if (_lastfmSyncRunning) return;
   const lastSyncRaw = localStorage.getItem(LASTFM_SYNC_KEY);
   if (!lastSyncRaw) return; // pas de sync complète préalable — ne pas lancer
   const lastSyncTs = parseInt(lastSyncRaw);
@@ -4813,7 +4814,13 @@ async function fetchLastfmIncrementalSilent(fromTs) {
 }
 
 
+let _lastfmSyncRunning = false;
+
 async function connectLastfm() {
+  if (_lastfmSyncRunning) {
+    toast('Synchronisation already en cours — patientez…', 'warn');
+    return;
+  }
   const status = document.getElementById('status-lastfm');
   const apiKey = document.getElementById('lastfm-apikey').value.trim();
   const user = document.getElementById('lastfm-user').value.trim();
@@ -4822,6 +4829,7 @@ async function connectLastfm() {
     status.className = 'status err';
     return;
   }
+  _lastfmSyncRunning = true;
   _lastfmApiKey = apiKey;
   _lastfmUser = user;
   _lastfmCurrentPage = 0;
@@ -4849,7 +4857,15 @@ async function connectLastfm() {
       if (infoData.error === 11 || infoData.error === 16) {
         status.textContent = 'Serveur last.fm indisponible, nouvelle tentative dans 5s…';
         await new Promise(r => setTimeout(r, 5000));
-        return connectLastfm();
+        // Réessai direct (une seule fois) sans récursion
+        const retryRes = await fetch(infoUrl);
+        const retryData = await retryRes.json();
+        if (retryData.error) {
+          status.textContent = 'Serveur last.fm toujours indisponible — réessayez manuellement.';
+          status.className = 'status err';
+          return;
+        }
+        Object.assign(infoData, retryData);
       }
       status.textContent = 'Erreur last.fm : ' + infoData.message;
       status.className = 'status err';
@@ -4874,6 +4890,8 @@ async function connectLastfm() {
   } catch(e) {
     status.textContent = 'Erreur réseau : ' + e.message;
     status.className = 'status err';
+  } finally {
+    _lastfmSyncRunning = false;
   }
 }
 
