@@ -4747,7 +4747,11 @@ async function fetchLastfmIncrementalSilent(fromTs) {
       const res = await fetch(url);
       if (res.status === 429) { await new Promise(r => setTimeout(r, 15000)); continue; }
       const data = await res.json();
-      if (data.error === 11 || data.error === 16) { await new Promise(r => setTimeout(r, 10000)); continue; }
+      if (data.error === 11 || data.error === 16) {
+        await new Promise(r => setTimeout(r, 10000));
+        page++; // éviter boucle infinie sur la même page
+        continue;
+      }
       if (data.error) return;
 
       const tracks = data.recenttracks?.track || [];
@@ -4818,7 +4822,8 @@ let _lastfmSyncRunning = false;
 
 async function connectLastfm() {
   if (_lastfmSyncRunning) {
-    toast('Synchronisation already en cours — patientez…', 'warn');
+    const status = document.getElementById('status-lastfm');
+    if (status) { status.textContent = 'Synchronisation déjà en cours…'; status.className = 'status'; }
     return;
   }
   const status = document.getElementById('status-lastfm');
@@ -4887,7 +4892,7 @@ async function connectLastfm() {
       status.className = 'status ok';
       await fetchLastfmPage(1);
     }
-  } catch(e) {
+	} catch(e) {
     status.textContent = 'Erreur réseau : ' + e.message;
     status.className = 'status err';
   } finally {
@@ -8490,8 +8495,8 @@ async function initApp() {
       _lastfmUser = user;
     } catch(e) {}
   } else {
-    // Config par défaut intégrée : lancer la synchro last.fm silencieusement
-    setTimeout(() => connectLastfm(), 1500);
+    // Config par défaut intégrée : lancer la synchro auto silencieusement (via autoSyncLastfm)
+    setTimeout(() => autoSyncLastfm(), 2000);
   }
   // Vérifier si un checkpoint last.fm existe
   const cp = loadLastfmCheckpoint();
