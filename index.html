@@ -7531,7 +7531,7 @@ function renderDiscographie() {
     const isDigital = !!(a.format || a.flac || a.mp3 || a.digital);
     const hasNum = hasDigitalBackup(a);
     // Associations : clés texte stables
-    const aKey = a.id; // id = normalizeKey stable
+    const aKey = String(a.id); // id peut être entier (Discogs uid) ou texte (normalizeKey)
     const linkedKeys = getLinkedNumKeys(aKey);
     const linked = linkedKeys.length ? albumByKey(linkedKeys[0]) : null;
 
