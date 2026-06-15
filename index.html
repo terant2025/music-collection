@@ -7553,7 +7553,7 @@ function renderDiscographie() {
     if (linked) numBadges.push(`<span class="badge" style="background:var(--purple-dim);color:var(--purple);border:1px solid rgba(176,140,255,0.2)">🔗 ${esc(linked.album)}</span>`);
 
     // Bouton associer — passer l'id (texte) entre guillemets
-    const safeId = aKey.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const safeId = aKey.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
     const assocBtn = isCD
       ? `<button class="btn btn-sm" onclick="openAssocModal('${safeId}')" title="Associer à une entrée numérique">🔗 Associer</button>`
       : (isDigital && !linkedKeys.length)
