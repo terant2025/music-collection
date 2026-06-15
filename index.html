@@ -1877,7 +1877,7 @@ async function saveToSupabase() {
       year:           a.year || null,
       genre:          a.genre || null,
       folders:        JSON.stringify(a.folders || []),
-      has_cd:         !!a.has_cd,
+      has_cd:         !!has_cd: !!(a.has_cd || a.cd),a.has_cd,
       format:         a.format || null,
       note:           a.note || 0,
       plays:          a.plays || 0,
