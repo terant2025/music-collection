@@ -2044,9 +2044,10 @@ async function loadFromSupabase() {
         isCompilation: !!a.is_compilation,
         // Compat lecture ancienne UI
         cd:      !!a.has_cd,
-        flac:    a.format === 'flac',
-        mp3:     a.format === 'mp3',
-        digital: a.format === 'digital',
+		has_cd:  !!a.has_cd,
+		flac:    a.format === 'flac',
+		mp3:     a.format === 'mp3',
+		digital: a.format === 'digital',
         okFolder:  folders.includes('ok'),
         forSale:   folders.includes('forsale'),
       };
