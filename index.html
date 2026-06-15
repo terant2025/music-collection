@@ -5285,35 +5285,39 @@ async function syncListenBrainz() {
   status.className = 'status';
 
   try {
-    // ── 1. Stats albums (releases) ─────────────────────────────────────────
-    let releasesAll = [];
-    for (let offset = 0; offset < 10000; offset += 1000) {
-      await new Promise(r => setTimeout(r, 300));
-      const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/releases?range=all_time&count=1000&offset=${offset}`;
-      const res = await fetch(url);
-      if (!res.ok) { console.warn('LB releases', res.status); break; }
-      const data = await res.json();
-      const releases = data.payload?.releases || [];
-      if (!releases.length) break;
-      releasesAll = releasesAll.concat(releases);
-      status.textContent = `ListenBrainz : ${releasesAll.length} albums chargés…`;
-      if (releases.length < 1000) break;
-    }
+  // ── 1. Stats albums (releases) ─────────────────────────────────────────
+	let releasesAll = [];
+	let offset = 0;
+	while (true) {
+	await new Promise(r => setTimeout(r, 300));
+	const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/releases?range=all_time&count=1000&offset=${offset}`;
+	const res = await fetch(url);
+	if (!res.ok) { console.warn('LB releases', res.status); break; }
+	const data = await res.json();
+	const releases = data.payload?.releases || [];
+	if (!releases.length) break;
+	releasesAll = releasesAll.concat(releases);
+	status.textContent = `ListenBrainz : ${releasesAll.length} albums chargés…`;
+	if (releases.length < 1000) break;
+	offset += 1000;
+	}
 
-    // ── 2. Stats morceaux (recordings) ────────────────────────────────────
-    let recordingsAll = [];
-    for (let offset = 0; offset < 10000; offset += 1000) {
-      await new Promise(r => setTimeout(r, 300));
-      const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/recordings?range=all_time&count=1000&offset=${offset}`;
-      const res = await fetch(url);
-      if (!res.ok) { console.warn('LB recordings', res.status); break; }
-      const data = await res.json();
-      const recs = data.payload?.recordings || [];
-      if (!recs.length) break;
-      recordingsAll = recordingsAll.concat(recs);
-      status.textContent = `ListenBrainz : ${releasesAll.length} albums, ${recordingsAll.length} morceaux chargés…`;
-      if (recs.length < 1000) break;
-    }
+	// ── 2. Stats morceaux (recordings) ────────────────────────────────────
+	let recordingsAll = [];
+	offset = 0;
+	while (true) {
+	await new Promise(r => setTimeout(r, 300));
+	const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/recordings?range=all_time&count=1000&offset=${offset}`;
+	const res = await fetch(url);
+	if (!res.ok) { console.warn('LB recordings', res.status); break; }
+	const data = await res.json();
+	const recs = data.payload?.recordings || [];
+	if (!recs.length) break;
+	recordingsAll = recordingsAll.concat(recs);
+	status.textContent = `ListenBrainz : ${releasesAll.length} albums, ${recordingsAll.length} morceaux chargés…`;
+	if (recs.length < 1000) break;
+	offset += 1000;
+	}
 
     status.textContent = `LB : ${releasesAll.length} albums, ${recordingsAll.length} morceaux — matching en cours…`;
 
