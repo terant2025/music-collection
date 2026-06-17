@@ -1304,9 +1304,13 @@ input[type="file"] { display: none; }
             <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
             <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux complète</button>
             <button class="btn btn-sm" id="btn-loved-sync" onclick="syncLovedTracks()" title="Récupère vos morceaux lovés sur last.fm">❤️ Sync loved tracks</button>
-            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Synchroniser albums et morceaux depuis ListenBrainz (MBIDs prioritaires)">🔵 Sync ListenBrainz</button>
+            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Synchronisation complète via API listens ListenBrainz (tous scrobbles + MBIDs, paginé)">🔵 Sync ListenBrainz</button>
           </div>
           <div class="status" id="status-lastfm"></div>
+          <div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:6px;line-height:1.7">
+            💡 <strong style="color:var(--text2)">Sync ListenBrainz</strong> = tous vos scrobbles avec MBIDs (recommandé, paginé par timestamp).<br>
+            La sync last.fm reste utile pour les écoutes antérieures à votre compte LB.
+          </div>
           <div id="lastfm-loved-info" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:6px;display:none">
             <span id="lastfm-loved-label"></span>
           </div>
@@ -2589,11 +2593,12 @@ function filteredAlbums() {
     else if (nf === '4') nm = a.note >= 4;
     else if (nf === '3') nm = a.note >= 3;
     else if (nf === '0') nm = !a.note;
-    // Filtre note RYM
+    // Filtre note RYM — construire l'index si absent
     let rymMatch = true;
     if (rymNf) {
-      const rymEntry = rymIndex.get(normalizeKey(a.artist, a.album))
-        || rymIndex.get(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+      if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+      const rymEntry = _cache.rymIndex.get(normalizeKey(a.artist, a.album))
+        || _cache.rymIndex.get(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
       if (rymNf === '0') rymMatch = !rymEntry || !rymEntry.rating;
       else rymMatch = !!(rymEntry && rymEntry.rating >= parseFloat(rymNf));
     }
@@ -3986,6 +3991,7 @@ async function importMusicBeeXML(input) {
       const seg = p.split('/');
       if (seg.some(s => s === 'ok' || s === 'ok ')) return 'ok';
       if (seg.some(s => s === '!vendre' || s === 'a_vendre' || s === 'a vendre' || s === '!a vendre')) return 'vendre';
+      if (seg.some(s => s === 'discographie')) return 'discographie';
       return 'album';
     }
 
@@ -4157,12 +4163,13 @@ async function importMusicBeeXML(input) {
           grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
             flac: false, mp3: false, digital: false, maxRating: 0,
             isCompilation, trackArtists: [],
-            okFolder: false, forSaleFolder: false,
+            okFolder: false, forSaleFolder: false, discoFolder: false,
             mbReleaseId: mbidAlbum || '',
             releaseDate:  releaseDate || '' };
         }
-        if (folder === 'ok')     grouped[key].okFolder     = true;
-        if (folder === 'vendre') grouped[key].forSaleFolder = true;
+        if (folder === 'ok')           grouped[key].okFolder     = true;
+        if (folder === 'vendre')       grouped[key].forSaleFolder = true;
+        if (folder === 'discographie') grouped[key].discoFolder   = true;
         // Enrichir si données manquantes
         if (mbidAlbum  && !grouped[key].mbReleaseId)  grouped[key].mbReleaseId  = mbidAlbum;
         if (releaseDate && !grouped[key].releaseDate) grouped[key].releaseDate  = releaseDate;
@@ -4263,7 +4270,8 @@ async function importMusicBeeXML(input) {
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
       if (g.forSaleFolder) newFolders.push('forsale');
-      if (!g.okFolder && !g.forSaleFolder) newFolders.push('discographie');
+      if (g.discoFolder)   newFolders.push('discographie');
+      if (!g.okFolder && !g.forSaleFolder && !g.discoFolder) newFolders.push('album');
 
       // Format depuis le XML
       const fmt = g.flac ? 'flac' : g.mp3 ? 'mp3' : g.digital ? 'digital' : null;
@@ -5279,171 +5287,245 @@ const LB_BASE = 'https://api.listenbrainz.org/1';
 async function syncListenBrainz() {
   const btn    = document.getElementById('btn-lb-sync');
   const status = document.getElementById('status-lastfm');
-  const user   = (document.getElementById('lastfm-user')?.value || 'terant').trim();
-  btn.disabled = true;
-  status.textContent = 'ListenBrainz : récupération des stats…';
-  status.className = 'status';
+  const progress = document.getElementById('lastfm-progress');
+  const bar = document.getElementById('lastfm-bar');
+  const progressLabel = document.getElementById('lastfm-progress-label');
+  const user = (document.getElementById('lastfm-user')?.value || 'terant').trim();
 
-  try {
-  // ── 1. Stats albums (releases) ─────────────────────────────────────────
-	let releasesAll = [];
-	let offset = 0;
-	while (true) {
-	await new Promise(r => setTimeout(r, 300));
-	const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/releases?range=all_time&count=1000&offset=${offset}`;
-	const res = await fetch(url);
-	if (!res.ok) { console.warn('LB releases', res.status); break; }
-	const data = await res.json();
-	const releases = data.payload?.releases || [];
-	if (!releases.length) break;
-	releasesAll = releasesAll.concat(releases);
-	status.textContent = `ListenBrainz : ${releasesAll.length} albums chargés…`;
-	if (releases.length < 1000) break;
-	offset += 1000;
-	}
-
-	// ── 2. Stats morceaux (recordings) ────────────────────────────────────
-	let recordingsAll = [];
-	offset = 0;
-	while (true) {
-	await new Promise(r => setTimeout(r, 300));
-	const url = `${LB_BASE}/stats/user/${encodeURIComponent(user)}/recordings?range=all_time&count=1000&offset=${offset}`;
-	const res = await fetch(url);
-	if (!res.ok) { console.warn('LB recordings', res.status); break; }
-	const data = await res.json();
-	const recs = data.payload?.recordings || [];
-	if (!recs.length) break;
-	recordingsAll = recordingsAll.concat(recs);
-	status.textContent = `ListenBrainz : ${releasesAll.length} albums, ${recordingsAll.length} morceaux chargés…`;
-	if (recs.length < 1000) break;
-	offset += 1000;
-	}
-
-    status.textContent = `LB : ${releasesAll.length} albums, ${recordingsAll.length} morceaux — matching en cours…`;
-
-    // ── 3. Index MBID albums de la collection ─────────────────────────────
-    const mbReleaseIndex = new Map();
-    albums.forEach(a => {
-      if (a.mb_release_id) mbReleaseIndex.set(a.mb_release_id, a);
-    });
-
-    // ── 4. Appliquer play counts albums ───────────────────────────────────
-    let matchedByMbid = 0, matchedByKey = 0, unmatched = 0;
-
-    releasesAll.forEach(r => {
-      const artist      = (r.artist_name || '').trim();
-      const album       = (r.release_name || '').trim();
-      const plays       = r.listen_count || 0;
-      const releaseMbid = r.release_mbid || '';
-      if (!artist || !album) return;
-
-      // Priorité 1 : matching par release_mbid
-      let found = releaseMbid ? mbReleaseIndex.get(releaseMbid) : null;
-
-      // Priorité 2 : normalizeKey + variantes artiste
-      if (!found) {
-        const albumNorm = normalizeKey('', album).replace('|||', '');
-        for (const av of artistVariants(artist)) {
-          found = albums.find(a => {
-            if (normalizeKey('', a.album).replace('|||', '') !== albumNorm) return false;
-            return artistVariants(a.artist).has(av);
-          });
-          if (found) break;
-        }
-      }
-      // Priorité 3 : clé exacte
-      if (!found) found = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
-
-      if (found) {
-        if (releaseMbid) matchedByMbid++; else matchedByKey++;
-        found.plays = Math.max(found.plays || 0, plays);
-        if (releaseMbid && !found.mb_release_id) {
-          found.mb_release_id = releaseMbid;
-          mbReleaseIndex.set(releaseMbid, found);
-        }
-      } else {
-        unmatched++;
-      }
-
-      // Mettre à jour / créer entrée dans lastfmData
-      const k = normalizeKey(artist, album);
-      const existing = lastfmData.find(d => normalizeKey(d.artist, d.album) === k);
-      if (existing) {
-        existing.plays = Math.max(existing.plays || 0, plays);
-        if (releaseMbid && !existing.release_mbid) existing.release_mbid = releaseMbid;
-      } else {
-        lastfmData.push({ artist, album, plays, release_mbid: releaseMbid });
-      }
-    });
-
-    // ── 5. Appliquer play counts morceaux + enrichir recording_mbid ───────
-    // Index recording_mbid depuis les pistes musicbee connues
-    if (!window._mbRecordingIds) {
-      window._mbRecordingIds = new Set();
-      // Peupler depuis albumTracksCache
-      Object.values(albumTracksCache).flat().forEach(t => {
-        if (t.mb_recording_id) window._mbRecordingIds.add(t.mb_recording_id);
-      });
-      // Peupler depuis tracks isolées
-      tracks.forEach(t => { if (t.mb_recording_id) window._mbRecordingIds.add(t.mb_recording_id); });
-    }
-
-    recordingsAll.forEach(rec => {
-      const artist  = (rec.artist_name || '').trim();
-      const track   = (rec.track_name  || '').trim();
-      const album   = (rec.release_name || '').trim();
-      const plays   = rec.listen_count || 0;
-      const recMbid = rec.recording_mbid || '';
-      if (!artist || !track) return;
-
-      const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-      if (!_lastfmTrackCounts[kt]) {
-        _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
-      }
-      _lastfmTrackCounts[kt].plays = Math.max(_lastfmTrackCounts[kt].plays || 0, plays);
-      if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) {
-        _lastfmTrackCounts[kt].recording_mbid = recMbid;
-      }
-    });
-
-    // ── 6. Sauvegarder ────────────────────────────────────────────────────
-    invalidateCache();
-
-    if (window._sb) {
-      // lastfm_data enrichi
-      const dedup = new Map();
-      lastfmData.forEach(d => {
-        const k = d.artist + '|||' + d.album;
-        if (!dedup.has(k) || (d.plays || 0) > (dedup.get(k).plays || 0)) dedup.set(k, d);
-      });
-      const lfRows = [...dedup.values()].map(d => ({
-        artist: d.artist, album: d.album,
-        plays: d.plays || 0,
-        updated_at: new Date().toISOString()
-      }));
-      await sbUpsert('lastfm_data', lfRows, 'artist,album');
-
-      // lastfm_tracks enrichis avec recording_mbid
-      await flushTrackCountsToSupabase();
-    }
-
-    saveToStorage();
-    renderAlbums();
-    invalidateCache();
-    updateNavBadges();
-
-    const summary = `${releasesAll.length} albums (${matchedByMbid} par MBID, ${matchedByKey} par nom, ${unmatched} non matchés) · ${recordingsAll.length} morceaux`;
-    status.textContent = `✓ ListenBrainz synchronisé — ${summary}`;
-    status.className = 'status ok';
-    toast(`🔵 LB : ${matchedByMbid + matchedByKey} albums matchés, ${recordingsAll.length} morceaux`);
-
-  } catch(e) {
-    status.textContent = 'Erreur ListenBrainz : ' + e.message;
-    status.className = 'status err';
-    console.error('syncListenBrainz:', e);
-  } finally {
-    btn.disabled = false;
+  // Toggle pause si sync en cours
+  if (_lbSyncRunning) {
+    _lbSyncAbort = true;
+    btn.textContent = '🔵 Sync ListenBrainz';
+    return;
   }
+
+  const lastSyncRaw = localStorage.getItem(LB_SYNC_KEY);
+  const lastSyncTs  = lastSyncRaw ? parseInt(lastSyncRaw) : 0;
+  const isIncremental = lastSyncTs > 0;
+
+  _lbSyncRunning = true;
+  _lbSyncAbort   = false;
+  btn.textContent = '⏸ Pause LB';
+  btn.disabled = false;
+  status.className = 'status';
+  progress.style.display = 'block';
+  bar.style.width = '0%';
+
+  status.textContent = isIncremental
+    ? `LB : sync depuis ${new Date(lastSyncTs * 1000).toLocaleDateString('fr-FR')}…`
+    : 'LB : première synchronisation complète (tous scrobbles + MBIDs)…';
+
+  // Reconstruire les counts depuis lastfmData existant pour sync incrémentale
+  if (isIncremental && !Object.keys(_lastfmCounts).length) {
+    lastfmData.forEach(d => {
+      _lastfmCounts[normalizeKey(d.artist, d.album)] = { artist: d.artist, album: d.album, plays: d.plays || 0, release_mbid: d.release_mbid || '' };
+    });
+  } else if (!isIncremental) {
+    _lastfmCounts = {};
+    _lastfmTrackCounts = {};
+  }
+
+  // Récupérer le listen-count total pour la barre de progression
+  let totalListens = 0;
+  try {
+    const infoRes = await fetch(`${LB_BASE}/user/${encodeURIComponent(user)}/listen-count`);
+    if (infoRes.ok) {
+      const infoData = await infoRes.json();
+      totalListens = infoData.payload?.count || 0;
+      if (!isIncremental) status.textContent = `LB : ${totalListens.toLocaleString('fr-FR')} écoutes à récupérer…`;
+    }
+  } catch(e) { /* non bloquant */ }
+
+  let totalFetched = 0;
+  let latestTs = lastSyncTs;
+  let maxTs = null; // pagination vers le passé (sync complète)
+  let done = false;
+  let errorStreak = 0;
+
+  // Index MBID albums collection pour matching rapide
+  const mbReleaseIndex = new Map();
+  albums.forEach(a => { if (a.mb_release_id) mbReleaseIndex.set(a.mb_release_id, a); });
+
+  while (!done && !_lbSyncAbort) {
+    try {
+      let url;
+      if (isIncremental) {
+        url = `${LB_BASE}/user/${encodeURIComponent(user)}/listens?count=1000&min_ts=${lastSyncTs}`;
+      } else {
+        url = `${LB_BASE}/user/${encodeURIComponent(user)}/listens?count=1000`;
+        if (maxTs) url += `&max_ts=${maxTs}`;
+      }
+
+      await new Promise(r => setTimeout(r, 300));
+      const res = await fetch(url);
+
+      if (res.status === 429) {
+        progressLabel.textContent = 'Rate limit LB, pause 10s…';
+        await new Promise(r => setTimeout(r, 10000));
+        continue;
+      }
+      if (!res.ok) {
+        errorStreak++;
+        if (errorStreak > 5) { done = true; break; }
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      const data = await res.json();
+      const listens = data.payload?.listens || [];
+      errorStreak = 0;
+
+      if (!listens.length) { done = true; break; }
+
+      listens.forEach(listen => {
+        const ts      = listen.listened_at || 0;
+        const meta    = listen.track_metadata || {};
+        const mbMap   = meta.mbid_mapping || {};
+        const addInfo = meta.additional_info || {};
+
+        const artist   = (meta.artist_name  || '').trim();
+        const album    = (meta.release_name  || '').trim();
+        const track    = (meta.track_name    || '').trim();
+        const recMbid  = mbMap.recording_mbid  || addInfo.recording_mbid  || '';
+        const relMbid  = mbMap.release_mbid    || addInfo.release_mbid    || '';
+
+        if (ts > latestTs) latestTs = ts;
+        // Pour sync complète : avancer vers le passé
+        if (!isIncremental && (!maxTs || ts < maxTs)) maxTs = ts - 1;
+
+        if (!artist) return;
+        totalFetched++;
+
+        // ── Index albums ────────────────────────────────────────────────
+        if (album) {
+          const k = normalizeKey(artist, album);
+          if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0, release_mbid: '' };
+          _lastfmCounts[k].plays++;
+          if (relMbid && !_lastfmCounts[k].release_mbid) _lastfmCounts[k].release_mbid = relMbid;
+
+          // Matcher contre la collection
+          let found = relMbid ? mbReleaseIndex.get(relMbid) : null;
+          if (!found) {
+            const aNorm = normalizeKey('', album).replace('|||','');
+            for (const av of artistVariants(artist)) {
+              found = albums.find(a => normalizeKey('',a.album).replace('|||','') === aNorm && artistVariants(a.artist).has(av));
+              if (found) break;
+            }
+          }
+          if (found) {
+            found.plays = (_lastfmCounts[k].plays);
+            if (relMbid && !found.mb_release_id) { found.mb_release_id = relMbid; mbReleaseIndex.set(relMbid, found); }
+          }
+        }
+
+        // ── Index morceaux ──────────────────────────────────────────────
+        if (track) {
+          const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
+          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
+          _lastfmTrackCounts[kt].plays++;
+          if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) _lastfmTrackCounts[kt].recording_mbid = recMbid;
+          if (relMbid && !_lastfmTrackCounts[kt].release_mbid)   _lastfmTrackCounts[kt].release_mbid   = relMbid;
+        }
+      });
+
+      // Sync incrémentale : une seule page (écoutes récentes triées desc)
+      if (isIncremental || listens.length < 1000) { done = true; }
+
+      // Progression
+      const nA = Object.keys(_lastfmCounts).length;
+      const nT = Object.keys(_lastfmTrackCounts).length;
+      const pct = totalListens > 0 ? Math.min(99, Math.round(totalFetched / totalListens * 100)) : 0;
+      bar.style.width = pct + '%';
+      progressLabel.textContent = `${totalFetched.toLocaleString('fr-FR')} / ${totalListens.toLocaleString('fr-FR')} écoutes — ${nA} albums · ${nT} morceaux`;
+
+      // Checkpoint + flush Supabase toutes les 50 000 écoutes
+      if (totalFetched > 0 && totalFetched % 50000 < 1000) {
+        _saveLbCheckpoint(maxTs, totalFetched);
+        progressLabel.textContent += ' — flush Supabase…';
+        await _flushLbToSupabase(false);
+      }
+
+    } catch(e) {
+      errorStreak++;
+      progressLabel.textContent = `Erreur réseau (${errorStreak}/5), retry 3s…`;
+      await new Promise(r => setTimeout(r, 3000));
+      if (errorStreak > 5) { done = true; }
+    }
+  }
+
+  // ── Finalisation ──────────────────────────────────────────────────────────
+  lastfmData = Object.values(_lastfmCounts);
+
+  if (_lbSyncAbort) {
+    _saveLbCheckpoint(maxTs, totalFetched);
+    status.textContent = `⏸ LB interrompu — ${totalFetched.toLocaleString('fr-FR')} écoutes traitées — checkpoint sauvegardé`;
+    status.className = 'status ok';
+  } else {
+    if (latestTs > lastSyncTs) {
+      localStorage.setItem(LB_SYNC_KEY, String(latestTs));
+      if (window._sb) window._sb.from('meta').upsert({ key: 'lb_sync_ts', value: String(latestTs) }, { onConflict: 'key' }).then(() => {});
+    }
+    localStorage.removeItem('lb_checkpoint');
+    bar.style.width = '100%';
+    const nA = Object.keys(_lastfmCounts).length;
+    const nT = Object.keys(_lastfmTrackCounts).length;
+    const matched = albums.filter(a => (a.plays || 0) > 0).length;
+    status.textContent = `✓ LB ${isIncremental ? 'incrémental' : 'complet'} — ${totalFetched.toLocaleString('fr-FR')} écoutes · ${nA} albums · ${nT} morceaux · ${matched} matchés`;
+    status.className = 'status ok';
+    toast(`🔵 LB : ${totalFetched.toLocaleString('fr-FR')} écoutes · ${nA} albums · ${nT} morceaux`);
+  }
+
+  await _flushLbToSupabase(true);
+  invalidateCache();
+  updateNavBadges();
+  renderAlbums();
+  if (document.getElementById('sec-missing-tracks')?.classList.contains('active')) renderMissingTracks();
+
+  progress.style.display = 'none';
+  btn.textContent = '🔵 Sync ListenBrainz';
+  _lbSyncRunning = false;
+}
+
+// ── Helpers ListenBrainz full sync ──────────────────────────────────────────
+let _lbSyncRunning = false;
+let _lbSyncAbort   = false;
+const LB_SYNC_KEY  = 'lb_last_sync_ts';
+
+function _saveLbCheckpoint(maxTs, totalFetched) {
+  try {
+    const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays, m: d.release_mbid || '' }));
+    localStorage.setItem('lb_checkpoint', JSON.stringify({ maxTs, totalFetched, counts: compact, savedAt: Date.now() }));
+  } catch(e) { console.warn('LB checkpoint non sauvegardé:', e); }
+}
+
+async function _flushLbToSupabase(isFinal) {
+  if (!window._sb) return;
+  try {
+    // lastfm_data (albums)
+    const dedupAlb = new Map();
+    lastfmData.forEach(d => {
+      const k = d.artist + '|||' + d.album;
+      if (!dedupAlb.has(k) || (d.plays||0) > (dedupAlb.get(k).plays||0)) dedupAlb.set(k, d);
+    });
+    await sbUpsert('lastfm_data', [...dedupAlb.values()].map(d => ({
+      artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: new Date().toISOString()
+    })), 'artist,album');
+
+    // lastfm_tracks (morceaux)
+    await flushTrackCountsToSupabase();
+
+    if (isFinal) {
+      // Enrichir mb_release_id dans albums[] Supabase
+      const withMbid = albums.filter(a => a.mb_release_id);
+      for (let i = 0; i < withMbid.length; i += 200) {
+        const batch = withMbid.slice(i, i + 200);
+        for (const a of batch) {
+          await window._sb.from('albums').update({ mb_release_id: a.mb_release_id }).eq('id', a.id).then(() => {});
+        }
+      }
+      saveToStorage();
+    }
+  } catch(e) { console.warn('_flushLbToSupabase:', e); }
 }
 
 function saveLastfmCheckpoint(currentPage, totalPages) {
@@ -7610,13 +7692,16 @@ let _assocTargetKey = null; // cdKey texte
 function openAssocModal(albumId) {
   const a = albums.find(x => x.id === albumId);
   if (!a) return;
-  _assocTargetKey = a.id; // id = normalizeKey stable
+  _assocTargetKey = a.id;
   document.getElementById('assoc-cd-info').innerHTML =
     `<strong>CD :</strong> ${esc(a?.album)} — ${esc(a?.artist)} ${a?.year ? '(' + a.year + ')' : ''}`;
-  document.getElementById('assoc-search').value = a?.artist || '';
+  const searchEl = document.getElementById('assoc-search');
+  searchEl.value = '';
+  searchEl.oninput = () => (_assocReverseNumKey ? renderAssocListReverse() : renderAssocList());
   _assocReverseNumKey = null;
   renderAssocList();
   document.getElementById('modal-assoc').classList.add('open');
+  setTimeout(() => searchEl.focus(), 150);
 }
 
 function closeAssocModal() {
@@ -7652,20 +7737,31 @@ function openAssocModalReverse(albumId) {
     _assocReverseNumKey = numKey;
     document.getElementById('assoc-cd-info').innerHTML =
       `<strong>Numérique :</strong> ${esc(a.album)} — ${esc(a.artist)} — chercher le CD correspondant`;
-    document.getElementById('assoc-search').value = cleanDiscogsArtist(a.artist);
+    const searchEl = document.getElementById('assoc-search');
+    searchEl.value = '';
+    searchEl.oninput = () => (_assocReverseNumKey ? renderAssocListReverse() : renderAssocList());
     renderAssocListReverse();
     document.getElementById('modal-assoc').classList.add('open');
+    setTimeout(() => searchEl.focus(), 150);
   }
 }
 
 let _assocReverseNumKey = null;
 
 function renderAssocListReverse() {
-  const q = document.getElementById('assoc-search').value.toLowerCase();
+  const q = document.getElementById('assoc-search').value.toLowerCase().trim();
   const numAlbum = albumByKey(_assocReverseNumKey);
   const candidates = albums
     .filter(a => a.cd || a.has_cd)
-    .filter(a => !q || (cleanDiscogsArtist(a.artist) + ' ' + a.album).toLowerCase().includes(q))
+    .filter(a => {
+      if (!q) return true;
+      const terms = [
+        a.artist, cleanDiscogsArtist(a.artist),
+        (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,''),
+        a.album
+      ].join(' ').toLowerCase();
+      return terms.includes(q);
+    })
     .sort((a, b) => cleanDiscogsArtist(a.artist).localeCompare(cleanDiscogsArtist(b.artist), 'fr'));
   const el = document.getElementById('assoc-list');
   if (!candidates.length) {
@@ -7697,13 +7793,21 @@ function applyAssociationReverse(cdKey) {
 }
 
 function renderAssocList() {
-  const q = document.getElementById('assoc-search').value.toLowerCase();
+  const q = document.getElementById('assoc-search').value.toLowerCase().trim();
   const cdAlbum = albumByKey(_assocTargetKey);
   const usedNumKeys = new Set(associations.map(a => a.numKey));
   const candidates = albums
     .filter(a => (a.format || a.flac || a.mp3 || a.digital) && a.id !== _assocTargetKey && !usedNumKeys.has(a.id))
-    .filter(a => !q || (a.artist + ' ' + a.album).toLowerCase().includes(q))
-    .sort((a, b) => a.artist.localeCompare(b.artist, 'fr'));
+    .filter(a => {
+      if (!q) return true;
+      const terms = [
+        a.artist, cleanDiscogsArtist(a.artist),
+        (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,''),
+        a.album
+      ].join(' ').toLowerCase();
+      return terms.includes(q);
+    })
+    .sort((a, b) => cleanDiscogsArtist(a.artist).localeCompare(cleanDiscogsArtist(b.artist), 'fr'));
   const el = document.getElementById('assoc-list');
   if (!candidates.length) {
     el.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:12px">Aucune entrée numérique trouvée</div>';
