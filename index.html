@@ -1893,6 +1893,7 @@ async function saveToSupabase() {
       label:          a.label || null,
       catno:          a.catno || null,
       is_compilation: !!a.isCompilation,
+	  primary_folder: a.primaryFolder || 'album',
       updated_at:     now,
     }));
     // Remplacement complet : DELETE absents puis upsert
@@ -2046,6 +2047,8 @@ async function loadFromSupabase() {
         label:         a.label || undefined,
         catno:         a.catno || undefined,
         isCompilation: !!a.is_compilation,
+		primaryFolder: a.primary_folder || 'album',
+		
         // Compat lecture ancienne UI
         cd:      !!a.has_cd,
 		has_cd:  !!a.has_cd,
@@ -2054,6 +2057,7 @@ async function loadFromSupabase() {
 		digital: a.format === 'digital',
         okFolder:  folders.includes('ok'),
         forSale:   folders.includes('forsale'),
+		primaryFolder: a.primary_folder || 'album',
       };
     });
     // Nettoyage cover_url coverartarchive
@@ -2064,6 +2068,15 @@ async function loadFromSupabase() {
     // On les migre vers ['album'] (tag générique pour "album numérique hors dossiers spéciaux")
     // Note : on ne touche pas aux albums qui ont aussi 'stock', 'ok', 'forsale'
     let migratedCount = 0;
+	// Migration primaryFolder depuis folders[]
+	albums.forEach(a => {
+	if (!a.primaryFolder || a.primaryFolder === 'album') {
+		if (a.folders?.includes('stock'))      a.primaryFolder = 'stock';
+		else if (a.folders?.includes('ok'))    a.primaryFolder = 'ok';
+		else if (a.folders?.includes('forsale')) a.primaryFolder = 'forsale';
+		else if (a.folders?.includes('discographie')) a.primaryFolder = 'discographie';
+	}
+});
     albums.forEach(a => {
       if (!a.folders) { a.folders = ['album']; return; }
       const hasSpecial = a.folders.some(f => ['stock','ok','forsale'].includes(f));
@@ -3916,6 +3929,9 @@ async function importDiscogs(input) {
         if (discogsId && !existing.discogsId) existing.discogsId = discogsId;
         if (label && !existing.label) existing.label = label;
         if (catno && !existing.catno) existing.catno = catno;
+		if (g.primaryFolder && g.primaryFolder !== 'album') {
+		existing.primaryFolder = g.primaryFolder;
+		}
         // Mettre à jour l'artiste avec le nom nettoyé si différent
         if (existing.artist !== artist && cleanDiscogsArtist(existing.artist) === cleanDiscogsArtist(existing.artist)) {
           existing.artistRaw = artistRaw; // garder le nom brut Discogs
@@ -4188,16 +4204,25 @@ async function importMusicBeeXML(input) {
         if (!album) return;
         const key = normalizeKey(effectiveArtist, album);
         if (!grouped[key]) {
-          grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
-            flac: false, mp3: false, digital: false, maxRating: 0,
-            isCompilation, trackArtists: [],
-            okFolder: false, forSaleFolder: false, discoFolder: false,
-            mbReleaseId: mbidAlbum || '',
-            releaseDate:  releaseDate || '' };
-        }
-        if (folder === 'ok')           grouped[key].okFolder     = true;
-        if (folder === 'vendre')       grouped[key].forSaleFolder = true;
-        if (folder === 'discographie') grouped[key].discoFolder   = true;
+		grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
+			flac: false, mp3: false, digital: false, maxRating: 0,
+			isCompilation, trackArtists: [],
+			okFolder: false, forSaleFolder: false, discoFolder: false,
+			primaryFolder: folder === 'discographie' ? 'discographie'
+                 : folder === 'ok'           ? 'ok'
+                 : folder === 'vendre'       ? 'forsale'
+                 : 'album',
+			mbReleaseId: mbidAlbum || '',
+			releaseDate:  releaseDate || '' };
+		}
+	if (folder === 'ok')           grouped[key].okFolder     = true;
+	if (folder === 'vendre')       grouped[key].forSaleFolder = true;
+	if (folder === 'discographie') grouped[key].discoFolder   = true;
+	// Upgrade primaryFolder si une piste est dans un dossier plus "noble"
+	const pf = grouped[key].primaryFolder;
+	if (folder === 'discographie' && pf === 'album') grouped[key].primaryFolder = 'discographie';
+	if (folder === 'ok')                             grouped[key].primaryFolder = 'ok';
+	if (folder === 'vendre')                         grouped[key].primaryFolder = 'forsale';
         // Enrichir si données manquantes
         if (mbidAlbum  && !grouped[key].mbReleaseId)  grouped[key].mbReleaseId  = mbidAlbum;
         if (releaseDate && !grouped[key].releaseDate) grouped[key].releaseDate  = releaseDate;
@@ -4344,6 +4369,7 @@ async function importMusicBeeXML(input) {
           format:        fmt,
           note:          g.maxRating || 0,
           plays:         0,
+		  primaryFolder: g.primaryFolder || 'album',
           isCompilation: g.isCompilation || false,
           mb_release_id: g.mbReleaseId || undefined,
           // compat
@@ -7556,13 +7582,20 @@ function getNumericWithoutCD() {
   const cdKeys = getCDKeysSet();
   const linkedNumKeys = new Set(associations.map(a => a.numKey));
   _cache.numericWithoutCD = albums
-    .filter(a => (a.format || a.flac || a.mp3 || a.digital) && !a.has_cd && !a.cd)
+    .filter(a => {
+      // Exclure explicitement les albums stock et les dossiers non-discographie
+      if (a.primaryFolder === 'stock')   return false;
+      if (a.primaryFolder === 'ok')      return false;
+      if (a.primaryFolder === 'forsale') return false;
+      // Doit avoir un format numérique et pas de CD
+      if (!a.format && !a.flac && !a.mp3 && !a.digital) return false;
+      if (a.has_cd || a.cd) return false;
+      return true;
+    })
     .filter(a => {
       const albumNorm = normalizeKey('', a.album).replace('|||', '');
-      // Déjà associé manuellement à un CD
       const aKey = normalizeKey(a.artist, a.album);
       if (linkedNumKeys.has(aKey)) return false;
-      // Vérifier toutes les variantes artiste × album
       for (const av of artistVariants(a.artist)) {
         if (cdKeys.has(av + '|||' + albumNorm)) return false;
       }
