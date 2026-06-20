@@ -7841,7 +7841,7 @@ function renderAssocListReverse() {
   const numAlbumNorm = normalizeKey('', numAlbum?.album || '').replace('|||','');
   el.innerHTML = candidates.map(a => {
     const similar = normalizeKey('', a.album).replace('|||','') === numAlbumNorm;
-    return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociationReverse('${a.id.replace(/'/g,"\\'")}')">
+    return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociationReverse('${sid(a.id)}')">
       <div style="flex:1">
         <div style="font-size:13px;font-weight:500">${esc(a.album)}</div>
         <div style="font-size:11px;color:var(--text2)">${esc(a.artist)} ${a.year ? '· '+a.year : ''}</div>
@@ -7891,7 +7891,7 @@ function renderAssocList() {
       (a.format==='digital'||a.digital) ? '<span class="badge badge-digital">Digital</span>' : '',
     ].filter(Boolean).join('');
     const similar = normalizeKey('', a.album).replace('|||','') === cdAlbumNorm;
-    return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociation('${a.id.replace(/'/g,"\\'")}')">
+    return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociation('${sid(a.id)}')">
       <div style="flex:1">
         <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(a.album)}</div>
         <div style="font-size:11px;color:var(--text2)">${esc(a.artist)}${a.year?' · '+a.year:''}</div>
