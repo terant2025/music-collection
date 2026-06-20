@@ -2403,6 +2403,9 @@ function normalizeKey(artist, album) {
       .replace(/[\u00ab\u00bb\u201c\u201d\u201e\u201f]/g, '')
       // Ellipsis → points
       .replace(/\u2026/g, '...')
+      // Unifier "&" et "and"/"et" comme séparateur de collaboration équivalent
+      // ex: "Belle & Sebastian" et "Belle and Sebastian" doivent normaliser pareil
+      .replace(/\s*&\s*/g, ' and ')
       .toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // diacritiques
       // Supprimer les apostrophes et guillemets (pas d'espace, just remove)
