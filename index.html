@@ -3600,8 +3600,18 @@ function exportMissingTracksCSV() {
 function addToWishlistFromMissingTrack(idx) {
   const d = renderMissingTracks._cache?.[idx];
   if (!d) return;
-  // Pour un morceau, on cherche l'album correspondant dans la wishlist ou on l'ajoute
-  addToWishlist(d.artist, d.album || d.track, '', 'lastfm', d.plays, 0, `Morceau : ${d.track}`);
+  // N'ajouter à la wishlist ALBUMS que si on a un vrai nom d'album.
+  // Sinon (morceau sans tag album), on l'ajoute à la wishlist MORCEAUX à la place.
+  if (d.album && d.album.trim()) {
+    addToWishlist(d.artist, d.album, '', 'lastfm', d.plays, 0, `Morceau : ${d.track}`);
+  } else {
+    const key = normalizeKey(d.artist, d.track);
+    if (trackWishlist.find(w => normalizeKey(w.artist, w.title) === key)) return;
+    trackWishlist.push({ id: uid(), artist: d.artist, title: d.track, album: '', prio: 'mid', addedAt: Date.now() });
+    updateNavBadges();
+    saveToStorage();
+    toast(`Ajouté à la wishlist morceaux : ${d.artist} — ${d.track}`);
+  }
 }
 
 // Compat ancienne signature
