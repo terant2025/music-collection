@@ -3939,9 +3939,6 @@ async function importDiscogs(input) {
         if (discogsId && !existing.discogsId) existing.discogsId = discogsId;
         if (label && !existing.label) existing.label = label;
         if (catno && !existing.catno) existing.catno = catno;
-		if (g.primaryFolder && g.primaryFolder !== 'album') {
-		existing.primaryFolder = g.primaryFolder;
-		}
         // Mettre à jour l'artiste avec le nom nettoyé si différent
         if (existing.artist !== artist && cleanDiscogsArtist(existing.artist) === cleanDiscogsArtist(existing.artist)) {
           existing.artistRaw = artistRaw; // garder le nom brut Discogs
