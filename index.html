@@ -7523,7 +7523,7 @@ function getLinkedNumKey(cdKey) {
 
 // Compat : retrouver l'album à partir d'une clé texte
 function albumByKey(key) {
-  return albums.find(a => a.id === key || normalizeKey(a.artist, a.album) === key);
+  return albums.find(a => a.id === key || String(a.id) === String(key) || normalizeKey(a.artist, a.album) === key);
 }
 
 // Un album a une sauvegarde numérique si :
@@ -7808,7 +7808,7 @@ function openAssocModalReverse(albumId) {
     document.getElementById('assoc-cd-info').innerHTML =
       `<strong>Numérique :</strong> ${esc(a.album)} — ${esc(a.artist)} — chercher le CD correspondant`;
     const searchEl = document.getElementById('assoc-search');
-    searchEl.value = '';
+    searchEl.value = a.artist || '';
     searchEl.oninput = () => (_assocReverseNumKey ? renderAssocListReverse() : renderAssocList());
     renderAssocListReverse();
     document.getElementById('modal-assoc').classList.add('open');
