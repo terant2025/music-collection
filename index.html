@@ -7560,9 +7560,10 @@ function getCDKeysSet() {
 
 function hasDigitalBackup(album) {
   if (album.format || album.flac || album.mp3 || album.digital) return true;
-  // Vérifier les associations manuelles (clés texte)
-  const albumKey = normalizeKey(album.artist, album.album);
-  const linkedKeys = getLinkedNumKeys(albumKey);
+  // Vérifier les associations manuelles — la clé utilisée dans associations[]
+  // est toujours album.id (cf. applyAssociation / openAssocModal), PAS normalizeKey(artist,album).
+  // Pour les CDs Discogs, id est un entier (uid()) ≠ normalizeKey — il faut chercher sous a.id.
+  const linkedKeys = getLinkedNumKeys(String(album.id));
   for (const lk of linkedKeys) {
     const linked = albumByKey(lk);
     if (linked && (linked.format || linked.flac || linked.mp3 || linked.digital)) return true;
