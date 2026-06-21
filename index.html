@@ -4486,15 +4486,32 @@ async function importMusicBeeXML(input) {
     console.log(`[XML import] Résumé : ${albumsAdded} nouveaux, ${albumsUpdated} mis à jour, ${albums.length} total`);
     status.textContent = `✓ XML : ${parts.join(' — ')}`;
     status.className = 'status ok';
-    // Albums numériques fantômes : plus aucun support après le reset ciblé
-    // = étaient dans MusicBee avant, plus maintenant (renommés, déplacés, supprimés)
-    // On propose la suppression avec confirmation
-    const ghostAlbums = albums.filter(a =>
-      !a.cd && !a.flac && !a.mp3 && !a.digital
-      && !a.forSale && !a.okFolder
-      && !(a.note > 0)
-      && !stockItems.find(s => normalizeKey(s.artist, s.album) === normalizeKey(a.artist, a.album))
-    );
+    // ── Construire l'ensemble complet des clés présentes dans le XML actuel ──
+    const xmlAllKeys = new Set(xmlGroupKeys);
+    stockAlbums.forEach(s => {
+      if (!s.artist && !s.album) return;
+      const albumNorm = normalizeKey('', s.album).replace('|||', '');
+      xmlAllKeys.add(normalizeKey(s.artist, s.album));
+      for (const av of artistVariants(s.artist)) xmlAllKeys.add(av + '|||' + albumNorm);
+    });
+
+    // Albums numériques fantômes : soit plus aucun support après le reset ciblé,
+    // soit encore "numérique" en apparence mais absents de toutes les sources du XML actuel
+    // (clé jamais matchée par le reset ciblé — ex: tag corrigé, album renommé/fusionné).
+    const ghostAlbums = albums.filter(a => {
+      if (a.cd) return false;
+      if (a.forSale || a.okFolder || (a.note > 0)) return false;
+      if (stockItems.find(s => normalizeKey(s.artist, s.album) === normalizeKey(a.artist, a.album))) return false;
+      const noSupport = !a.flac && !a.mp3 && !a.digital;
+      if (noSupport) return true;
+      const albumNorm = normalizeKey('', a.album).replace('|||', '');
+      const aKey = normalizeKey(a.artist, a.album);
+      if (xmlAllKeys.has(aKey)) return false;
+      for (const av of artistVariants(a.artist)) {
+        if (xmlAllKeys.has(av + '|||' + albumNorm)) return false;
+      }
+      return true;
+    });
     let removedAlbums = 0;
     if (ghostAlbums.length) {
       const listStr = ghostAlbums.slice(0, 20).map(a => `• ${a.artist} — ${a.album}`).join('\n')
