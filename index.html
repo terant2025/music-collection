@@ -2577,33 +2577,50 @@ function getStockKeysSet() {
   return _cache.stockKeysSet;
 }
 
-// Index RYM unique (artiste, album) → entrée rymData, avec variantes artiste (&,The,feat...)
-// Source de vérité unique — remplace les anciennes constructions ad hoc partielles
-// (qui n'utilisaient pas artistVariants et faisaient rater des correspondances).
+// Index RYM (artiste, album) → entrée rymData
+// Deux index séparés :
+// - exact : clé normalizeKey(artist,album) stricte, jamais ambiguë, toujours prioritaire
+// - fuzzy : variantes d'artiste (&, The, Discogs clean...) en filet de sécurité SEULEMENT
+//   si rien n'est trouvé en exact. Le filet de sécurité ne doit jamais écraser une
+//   correspondance exacte différente — sinon deux artistes distincts partageant une
+//   variante courte (ex: "Various"/"Various Artists", ou un nom tronqué par feat./with)
+//   finissent par se voler mutuellement leur note RYM.
 function getRymIndex() {
   if (_cache.rymIndex) return _cache.rymIndex;
-  const idx = new Map();
+  const exact = new Map();
+  const fuzzy = new Map();
   rymData.forEach(r => {
+    const exactKey = normalizeKey(r.artist, r.album);
+    // En cas de doublon exact dans rymData, garder l'entrée notée si possible
+    const prevExact = exact.get(exactKey);
+    if (!prevExact || (!prevExact.rating && r.rating)) exact.set(exactKey, r);
+
     const albumNorm = normalizeKey('', r.album).replace('|||', '');
     for (const av of artistVariants(r.artist)) {
       const k = av + '|||' + albumNorm;
-      if (!idx.has(k)) idx.set(k, r);
+      if (k === exactKey) continue; // déjà couvert par l'index exact
+      // Marquer comme ambiguë si une autre entrée RYM différente revendique déjà cette variante
+      if (fuzzy.has(k) && fuzzy.get(k) !== '__ambiguous__' && fuzzy.get(k).artist !== r.artist) {
+        fuzzy.set(k, '__ambiguous__');
+      } else if (!fuzzy.has(k)) {
+        fuzzy.set(k, r);
+      }
     }
-    idx.set(normalizeKey(r.artist, r.album), r);
   });
-  _cache.rymIndex = idx;
-  return idx;
+  _cache.rymIndex = { exact, fuzzy };
+  return _cache.rymIndex;
 }
 
-// Recherche RYM tolérante (essaie la clé exacte puis les variantes artiste)
+// Recherche RYM tolérante : clé exacte d'abord (fiable), variante ensuite
+// (ignorée si ambiguë, c.à.d. partagée par plusieurs artistes différents).
 function lookupRym(artist, album) {
-  const idx = getRymIndex();
-  const exact = idx.get(normalizeKey(artist, album));
-  if (exact) return exact;
+  const { exact, fuzzy } = getRymIndex();
+  const exactHit = exact.get(normalizeKey(artist, album));
+  if (exactHit) return exactHit;
   const albumNorm = normalizeKey('', album).replace('|||', '');
   for (const av of artistVariants(artist)) {
-    const hit = idx.get(av + '|||' + albumNorm);
-    if (hit) return hit;
+    const hit = fuzzy.get(av + '|||' + albumNorm);
+    if (hit && hit !== '__ambiguous__') return hit;
   }
   return undefined;
 }
@@ -2705,8 +2722,8 @@ function renderAlbums() {
   const slice = list.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const maxPlays = Math.max(1, ...albums.map(a => a.plays || 0));
 
-  // Index RYM (version unifiée avec variantes artiste)
-  const rymIndex = getRymIndex();
+  // Index RYM (lookup via lookupRym, prend en compte exact + fuzzy)
+  // (variable conservée pour compat lecture, plus utilisée directement ci-dessous)
 
   const ctr = document.getElementById('albums-counter');
   if (ctr) ctr.textContent = total.toLocaleString('fr-FR') + ' / ' + albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length.toLocaleString('fr-FR') + ' albums';
@@ -2737,8 +2754,7 @@ function renderAlbums() {
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
 
     // Note RYM
-    const rymEntry = rymIndex.get(normalizeKey(a.artist, a.album))
-      || rymIndex.get(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+    const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
     const rymHtml = rymEntry?.rating
       ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>`
       : `<span style="color:var(--text3);font-size:11px">–</span>`;
@@ -3084,7 +3100,6 @@ function saveToStorage() {
 function renderMissing() {
   const list = computeMissing();
 
-  const rymIndex = getRymIndex();
   const globalQ = document.getElementById('global-search').value.toLowerCase();
   const af     = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
   const albf   = (document.getElementById('filter-missing-album')?.value  || '').toLowerCase().trim();
@@ -3099,7 +3114,7 @@ function renderMissing() {
   if (genreSel && genreSel.options.length <= 1) {
     const genres = [...new Set(
       list.flatMap(m => {
-        const r = rymIndex.get(normalizeKey(m.artist, m.album));
+        const r = lookupRym(m.artist, m.album);
         return (r?.genre || '').split(',').map(g => g.trim()).filter(Boolean);
       })
     )].sort();
@@ -3110,14 +3125,7 @@ function renderMissing() {
 
   let filtered = list.filter(m => {
     const key = normalizeKey(m.artist, m.album);
-    const _rymAlbNorm = normalizeKey('', m.album).replace('|||', '');
-    let rymEntry = rymIndex.get(key);
-    if (!rymEntry) {
-      for (const av of artistVariants(m.artist)) {
-        rymEntry = rymIndex.get(av + '|||' + _rymAlbNorm);
-        if (rymEntry) break;
-      }
-    }
+    const rymEntry = lookupRym(m.artist, m.album);
     const genre = (rymEntry?.genre || '').toLowerCase();
     const st = _lastfmStatus[key] || ''; // accès direct au lieu de getLastfmStatus()
     if (statusF === 'none'      && st)               return false;
@@ -3171,15 +3179,7 @@ function renderMissing() {
     for (; i < end; i++) {
       const m = filtered[i];
       const idx = i;
-      const _rk = normalizeKey(m.artist, m.album);
-      const _rymAlbNorm2 = normalizeKey('', m.album).replace('|||', '');
-      let rymEntry = rymIndex.get(_rk);
-      if (!rymEntry) {
-        for (const av of artistVariants(m.artist)) {
-          rymEntry = rymIndex.get(av + '|||' + _rymAlbNorm2);
-          if (rymEntry) break;
-        }
-      }
+      const rymEntry = lookupRym(m.artist, m.album);
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
         : '';
