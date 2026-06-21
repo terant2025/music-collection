@@ -6707,7 +6707,7 @@ function renderOkAlbums() {
     <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">numérique seul</span>'}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
     <td style="display:flex;gap:4px">
-      <button class="btn btn-sm" onclick="addToWishlist('${esc(a.artist).replace(/'/g,"\'")}','${esc(a.album).replace(/'/g,"\'")}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
+      <button class="btn btn-sm" onclick="addToWishlist('${sid(a.artist)}','${sid(a.album)}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
       <button class="btn btn-sm btn-danger" onclick="markOkDone('${sid(a.id)}')" title="Retirer de Ok">✕</button>
     </td>
   </tr>`).join('');
