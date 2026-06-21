@@ -1059,11 +1059,12 @@ input[type="file"] { display: none; }
     <div class="section" id="sec-assocreview">
       <div class="toolbar" style="margin-bottom:12px">
         <select id="filter-assoc-type" onchange="renderAssocReview()">
-          <option value="">Tous types</option>
-          <option value="discogs-num">Discogs ↔ Numérique</option>
-          <option value="rym">RYM ↔ Album</option>
-          <option value="lastfm">last.fm aliases</option>
-        </select>
+			<option value="">Tous types</option>
+			<option value="discogs-num">Discogs ↔ Numérique</option>
+			<option value="rym">RYM ↔ Album</option>
+			<option value="lastfm">last.fm aliases</option>
+			<option value="broken">⚠️ Introuvables</option>
+		</select>
         <input id="filter-assoc-q" type="text" placeholder="Artiste / Album…" oninput="renderAssocReview()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:200px"/>
         <div class="toolbar-right">
           <span id="assoc-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
@@ -7135,42 +7136,51 @@ function deleteSelectedAssoc() {
 function renderAssocReview() {
   const typeF = document.getElementById('filter-assoc-type')?.value || '';
   const q = (document.getElementById('filter-assoc-q')?.value || '').toLowerCase().trim();
+  // Le filtre "broken" doit parcourir tous les types puis ne garder que les cassées
+  const wantBroken = typeF === 'broken';
+  const effectiveTypeF = wantBroken ? '' : typeF;
 
   const rows = [];
 
   // 1. Associations Discogs ↔ Numérique
-  if (!typeF || typeF === 'discogs-num') {
+  if (!effectiveTypeF || effectiveTypeF === 'discogs-num') {
     associations.forEach((assoc, idx) => {
       const cdAlbum  = albumByKey(assoc.cdKey);
       const numAlbum = albumByKey(assoc.numKey);
+      const broken = !cdAlbum || !numAlbum;
+      if (wantBroken && !broken) return;
       const label = `${cdAlbum ? cdAlbum.artist + ' — ' + cdAlbum.album : '?'} ↔ ${numAlbum ? numAlbum.artist + ' — ' + numAlbum.album : '?'}`;
       if (q && !label.toLowerCase().includes(q)) return;
       rows.push({
         type: 'discogs-num',
         typeLabel: '💿 Discogs ↔ Numérique',
-        a: cdAlbum  ? `<strong>${esc(cdAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(cdAlbum.artist)}</span><br><span class="badge badge-cd">CD</span>` : `<span style="color:var(--text3)">${esc(assoc.cdKey)}</span>`,
-        b: numAlbum ? `<strong>${esc(numAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(numAlbum.artist)}</span><br>${(numAlbum.format==='flac'||numAlbum.flac)?'<span class="badge badge-flac">FLAC</span>':''} ${(numAlbum.format==='mp3'||numAlbum.mp3)?'<span class="badge badge-mp3">MP3</span>':''}` : `<span style="color:var(--text3)">${esc(assoc.numKey)}</span>`,
+        broken,
+        a: cdAlbum  ? `<strong>${esc(cdAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(cdAlbum.artist)}</span><br><span class="badge badge-cd">CD</span>` : `<span style="color:var(--red)">⚠️ Introuvable</span><br><span style="color:var(--text3);font-size:11px">${esc(assoc.cdKey)}</span>`,
+        b: numAlbum ? `<strong>${esc(numAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(numAlbum.artist)}</span><br>${(numAlbum.format==='flac'||numAlbum.flac)?'<span class="badge badge-flac">FLAC</span>':''} ${(numAlbum.format==='mp3'||numAlbum.mp3)?'<span class="badge badge-mp3">MP3</span>':''}` : `<span style="color:var(--red)">⚠️ Introuvable</span><br><span style="color:var(--text3);font-size:11px">${esc(assoc.numKey)}</span>`,
         actions: `<button class="btn btn-sm btn-danger" onclick="removeDiscogsAssoc('${assoc.cdKey.replace(/'/g,"\\'")}','${assoc.numKey.replace(/'/g,"\\'")}')">✕</button>`
       });
     });
   }
 
   // 2. Associations RYM ↔ Album
-  if (!typeF || typeF === 'rym') {
+  if (!effectiveTypeF || effectiveTypeF === 'rym') {
     rymAssociations.forEach(assoc => {
       const rymEntry = rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey);
       const album    = albumByKey(assoc.albumKey);
+      const broken = !rymEntry || !album;
+      if (wantBroken && !broken) return;
       const label = `${rymEntry ? rymEntry.artist + ' ' + rymEntry.album : assoc.rymKey} ${album ? album.artist + ' ' + album.album : ''}`;
       if (q && !label.toLowerCase().includes(q)) return;
       rows.push({
         type: 'rym',
         typeLabel: '⭐ RYM ↔ Album',
+        broken,
         a: rymEntry
           ? `<strong>${esc(rymEntry.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(rymEntry.artist)}</span><br><span style="font-size:11px;color:var(--amber)">${rymEntry.rating ? rymEntry.rating.toFixed(2) + '★' : 'Non noté'}</span>`
-          : `<span style="font-size:11px;color:var(--text3)">${esc(assoc.rymKey)}</span>`,
+          : `<span style="color:var(--red)">⚠️ Introuvable</span><br><span style="font-size:11px;color:var(--text3)">${esc(assoc.rymKey)}</span>`,
         b: album
           ? `<strong>${esc(album.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(album.artist)}</span>`
-          : `<span style="color:var(--text3)">Introuvable (${esc(assoc.albumKey)})</span>`,
+          : `<span style="color:var(--red)">⚠️ Introuvable (${esc(assoc.albumKey)})</span>`,
         actions: `<button class="btn btn-sm btn-danger" onclick="removeRYMAssoc('${assoc.rymKey.replace(/'/g,"\\'")}')">✕</button>
                   <button class="btn btn-sm" onclick="reassociateRYM('${assoc.rymKey.replace(/'/g,"\\'")}')">✎</button>`
       });
@@ -7178,16 +7188,22 @@ function renderAssocReview() {
   }
 
   // 3. Aliases last.fm
-  if (!typeF || typeF === 'lastfm') {
+  // Un alias est "cassé" si l'album parent n'existe plus (rare, car indexé sur album.id directement)
+  // ou si l'alias ne correspond plus à aucune entrée dans lastfmData (orphelin réel)
+  if (!effectiveTypeF || effectiveTypeF === 'lastfm') {
+    if (!_cache.lastfmKeysSet) _cache.lastfmKeysSet = new Set(lastfmData.map(d => normalizeKey(d.artist, d.album)));
     albums.forEach(album => {
       if (!album.lastfmAliases || !album.lastfmAliases.length) return;
       album.lastfmAliases.forEach((alias, ai) => {
+        const broken = !_cache.lastfmKeysSet.has(alias);
+        if (wantBroken && !broken) return;
         const label = album.artist + ' ' + album.album + ' ' + alias;
         if (q && !label.toLowerCase().includes(q)) return;
         rows.push({
           type: 'lastfm',
           typeLabel: '🎵 last.fm alias',
-          a: `<span style="font-size:12px;color:var(--text3);font-family:var(--mono)">${esc(alias)}</span>`,
+          broken,
+          a: `<span style="font-size:12px;color:${broken?'var(--red)':'var(--text3)'};font-family:var(--mono)">${broken?'⚠️ ':''}${esc(alias)}</span>`,
           b: `<strong>${esc(album.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(album.artist)}</span>`,
           actions: `<button class="btn btn-sm btn-danger" onclick="removeLastfmAlias(${album.id},${ai})" title="Supprimer">✕</button>`
         });
@@ -7216,7 +7232,15 @@ function renderAssocReview() {
     <td style="white-space:nowrap">${r.actions}</td>
   </tr>`).join('');
   window._assocRows = rows; // stocker pour la suppression groupée
+
+  // Filtre "Introuvables" actif : pré-cocher tout pour un nettoyage rapide en un clic
+  if (wantBroken && rows.length) {
+    document.querySelectorAll('.assoc-row-check').forEach(c => c.checked = true);
+    onAssocCheckChange();
+  }
 }
+
+  
 
 function removeDiscogsAssoc(cdKey, numKey) {
   if (!confirm('Supprimer cette association Discogs ↔ Numérique ?')) return;
