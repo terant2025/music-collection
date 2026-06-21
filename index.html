@@ -7542,7 +7542,17 @@ document.getElementById('modal-stock').addEventListener('click', function(e) {
 // ===================== DISCOGRAPHIE =====================
 
 function getLinkedNumKeys(cdKey) {
-  return associations.filter(a => a.cdKey === cdKey).map(a => a.numKey);
+  // cdKey transmis ici est toujours normalizeKey(artist, album) (cf. hasDigitalBackup).
+  // Mais a.cdKey stocké dans associations[] est souvent l'id réel de l'album CD
+  // (entier uid() pour les imports Discogs/manuels), pas forcément égal à cdKey.
+  // On résout donc chaque association vers son album CD réel et on compare les deux formes.
+  return associations
+    .filter(a => {
+      if (a.cdKey === cdKey || String(a.cdKey) === String(cdKey)) return true;
+      const cdAlbum = albumByKey(a.cdKey);
+      return cdAlbum && normalizeKey(cdAlbum.artist, cdAlbum.album) === cdKey;
+    })
+    .map(a => a.numKey);
 }
 function getLinkedNumKey(cdKey) {
   return getLinkedNumKeys(cdKey)[0] || null;
@@ -7615,7 +7625,18 @@ function getCDsWithoutBackup() {
 function getNumericWithoutCD() {
   if (_cache.numericWithoutCD) return _cache.numericWithoutCD;
   const cdKeys = getCDKeysSet();
-  const linkedNumKeys = new Set(associations.map(a => a.numKey));
+  // linkedNumKeys doit couvrir numKey tel que stocké (souvent a.id, qui peut être
+  // un entier uid() pour les albums ajoutés via Discogs/manuel, PAS forcément
+  // égal à normalizeKey(artist, album)). On indexe donc par id ET par clé normalisée.
+  const linkedNumKeys = new Set();
+  associations.forEach(a => {
+    linkedNumKeys.add(String(a.numKey));
+    const linkedAlbum = albumByKey(a.numKey);
+    if (linkedAlbum) {
+      linkedNumKeys.add(String(linkedAlbum.id));
+      linkedNumKeys.add(normalizeKey(linkedAlbum.artist, linkedAlbum.album));
+    }
+  });
   _cache.numericWithoutCD = albums
     .filter(a => {
       // Exclure explicitement les albums stock et les dossiers non-discographie
@@ -7630,7 +7651,7 @@ function getNumericWithoutCD() {
     .filter(a => {
       const albumNorm = normalizeKey('', a.album).replace('|||', '');
       const aKey = normalizeKey(a.artist, a.album);
-      if (linkedNumKeys.has(aKey)) return false;
+      if (linkedNumKeys.has(String(a.id)) || linkedNumKeys.has(aKey)) return false;
       for (const av of artistVariants(a.artist)) {
         if (cdKeys.has(av + '|||' + albumNorm)) return false;
       }
