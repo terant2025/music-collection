@@ -2143,8 +2143,9 @@ async function loadFromSupabase() {
       artist: d.artist, album: d.album, rating: d.rating,
       ownership: d.ownership || '', year: d.year || '', genre: d.genre || ''
     }));
-    // Reconstruire l'index immédiatement — ne pas laisser renderMissing le faire trop tôt
-    _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
+    // Reconstruire l'index immédiatement (version riche avec variantes artiste)
+    delete _cache.rymIndex;
+    getRymIndex();
     updateNavBadges();
     if (document.getElementById('sec-missing')?.classList.contains('active')) {
       renderMissing();
@@ -2576,6 +2577,37 @@ function getStockKeysSet() {
   return _cache.stockKeysSet;
 }
 
+// Index RYM unique (artiste, album) → entrée rymData, avec variantes artiste (&,The,feat...)
+// Source de vérité unique — remplace les anciennes constructions ad hoc partielles
+// (qui n'utilisaient pas artistVariants et faisaient rater des correspondances).
+function getRymIndex() {
+  if (_cache.rymIndex) return _cache.rymIndex;
+  const idx = new Map();
+  rymData.forEach(r => {
+    const albumNorm = normalizeKey('', r.album).replace('|||', '');
+    for (const av of artistVariants(r.artist)) {
+      const k = av + '|||' + albumNorm;
+      if (!idx.has(k)) idx.set(k, r);
+    }
+    idx.set(normalizeKey(r.artist, r.album), r);
+  });
+  _cache.rymIndex = idx;
+  return idx;
+}
+
+// Recherche RYM tolérante (essaie la clé exacte puis les variantes artiste)
+function lookupRym(artist, album) {
+  const idx = getRymIndex();
+  const exact = idx.get(normalizeKey(artist, album));
+  if (exact) return exact;
+  const albumNorm = normalizeKey('', album).replace('|||', '');
+  for (const av of artistVariants(artist)) {
+    const hit = idx.get(av + '|||' + albumNorm);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 function filteredAlbums() {
   const q = document.getElementById('global-search').value.toLowerCase();
   const af = (document.getElementById('filter-artist').value || '').toLowerCase().trim();
@@ -2630,12 +2662,10 @@ function filteredAlbums() {
     else if (nf === '4') nm = a.note >= 4;
     else if (nf === '3') nm = a.note >= 3;
     else if (nf === '0') nm = !a.note;
-    // Filtre note RYM — construire l'index si absent
+    // Filtre note RYM
     let rymMatch = true;
     if (rymNf) {
-      if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
-      const rymEntry = _cache.rymIndex.get(normalizeKey(a.artist, a.album))
-        || _cache.rymIndex.get(normalizeKey(cleanDiscogsArtist(a.artist), a.album));
+      const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
       if (rymNf === '0') rymMatch = !rymEntry || !rymEntry.rating;
       else rymMatch = !!(rymEntry && rymEntry.rating >= parseFloat(rymNf));
     }
@@ -2648,10 +2678,9 @@ function filteredAlbums() {
 function sortedAlbums(list) {
   const col = document.getElementById('sort-col').value;
   if (col === 'rym') {
-    if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
     return [...list].sort((a, b) => {
-      const ra = _cache.rymIndex.get(normalizeKey(a.artist, a.album))?.rating || 0;
-      const rb = _cache.rymIndex.get(normalizeKey(b.artist, b.album))?.rating || 0;
+      const ra = lookupRym(a.artist, a.album)?.rating || 0;
+      const rb = lookupRym(b.artist, b.album)?.rating || 0;
       return rb - ra;
     });
   }
@@ -2676,9 +2705,8 @@ function renderAlbums() {
   const slice = list.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const maxPlays = Math.max(1, ...albums.map(a => a.plays || 0));
 
-  // Index RYM (réutilise le cache de filteredAlbums si dispo)
-  if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
-  const rymIndex = _cache.rymIndex;
+  // Index RYM (version unifiée avec variantes artiste)
+  const rymIndex = getRymIndex();
 
   const ctr = document.getElementById('albums-counter');
   if (ctr) ctr.textContent = total.toLocaleString('fr-FR') + ' / ' + albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length.toLocaleString('fr-FR') + ' albums';
@@ -3056,19 +3084,7 @@ function saveToStorage() {
 function renderMissing() {
   const list = computeMissing();
 
-// Index RYM avec variantes artiste
-  if (!_cache.rymIndex) {
-    _cache.rymIndex = new Map();
-    rymData.forEach(r => {
-      const albumNorm = normalizeKey('', r.album).replace('|||', '');
-      for (const av of artistVariants(r.artist)) {
-        const k = av + '|||' + albumNorm;
-        if (!_cache.rymIndex.has(k)) _cache.rymIndex.set(k, r);
-      }
-      _cache.rymIndex.set(normalizeKey(r.artist, r.album), r);
-    });
-  }
-  const rymIndex = _cache.rymIndex;
+  const rymIndex = getRymIndex();
   const globalQ = document.getElementById('global-search').value.toLowerCase();
   const af     = (document.getElementById('filter-missing-artist')?.value || '').toLowerCase().trim();
   const albf   = (document.getElementById('filter-missing-album')?.value  || '').toLowerCase().trim();
@@ -3078,10 +3094,15 @@ function renderMissing() {
   const rymF   = document.getElementById('filter-missing-rym')?.value || '';
   const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
  
-  // Remplir le select genre une seule fois
+  // Remplir le select genre une seule fois (genre récupéré via RYM, lastfmData n'en a pas)
   const genreSel = document.getElementById('filter-missing-genre');
   if (genreSel && genreSel.options.length <= 1) {
-    const genres = [...new Set(list.flatMap(m => (m.genre||'').split(',').map(g => g.trim()).filter(Boolean)))].sort();
+    const genres = [...new Set(
+      list.flatMap(m => {
+        const r = rymIndex.get(normalizeKey(m.artist, m.album));
+        return (r?.genre || '').split(',').map(g => g.trim()).filter(Boolean);
+      })
+    )].sort();
     const frag = document.createDocumentFragment();
     genres.forEach(g => { const o = document.createElement('option'); o.value = g.toLowerCase(); o.textContent = g; frag.appendChild(o); });
     genreSel.appendChild(frag);
@@ -3089,7 +3110,15 @@ function renderMissing() {
 
   let filtered = list.filter(m => {
     const key = normalizeKey(m.artist, m.album);
-    const genre = (m.genre || '').toLowerCase();
+    const _rymAlbNorm = normalizeKey('', m.album).replace('|||', '');
+    let rymEntry = rymIndex.get(key);
+    if (!rymEntry) {
+      for (const av of artistVariants(m.artist)) {
+        rymEntry = rymIndex.get(av + '|||' + _rymAlbNorm);
+        if (rymEntry) break;
+      }
+    }
+    const genre = (rymEntry?.genre || '').toLowerCase();
     const st = _lastfmStatus[key] || ''; // accès direct au lieu de getLastfmStatus()
     if (statusF === 'none'      && st)               return false;
     if (statusF === 'ignored'   && st !== 'ignored')  return false;
@@ -3100,14 +3129,6 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    const _rymAlbNorm = normalizeKey('', m.album).replace('|||', '');
-    let rymEntry = rymIndex.get(key);
-    if (!rymEntry) {
-      for (const av of artistVariants(m.artist)) {
-        rymEntry = rymIndex.get(av + '|||' + _rymAlbNorm);
-        if (rymEntry) break;
-      }
-    }
     const hasRymEntry = !!rymEntry;
     if (rymF === 'rym'   && !(hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
     if (rymF === 'norym' && (hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
@@ -3122,6 +3143,7 @@ function renderMissing() {
 
   if (sortF === 'artist') filtered.sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
   else if (sortF === 'album') filtered.sort((a,b) => a.album.localeCompare(b.album,'fr'));
+  else if (sortF === 'plays') filtered.sort((a,b) => (b.plays||0) - (a.plays||0));
 
   _missingListCache = filtered;
 
@@ -8595,9 +8617,7 @@ function _csvDownload(filename, rows) {
 }
 
 function _rymRating(artist, album) {
-  if (!_cache.rymIndex) _cache.rymIndex = new Map(rymData.map(r => [normalizeKey(r.artist, r.album), r]));
-  const r = _cache.rymIndex.get(normalizeKey(artist, album))
-    || _cache.rymIndex.get(normalizeKey(cleanDiscogsArtist(artist), album));
+  const r = lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album);
   return r?.rating || '';
 }
 
