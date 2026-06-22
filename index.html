@@ -3174,14 +3174,14 @@ function renderMissing() {
   // Rendu par chunks via requestAnimationFrame pour ne pas geler l'UI
   const CHUNK = 80;
   el.innerHTML = '';
-  let i = 0;
+  let chunkIdx = 0;
 
   function renderChunk() {
     const frag = document.createDocumentFragment();
-    const end = Math.min(i + CHUNK, filtered.length);
-    for (; i < end; i++) {
-      const m = filtered[i];
-      const idx = i;
+    const end = Math.min(chunkIdx + CHUNK, filtered.length);
+    for (; chunkIdx < end; chunkIdx++) {
+      const m = filtered[chunkIdx];
+      const idx = chunkIdx;
       const rymEntry = m._rymEntry || lookupRym(m.artist, m.album);
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
@@ -3215,7 +3215,7 @@ function renderMissing() {
       frag.appendChild(div);
     }
     el.appendChild(frag);
- if (i < filtered.length) requestAnimationFrame(renderChunk);
+ if (chunkIdx < filtered.length) requestAnimationFrame(renderChunk);
   }
 
   requestAnimationFrame(renderChunk);
