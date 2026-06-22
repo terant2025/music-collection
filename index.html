@@ -3159,8 +3159,10 @@ function renderMissing() {
   const ctr = document.getElementById('missing-counter');
   if (ctr) ctr.textContent = filtered.length + ' / ' + list.length + ' manquants';
 
-  const el = document.getElementById('missing-grid');
-  if (!lastfmData.length) {
+  el.innerHTML = '';
+  let i = 0;
+
+  function renderChunk() {
     el.innerHTML = '<div class="empty"><div class="empty-icon">📊</div>Aucun historique last.fm chargé.</div>';
     return;
   }
