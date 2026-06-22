@@ -3137,11 +3137,11 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    const hasRymEntry = !!rymEntry;
-    if (rymF === 'rym'   && !(hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
-    if (rymF === 'norym' && (hasRymEntry && (rymEntry.rating || 0) > 0)) return false;
-    if (rymF === 'low') {
-      if (!hasRymEntry || (rymEntry.rating || 0) > 2.5) return false;
+    const hasRymRating = (rymEntry?.rating || 0) > 0;
+        if (rymF === 'rym'   && !hasRymRating) return false;
+        if (rymF === 'norym' && hasRymRating)  return false;
+		if (rymF === 'low') {
+		if (!hasRymEntry || (rymEntry.rating || 0) > 2.5) return false;
     } else if (rymF && !isNaN(parseFloat(rymF))) {
       const threshold = parseFloat(rymF);
       if (!hasRymEntry || (rymEntry.rating || 0) < threshold) return false;
