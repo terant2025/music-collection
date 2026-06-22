@@ -3125,7 +3125,8 @@ function renderMissing() {
 
   let filtered = list.filter(m => {
     const key = normalizeKey(m.artist, m.album);
-    const rymEntry = lookupRym(m.artist, m.album);
+    m._rymEntry = lookupRym(m.artist, m.album);
+    const rymEntry = m._rymEntry;
     const genre = (rymEntry?.genre || '').toLowerCase();
     const st = _lastfmStatus[key] || ''; // accès direct au lieu de getLastfmStatus()
     if (statusF === 'none'      && st)               return false;
@@ -3141,11 +3142,11 @@ function renderMissing() {
         if (rymF === 'rym'   && !hasRymRating) return false;
         if (rymF === 'norym' && hasRymRating)  return false;
 		if (rymF === 'low') {
-		if (!hasRymEntry || (rymEntry.rating || 0) > 2.5) return false;
-    } else if (rymF && !isNaN(parseFloat(rymF))) {
-      const threshold = parseFloat(rymF);
-      if (!hasRymEntry || (rymEntry.rating || 0) < threshold) return false;
-    }
+          if ((rymEntry?.rating || 0) === 0 || (rymEntry?.rating || 0) > 2.5) return false;
+        } else if (rymF && !isNaN(parseFloat(rymF))) {
+          const threshold = parseFloat(rymF);
+          if ((rymEntry?.rating || 0) < threshold) return false;
+        }
     return true;
   });
 
@@ -3179,7 +3180,7 @@ function renderMissing() {
     for (; i < end; i++) {
       const m = filtered[i];
       const idx = i;
-      const rymEntry = lookupRym(m.artist, m.album);
+      const rymEntry = m._rymEntry || lookupRym(m.artist, m.album);
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
         : '';
