@@ -3172,11 +3172,15 @@ function renderMissing() {
   }
 
   // Rendu par chunks via requestAnimationFrame pour ne pas geler l'UI
+  // Token de génération : annule les renders précédents encore en cours
   const CHUNK = 80;
   el.innerHTML = '';
+  const renderToken = (el._renderToken = (el._renderToken || 0) + 1);
   let chunkIdx = 0;
 
   function renderChunk() {
+    // Si un nouveau render a démarré entre-temps, abandonner celui-ci
+    if (el._renderToken !== renderToken) return;
     const frag = document.createDocumentFragment();
     const end = Math.min(chunkIdx + CHUNK, filtered.length);
     for (; chunkIdx < end; chunkIdx++) {
@@ -3186,7 +3190,7 @@ function renderMissing() {
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
         : '';
-      const rymGenre = rymEntry?.genre || m.genre || '';
+      const rymGenre = rymEntry?.genre || '';
       const genreBadge = rymGenre
         ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(rymGenre.split(',')[0].trim())}</span>`
         : '';
@@ -3216,7 +3220,7 @@ function renderMissing() {
       frag.appendChild(div);
     }
     el.appendChild(frag);
- if (chunkIdx < filtered.length) requestAnimationFrame(renderChunk);
+    if (chunkIdx < filtered.length) requestAnimationFrame(renderChunk);
   }
 
   requestAnimationFrame(renderChunk);
@@ -8695,8 +8699,8 @@ function exportMissingAlbumsCSV() {
   const rows = [['Artiste','Album','Écoutes','Statut','Note RYM','Genre']];
   list.forEach(m => {
     const st = getLastfmStatus(m.artist, m.album);
-    const rymE = lookupRym(m.artist, m.album);
-    rows.push([m.artist, m.album, m.plays, statusLabel[st]||'', _rymRating(m.artist, m.album), rymE?.genre || '']);
+    const rymECsv = lookupRym(m.artist, m.album);
+    rows.push([m.artist, m.album, m.plays, statusLabel[st]||'', _rymRating(m.artist, m.album), rymECsv?.genre || '']);
   });
   _csvDownload(`lastfm_albums_manquants_${new Date().toISOString().slice(0,10)}.csv`, rows);
   toast(`${list.length} albums exportés ✓`);
