@@ -5246,7 +5246,7 @@ async function fetchLastfmIncremental(fromTs) {
       tracks.forEach(t => {
         if (t['@attr']?.nowplaying) return;
         const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
-        const album = String(t.album?.['#text'] || t.album?.name || t.album || '').trim();
+        const album = String(t.album?.['#text'] || t.album?.name || (typeof t.album === 'string' ? t.album : '') || '').trim();
         const ts = parseInt(t.date?.uts || 0);
         if (ts > latestTs) latestTs = ts;
         if (!artist || !album) return;
@@ -5780,7 +5780,7 @@ async function fetchLastfmPage(page) {
       tracks.forEach(t => {
         if (t['@attr']?.nowplaying) return;
         const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
-        const album  = String(t.album?.['#text']  || t.album?.name  || t.album  || '').trim();
+        const album  = String(t.album?.['#text']  || t.album?.name  || (typeof t.album === 'string' ? t.album : '')  || '').trim();
         const track  = String(t.name || '').trim();
         const ts = parseInt(t.date?.uts || 0);
         if (!artist) return;
