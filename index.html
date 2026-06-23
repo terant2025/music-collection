@@ -3125,8 +3125,8 @@ function renderMissing() {
 
   let filtered = list.filter(m => {
     const key = normalizeKey(m.artist, m.album);
-    m._rymEntry = lookupRym(m.artist, m.album);
-    const rymEntry = m._rymEntry;
+    const rymEntry = lookupRym(m.artist, m.album);
+    m._rymEntry = rymEntry;
     const genre = (rymEntry?.genre || '').toLowerCase();
     const st = _lastfmStatus[key] || ''; // accès direct au lieu de getLastfmStatus()
     if (statusF === 'none'      && st)               return false;
@@ -3182,12 +3182,13 @@ function renderMissing() {
     for (; chunkIdx < end; chunkIdx++) {
       const m = filtered[chunkIdx];
       const idx = chunkIdx;
-      const rymEntry = m._rymEntry || lookupRym(m.artist, m.album);
+      const rymEntry = lookupRym(m.artist, m.album);
       const rymBadge = rymEntry
         ? `<span class="badge" style="font-size:10px;color:var(--amber);margin-left:4px">${rymEntry.rating ? rymEntry.rating.toFixed(2)+'★' : 'RYM'}</span>`
         : '';
-      const genreBadge = m.genre
-        ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(m.genre.split(',')[0].trim())}</span>`
+      const rymGenre = rymEntry?.genre || m.genre || '';
+      const genreBadge = rymGenre
+        ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(rymGenre.split(',')[0].trim())}</span>`
         : '';
       const st = _lastfmStatus[normalizeKey(m.artist, m.album)] || '';
       const stColors = { ignored:'var(--text3)', to_listen:'var(--accent)', wishlist:'var(--amber)' };
@@ -8694,7 +8695,8 @@ function exportMissingAlbumsCSV() {
   const rows = [['Artiste','Album','Écoutes','Statut','Note RYM','Genre']];
   list.forEach(m => {
     const st = getLastfmStatus(m.artist, m.album);
-    rows.push([m.artist, m.album, m.plays, statusLabel[st]||'', _rymRating(m.artist, m.album), m.genre||'']);
+    const rymE = lookupRym(m.artist, m.album);
+    rows.push([m.artist, m.album, m.plays, statusLabel[st]||'', _rymRating(m.artist, m.album), rymE?.genre || '']);
   });
   _csvDownload(`lastfm_albums_manquants_${new Date().toISOString().slice(0,10)}.csv`, rows);
   toast(`${list.length} albums exportés ✓`);
