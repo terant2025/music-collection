@@ -2472,7 +2472,7 @@ function normalizeKeyLoose(artist, title) {
   const variants = new Set([base]);
   // Variante sans numéro de piste en début : "01 something" → "something"
   const withoutTrackNum = normalizeKey('', title.replace(/^\d+[\s.\-_]+/, '')).replace('|||', '');
-  if (withoutTrackNum) variants.add(normalizeKey(artist, '') + '|||' + withoutTrackNum);
+  if (withoutTrackNum) variants.add(normalizeKey(artist, '').replace('|||', '') + '|||' + withoutTrackNum);
   return variants;
 }
 
@@ -3318,39 +3318,35 @@ function computeMissingTracks() {
     }
   });
 
-  // 2. Pistes album MusicBee — source canonique : window._mbTrackKeys
-  //    (Set peuplé soit par l'import XML, soit par loadMusicBeeTracks depuis Supabase)
-  const mbKeys = window._mbTrackKeys || new Set();
+  // 2. Pistes album — combinaison de toutes les sources disponibles
+  // _mbTrackKeys (musicbee_tracks Supabase) peut être incomplet → toujours enrichir avec albumTracksCache
+  const ownedAlbumTracks = new Set(window._mbTrackKeys || []);
 
-  // Fallback : si _mbTrackKeys vide, utiliser albumTracksCache / _albumTracksByKey
-  // (compatibilité si musicbee_tracks n'existe pas encore en Supabase)
-  const fallbackKeys = new Set();
-  if (!mbKeys.size) {
-    albums.forEach(a => {
-      (albumTracksCache[a.id] || []).forEach(t => {
+  // Toujours ajouter albumTracksCache (source la plus complète en mémoire)
+  albums.forEach(a => {
+    (albumTracksCache[a.id] || []).forEach(t => {
+      if (!t.title) return;
+      const clean = cleanDiscogsArtist(a.artist);
+      const noThe = (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+      for (const art of [a.artist, clean, noThe]) {
+        for (const k of normalizeKeyLoose(art, t.title)) ownedAlbumTracks.add(k);
+      }
+    });
+  });
+
+  // Enrichir aussi depuis _albumTracksByKey (stock, ok, forsale)
+  if (window._albumTracksByKey) {
+    Object.values(window._albumTracksByKey).forEach(g => {
+      g.tracks.forEach(t => {
         if (!t.title) return;
-        const clean = cleanDiscogsArtist(a.artist);
-        const noThe = (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
-        for (const art of [a.artist, clean, noThe]) {
-          for (const k of normalizeKeyLoose(art, t.title)) fallbackKeys.add(k);
+        const clean = cleanDiscogsArtist(g.artist);
+        const noThe = (g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+        for (const art of [g.artist, clean, noThe]) {
+          for (const k of normalizeKeyLoose(art, t.title)) ownedAlbumTracks.add(k);
         }
       });
     });
-    if (window._albumTracksByKey) {
-      Object.values(window._albumTracksByKey).forEach(g => {
-        g.tracks.forEach(t => {
-          if (!t.title) return;
-          const clean = cleanDiscogsArtist(g.artist);
-          const noThe = (g.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
-          for (const art of [g.artist, clean, noThe]) {
-            for (const k of normalizeKeyLoose(art, t.title)) fallbackKeys.add(k);
-          }
-        });
-      });
-    }
   }
-
-  const ownedAlbumTracks = mbKeys.size ? mbKeys : fallbackKeys;
 
   // Helper : vérifie si une clé normalisée (artiste, titre) est possédée
   // en testant plusieurs variantes d'artiste et de titre
