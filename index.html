@@ -637,6 +637,7 @@ input[type="file"] { display: none; }
           <option value="3">RYM ≥ 3.0</option>
           <option value="0">RYM non notés</option>
         </select>
+        <input id="filter-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <select id="filter-min-plays" onchange="renderAlbums()">
           <option value="">Écoutes</option>
           <option value="1">≥ 1 écoute</option>
@@ -773,6 +774,7 @@ input[type="file"] { display: none; }
           <option value="no-ep">Hors EPs/singles</option>
           <option value="studio">Albums studio seuls</option>
         </select>
+        <input id="filter-disco-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4" oninput="renderDiscographie()">
         <select id="disco-sort" onchange="renderDiscographie()">
           <option value="artist">Tri : Artiste</option>
           <option value="album">Tri : Album</option>
@@ -837,6 +839,7 @@ input[type="file"] { display: none; }
         <select id="filter-stock-genre" onchange="renderStock()">
           <option value="">Tous genres</option>
         </select>
+        <input id="filter-stock-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4" oninput="renderStock()">
         <div class="toolbar-right">
           <button class="btn btn-accent" onclick="openStockModal()">＋ Ajouter au stock</button>
           <button class="btn btn-sm" onclick="exportStockCSV()">↓ Export</button>
@@ -890,6 +893,7 @@ input[type="file"] { display: none; }
           <option value="rym">Noté sur RYM</option>
           <option value="norym">Non noté RYM</option>
         </select>
+        <input id="filter-missing-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <select id="filter-missing-sort" onchange="renderMissing()">
           <option value="plays">Tri : Écoutes ↓</option>
           <option value="artist">Tri : Artiste A→Z</option>
@@ -1025,6 +1029,7 @@ input[type="file"] { display: none; }
           <option value="rym">RYM</option>
           <option value="manual">Manuel</option>
         </select>
+        <input id="filter-wish-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <select id="filter-wish-prio" onchange="renderWishlist()">
           <option value="">Toutes priorités</option>
           <option value="high">🔴 Haute</option>
@@ -1091,7 +1096,8 @@ input[type="file"] { display: none; }
     <div class="section" id="sec-ok-albums">
       <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums du dossier <code>Ok/</code> — écoutés, potentiellement à wishlist. Numériques uniquement si pas de CD Discogs.</p>
       <div class="toolbar" style="margin-bottom:12px">
-        <input id="filter-ok-artist" type="text" placeholder="Artiste…" oninput="renderOkAlbums()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <input id="filter-ok-artist" type="text" placeholder="Artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <input id="filter-ok-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <div class="toolbar-right">
           <span id="ok-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportOkAlbumsCSV()">↓ CSV</button>
@@ -1107,7 +1113,8 @@ input[type="file"] { display: none; }
     <div class="section" id="sec-forsale">
       <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums marqués à vendre. Cliquez sur ✓ pour retirer de la liste.</p>
       <div class="toolbar" style="margin-bottom:12px">
-        <input id="filter-forsale-artist" type="text" placeholder="Artiste…" oninput="renderForSale()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <input id="filter-forsale-artist" type="text" placeholder="Artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <input id="filter-forsale-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <div class="toolbar-right">
           <span id="forsale-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportForSaleCSV()">↓ CSV</button>
@@ -2634,6 +2641,7 @@ function filteredAlbums() {
   const nf = document.getElementById('filter-note').value;
   const rymNf = document.getElementById('filter-rym-note')?.value || '';
   const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
+  const yearF = (document.getElementById('filter-year')?.value || '').trim();
   const stockKeys = getStockKeysSet();
 
 
@@ -2648,7 +2656,8 @@ function filteredAlbums() {
         const gm   = !gf   || s.genre === gf;
         let nm = true;
         if (nf==='5') nm=s.note===5; else if(nf==='4') nm=s.note>=4; else if(nf==='3') nm=s.note>=3; else if(nf==='0') nm=!s.note;
-        return match && am && albm && gm && nm;
+        const ym = !yearF || (s.year||'').startsWith(yearF);
+        return match && am && albm && gm && nm && ym;
       })
       .map(s => ({
         id: s.id, artist: s.artist, album: s.album, year: s.year||'',
@@ -2688,7 +2697,8 @@ function filteredAlbums() {
     }
     // Filtre écoutes min
     const playsMatch = (a.plays || 0) >= minPlays;
-    return match && am && albm && sm && gm && nm && rymMatch && playsMatch;
+    const yearMatch = !yearF || (a.year||'').startsWith(yearF);
+    return match && am && albm && sm && gm && nm && rymMatch && playsMatch && yearMatch;
   });
 }
 
@@ -3139,8 +3149,10 @@ function renderMissing() {
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
     const hasRymRating = (rymEntry?.rating || 0) > 0;
-        if (rymF === 'rym'   && !hasRymRating) return false;
-        if (rymF === 'norym' && hasRymRating)  return false;
+		if (rymF === 'rym'   && !hasRymRating) return false;
+		if (rymF === 'norym' && hasRymRating)  return false;
+		const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
+		if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
 		if (rymF === 'low') {
           if ((rymEntry?.rating || 0) === 0 || (rymEntry?.rating || 0) > 2.5) return false;
         } else if (rymF && !isNaN(parseFloat(rymF))) {
@@ -6759,9 +6771,11 @@ function markWishAcquired(id) {
 function renderOkAlbums() {
   const q  = (document.getElementById('global-search').value || '').toLowerCase();
   const af = (document.getElementById('filter-ok-artist')?.value || '').toLowerCase().trim();
+  const yf = (document.getElementById('filter-ok-year')?.value || '').trim();
   const list = albums.filter(a => a.okFolder)
     .filter(a => (!q || (a.artist+' '+a.album).toLowerCase().includes(q))
-              && (!af || a.artist.toLowerCase().includes(af)))
+              && (!af || a.artist.toLowerCase().includes(af))
+              && (!yf || (a.year||'').startsWith(yf)))
     .sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
   const ctr = document.getElementById('ok-counter');
   if (ctr) ctr.textContent = list.length + ' albums';
@@ -6794,9 +6808,11 @@ function markOkDone(id) {
 function renderForSale() {
   const q  = (document.getElementById('global-search').value || '').toLowerCase();
   const af = (document.getElementById('filter-forsale-artist')?.value || '').toLowerCase().trim();
+  const yf = (document.getElementById('filter-forsale-year')?.value || '').trim();
   const list = albums.filter(a => a.forSale)
     .filter(a => (!q || (a.artist+' '+a.album).toLowerCase().includes(q))
-              && (!af || a.artist.toLowerCase().includes(af)))
+              && (!af || a.artist.toLowerCase().includes(af))
+              && (!yf || (a.year||'').startsWith(yf)))
     .sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
   const ctr = document.getElementById('forsale-counter');
   if (ctr) ctr.textContent = list.length + ' albums';
@@ -7398,13 +7414,15 @@ function renderWishlist() {
   const albf = (document.getElementById('filter-wish-album')?.value  || '').toLowerCase().trim();
   const sf   = document.getElementById('filter-wish-source')?.value || '';
   const pf   = document.getElementById('filter-wish-prio')?.value   || '';
+  const yf   = (document.getElementById('filter-wish-year')?.value  || '').trim();
 
   const list = wishlist.filter(w => {
     return (!q    || (w.artist+' '+w.album).toLowerCase().includes(q))
         && (!af   || w.artist.toLowerCase().includes(af))
         && (!albf || w.album.toLowerCase().includes(albf))
         && (!sf   || w.source === sf)
-        && (!pf   || w.prio   === pf);
+        && (!pf   || w.prio   === pf)
+        && (!yf   || (w.year||'').startsWith(yf));
   }).sort((a, b) => {
     const po = { high: 0, mid: 1, low: 2 };
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
@@ -7535,11 +7553,13 @@ function renderStock() {
   const af = document.getElementById('filter-stock-artist')?.value || '';
   const gf = document.getElementById('filter-stock-genre')?.value || '';
 
+  const yf = (document.getElementById('filter-stock-year')?.value || '').trim();
   let list = stockItems.filter(s => {
     const m = !q || (s.artist + ' ' + s.album).toLowerCase().includes(q);
     const am = !af || s.artist === af;
     const gm = !gf || s.genre === gf;
-    return m && am && gm;
+    const ym = !yf || (s.year||'').startsWith(yf);
+    return m && am && gm && ym;
   }).sort((a, b) => a.artist.localeCompare(b.artist, 'fr'));
 
   // Update artist filter
@@ -7765,6 +7785,8 @@ function discoFilteredList() {
   if (typeFilter === 'studio')  list = list.filter(a => !isVA(a) && !isEP(a));
 
   if (q) list = list.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
+  const discoYearF = (document.getElementById('filter-disco-year')?.value || '').trim();
+  if (discoYearF) list = list.filter(a => (a.year||'').startsWith(discoYearF));
 
   return [...list].sort((a, b) => {
     if (sort === 'year') return (b.year || 0) - (a.year || 0);
@@ -9096,6 +9118,11 @@ document.addEventListener('DOMContentLoaded', () => {
     ['filter-abt-album',     () => renderAlbumTracks(),                  300],
     ['filter-tw-artist',     () => renderTrackWishlist(),                200],
     ['filter-tw-title',      () => renderTrackWishlist(),                200],
+    ['filter-year',          () => { currentPage = 1; renderAlbums(); }, 300],
+    ['filter-ok-year',       () => renderOkAlbums(),                     300],
+    ['filter-forsale-year',  () => renderForSale(),                      300],
+    ['filter-wish-year',     () => renderWishlist(),                     300],
+    ['filter-missing-year',  () => renderMissing(),                      300],
   ];
 	rules.forEach(([id, fn, delay]) => {
     const el = document.getElementById(id);
