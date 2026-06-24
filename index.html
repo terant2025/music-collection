@@ -905,7 +905,7 @@ input[type="file"] { display: none; }
 
     <!-- ==================== MISSING TRACKS ==================== -->
     <div class="section" id="sec-missing-tracks">
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Morceaux présents dans votre historique last.fm absents de vos morceaux isolés.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Morceaux présents dans votre historique last.fm absents de votre collection (albums MusicBee + morceaux isolés).</p>
       <div class="toolbar" style="margin-bottom:12px">
         <input id="filter-mtrack-artist" type="text" placeholder="Artiste…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
         <input id="filter-mtrack-title" type="text" placeholder="Titre…" oninput="renderMissingTracks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
@@ -3303,6 +3303,10 @@ function applyLastfmAssoc(albumId) {
 function computeMissingTracks() {
   if (_cache.missingTracks) return _cache.missingTracks;
   if (!Object.keys(_lastfmTrackCounts).length) return [];
+  // Ne pas cacher si musicbee_tracks pas encore chargé (évite faux positifs massifs)
+  const mbReady = (window._mbTrackKeys && window._mbTrackKeys.size > 0)
+               || Object.keys(albumTracksCache).length > 0;
+  const canCache = mbReady;
 
   // 1. Morceaux isolés possédés (tracks[])
   const ownedIsolated = new Set();
@@ -3367,7 +3371,7 @@ function computeMissingTracks() {
   }
 
   // 3. Filtrer les morceaux last.fm
-  _cache.missingTracks = Object.values(_lastfmTrackCounts)
+  const result = Object.values(_lastfmTrackCounts)
     .filter(d => {
       if (!d.plays) return false;
       const keyTrack = normalizeKey(d.artist, d.track);
@@ -3385,7 +3389,8 @@ function computeMissingTracks() {
     })
     .sort((a, b) => b.plays - a.plays);
 
-  return _cache.missingTracks;
+ if (canCache) _cache.missingTracks = result;
+  return result;
 }
 
 function renderMissingTracks() {
@@ -5450,9 +5455,29 @@ async function syncListenBrainz() {
     }
   } catch(e) { /* non bloquant */ }
 
-  let totalFetched = 0;
+	let _restoredFromCheckpoint = false;
+	if (!isIncremental) {
+		try {
+		const cp = JSON.parse(localStorage.getItem('lb_checkpoint') || 'null');
+		if (cp && cp.maxTs && cp.totalFetched > 0) {
+			if (confirm(`Reprendre la sync ListenBrainz depuis ${cp.totalFetched.toLocaleString('fr-FR')} écoutes déjà traitées ?`)) {
+			// Restaurer les counts
+			_lastfmCounts = {};
+			_lastfmTrackCounts = {};
+			(cp.counts || []).forEach(d => {
+            _lastfmCounts[normalizeKey(d.a, d.b)] = { artist: d.a, album: d.b, plays: d.p, release_mbid: d.m || '' };
+			});
+			lastfmData = Object.values(_lastfmCounts);
+			_restoredFromCheckpoint = true;
+			status.textContent = `LB : reprise depuis ${cp.totalFetched.toLocaleString('fr-FR')} écoutes…`;
+			}
+		}
+		} catch(e) {}
+	}
+
+  let totalFetched = (() => { try { const cp = JSON.parse(localStorage.getItem('lb_checkpoint')||'null'); return (_restoredFromCheckpoint && cp) ? cp.totalFetched : 0; } catch(e) { return 0; } })();
   let latestTs = lastSyncTs;
-  let maxTs = null; // pagination vers le passé (sync complète)
+  let maxTs = (() => { try { const cp = JSON.parse(localStorage.getItem('lb_checkpoint')||'null'); return (_restoredFromCheckpoint && cp) ? cp.maxTs : null; } catch(e) { return null; } })();
   let done = false;
   let errorStreak = 0;
 
