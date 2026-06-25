@@ -4263,9 +4263,10 @@ async function importMusicBeeXML(input) {
         // Album normal
         if (!album) return;
         const key = normalizeKey(effectiveArtist, album);
-        if (!grouped[key]) {
+        const albumRating = parseRating(num(d, 'Album Rating'));
+		if (!grouped[key]) {
 		grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
-			flac: false, mp3: false, digital: false, maxRating: 0,
+			flac: false, mp3: false, digital: false, maxRating: 0, albumRating: 0,
 			isCompilation, trackArtists: [],
 			okFolder: false, forSaleFolder: false, discoFolder: false,
 			primaryFolder: folder === 'discographie' ? 'discographie'
@@ -4292,6 +4293,7 @@ async function importMusicBeeXML(input) {
         if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
         if (!grouped[key].genre && genre) grouped[key].genre = genre;
         if (rating > grouped[key].maxRating) grouped[key].maxRating = rating;
+		if (albumRating > grouped[key].albumRating) grouped[key].albumRating = albumRating;
         // Pour les compilations : collecter les artistes individuels (Array, pas de doublon)
         if (isCompilation && artist && artist !== 'Various Artists') {
           if (!Array.isArray(grouped[key].trackArtists)) grouped[key].trackArtists = [];
@@ -4393,7 +4395,8 @@ async function importMusicBeeXML(input) {
         // Mettre à jour toujours depuis XML
         if (g.year)  existing.year  = g.year;
         if (g.genre) existing.genre = g.genre;
-        if (g.maxRating) existing.note = Math.max(existing.note || 0, g.maxRating);
+        const newNote = g.albumRating || g.maxRating;
+        if (newNote) existing.note = newNote;
         if (fmt) existing.format = fmt;
         // Mettre à jour compat flags
         existing.flac    = existing.format === 'flac';
@@ -4427,7 +4430,7 @@ async function importMusicBeeXML(input) {
           folders:       newFolders,
           has_cd:        false,
           format:        fmt,
-          note:          g.maxRating || 0,
+          note:          g.albumRating || g.maxRating || 0,
           plays:         0,
 		  primaryFolder: g.primaryFolder || 'album',
           isCompilation: g.isCompilation || false,
