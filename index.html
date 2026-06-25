@@ -799,6 +799,7 @@ input[type="file"] { display: none; }
               <th>Supports liés</th>
               <th>Tracklist</th>
               <th>Note</th>
+              <th>RYM</th>
               <th style="width:120px"></th>
             </tr>
           </thead>
@@ -1104,7 +1105,7 @@ input[type="file"] { display: none; }
         </div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th style="width:120px"></th></tr></thead>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th>RYM</th><th style="width:120px"></th></tr></thead>
         <tbody id="ok-tbody"></tbody>
       </table></div>
     </div>
@@ -6819,11 +6820,21 @@ function renderOkAlbums() {
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
   const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${sid(a.id)}',${i});renderOkAlbums()">★</button>`).join('');
+  const rymCell = a => {
+    const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+    const hasManual = rymAssociations.some(x => x.albumKey === a.id);
+    return `<span onclick="event.stopPropagation();openRYMAssocFromCollection('${sid(a.id)}')" title="Associer/modifier la note RYM" style="cursor:pointer;display:inline-flex;align-items:center;gap:3px">
+      ${rymEntry?.rating
+        ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>${hasManual ? '<span style="font-size:9px;color:var(--accent)">🔗</span>' : ''}`
+        : `<span style="color:var(--text3);font-size:12px;opacity:0.35">⭐</span>`}
+    </span>`;
+  };
   tbody.innerHTML = list.map(a => `<tr>
     <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">numérique seul</span>'}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
+    <td>${rymCell(a)}</td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="addToWishlist('${sid(a.artist)}','${sid(a.album)}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
       <button class="btn btn-sm btn-danger" onclick="markOkDone('${sid(a.id)}')" title="Retirer de Ok">✕</button>
@@ -7849,7 +7860,7 @@ function renderDiscographie() {
 
   const tbody = document.getElementById('disco-tbody');
   if (!slice.length) {
-    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
     document.getElementById('disco-page-info').textContent = '';
   // updateNavBadges called by saveToStorage
     return;
@@ -7899,6 +7910,14 @@ function renderDiscographie() {
       `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${safeId}',${i});renderDiscographie();event.stopPropagation()">★</button>`
     ).join('');
 
+    const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+    const hasManualRym = rymAssociations.some(x => x.albumKey === a.id);
+    const rymCell = `<span onclick="event.stopPropagation();openRYMAssocFromCollection('${safeId}')" title="Associer/modifier la note RYM" style="cursor:pointer;display:inline-flex;align-items:center;gap:3px">
+      ${rymEntry?.rating
+        ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>${hasManualRym ? '<span style="font-size:9px;color:var(--accent)">🔗</span>' : ''}`
+        : `<span style="color:var(--text3);font-size:12px;opacity:0.35">⭐</span>`}
+    </span>`;
+
     return `<tr onclick="editAlbum('${safeId}')" style="cursor:pointer">
       <td>
         <div class="artist-cell">
@@ -7913,6 +7932,7 @@ function renderDiscographie() {
       <td>${statusBadge}</td>
       <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td><div class="stars">${stars}</div></td>
+      <td>${rymCell}</td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
         ${assocBtn}${unlinkBtn}
         <button class="btn btn-sm" onclick="event.stopPropagation();markForSale('${safeId}')" title="${a.forSale?'Déjà à vendre':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
