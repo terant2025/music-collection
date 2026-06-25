@@ -2647,6 +2647,7 @@ function filteredAlbums() {
 
 
   // Filtre stock : afficher directement les stockItems (source canonique)
+  // (conservé pour compat — mais les albums stock apparaissent aussi dans le flux normal)
   if (sf === 'stock') {
     return stockItems
       .filter(s => {
@@ -2669,9 +2670,11 @@ function filteredAlbums() {
   }
 
   return albums.filter(a => {
-    // Exclure les albums présents dans stockItems
+  // Exclure les albums présents dans stockItems uniquement si un filtre support est actif (sauf 'stock')
     const isInStock = stockKeys.has(normalizeKey(a.artist, a.album));
-    if (isInStock) return false;
+    if (isInStock && sf && sf !== 'stock') return false; // filtre support actif → exclure le stock
+    if (isInStock && sf === 'stock') return false; // déjà géré par le bloc dédié ci-dessus
+    // si sf === '' (aucun filtre) : laisser passer → le badge 📦 s'affichera
 
     const match = !q || (a.artist + ' ' + a.album + ' ' + (a.genre||'')).toLowerCase().includes(q);
     const am = !af || a.artist.toLowerCase().includes(af);
@@ -2738,6 +2741,7 @@ function renderAlbums() {
   const ctr = document.getElementById('albums-counter');
   if (ctr) ctr.textContent = total.toLocaleString('fr-FR') + ' / ' + albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length.toLocaleString('fr-FR') + ' albums';
 
+  const stockKeys = getStockKeysSet();
   const tbody = document.getElementById('album-tbody');
   if (!slice.length) {
     tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
@@ -2746,7 +2750,7 @@ function renderAlbums() {
   }
 
   tbody.innerHTML = slice.map(a => {
-    const isStock = !!a._isStockItem;
+    const isStock = !!a._isStockItem || stockKeys.has(normalizeKey(a.artist, a.album));
     const badges = [
       a.cd ? '<span class="badge badge-cd">💿 CD</span>' : '',
       a.flac ? '<span class="badge badge-flac">FLAC</span>' : '',
