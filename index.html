@@ -669,6 +669,7 @@ input[type="file"] { display: none; }
               <th>Genre</th>
               <th>Supports</th>
               <th>Note MB</th>
+              <th>Note DC</th>
               <th>Note RYM</th>
               <th>Écoutes</th>
               <th style="width:60px"></th>
@@ -1914,6 +1915,7 @@ async function saveToSupabase() {
       plays:          a.plays || 0,
       notes:          a.notes || null,
       discogs_id:     a.discogsId || null,
+      discogs_rating: a.discogsRating || null,
       mb_release_id:  a.mb_release_id || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
@@ -2068,6 +2070,7 @@ async function loadFromSupabase() {
         plays:         a.plays || 0,
         notes:         a.notes || '',
         discogsId:     a.discogs_id || undefined,
+        discogsRating: a.discogs_rating || undefined,
         mb_release_id: a.mb_release_id || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
@@ -2820,6 +2823,7 @@ function renderAlbums() {
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td><div class="stars">${stars}</div></td>
+      <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
       <td>${rymHtml}</td>
       <td>
         <div class="plays-bar-wrap">
@@ -4016,7 +4020,7 @@ async function importDiscogs(input) {
 
       if (existing) {
         if (isCd) existing.cd = true;
-        if (rating && !existing.note) existing.note = Math.min(5, rating);
+        if (rating) existing.discogsRating = Math.min(5, rating);
         if (discogsId && !existing.discogsId) existing.discogsId = discogsId;
         if (label && !existing.label) existing.label = label;
         if (catno && !existing.catno) existing.catno = catno;
@@ -4030,7 +4034,7 @@ async function importDiscogs(input) {
           id: uid(), artist, artistRaw, album,
           year: year.slice(0, 4), genre: '',
           cd: isCd, flac: false, mp3: false, digital: false,
-          note: Math.min(5, rating), plays: 0,
+          note: 0, discogsRating: Math.min(5, rating) || 0, plays: 0,
           discogsId, label, catno
         });
         added++;
@@ -4294,7 +4298,7 @@ async function importMusicBeeXML(input) {
         const albumRating = parseRating(num(d, 'Album Rating'));
 		if (!grouped[key]) {
 		grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
-			flac: false, mp3: false, digital: false, maxRating: 0, albumRating: 0,
+			flac: false, mp3: false, digital: false, albumRating: 0,
 			isCompilation, trackArtists: [],
 			okFolder: false, forSaleFolder: false, discoFolder: false,
 			primaryFolder: folder === 'discographie' ? 'discographie'
@@ -4320,8 +4324,7 @@ async function importMusicBeeXML(input) {
         else grouped[key].digital = true;
         if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
         if (!grouped[key].genre && genre) grouped[key].genre = genre;
-        if (rating > grouped[key].maxRating) grouped[key].maxRating = rating;
-		if (albumRating > grouped[key].albumRating) grouped[key].albumRating = albumRating;
+        if (albumRating > grouped[key].albumRating) grouped[key].albumRating = albumRating;
         // Pour les compilations : collecter les artistes individuels (Array, pas de doublon)
         if (isCompilation && artist && artist !== 'Various Artists') {
           if (!Array.isArray(grouped[key].trackArtists)) grouped[key].trackArtists = [];
@@ -4423,7 +4426,7 @@ async function importMusicBeeXML(input) {
         // Mettre à jour toujours depuis XML
         if (g.year)  existing.year  = g.year;
         if (g.genre) existing.genre = g.genre;
-        const newNote = g.albumRating || g.maxRating;
+        const newNote = g.albumRating;
         if (newNote) existing.note = newNote;
         if (fmt) existing.format = fmt;
         // Mettre à jour compat flags
@@ -4458,7 +4461,7 @@ async function importMusicBeeXML(input) {
           folders:       newFolders,
           has_cd:        false,
           format:        fmt,
-          note:          g.albumRating || g.maxRating || 0,
+          note:          g.albumRating || 0,
           plays:         0,
 		  primaryFolder: g.primaryFolder || 'album',
           isCompilation: g.isCompilation || false,
