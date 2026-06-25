@@ -2794,13 +2794,11 @@ function renderAlbums() {
     const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album)
       || (() => { const assoc = rymAssociations.find(x => x.albumKey === a.id); return assoc ? rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey) : null; })();
     const hasManualAssoc = rymAssociations.some(x => x.albumKey === a.id);
-    const rymHtml = rymData.length
-      ? `<span onclick="event.stopPropagation();openRYMAssocFromCollection('${sid(a.id)}')" title="Cliquer pour associer/modifier la note RYM" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px">
-          ${rymEntry?.rating
-            ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>${hasManualAssoc ? '<span style="font-size:9px;color:var(--accent)" title="Association manuelle">🔗</span>' : ''}`
-            : `<span style="color:var(--text3);font-size:11px;opacity:0.5">⭐</span>`}
-        </span>`
-      : `<span style="color:var(--text3);font-size:11px">–</span>`;
+    const rymHtml = `<span onclick="event.stopPropagation();openRYMAssocFromCollection('${sid(a.id)}')" title="Cliquer pour associer/modifier la note RYM" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+        ${rymEntry?.rating
+          ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>${hasManualAssoc ? '<span style="font-size:9px;color:var(--accent)" title="Association manuelle">🔗</span>' : ''}`
+          : `<span style="color:var(--text3);font-size:12px;opacity:0.35" title="Pas de note RYM — cliquer pour associer">⭐</span>`}
+      </span>`;
 
     const onclickRow = isStock ? `openStockModal('${sid(a.id)}')` : `editAlbum('${sid(a.id)}')`;
     const deleteBtn  = isStock
