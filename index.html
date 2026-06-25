@@ -1661,6 +1661,24 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
+<!-- Modal association RYM depuis la collection -->
+<div class="modal-overlay" id="modal-rym-from-collection">
+  <div class="modal" style="width:560px">
+    <h2>⭐ Associer une note RYM</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Liez cet album à son entrée RYM correspondante. La note RYM s'affichera dans la collection.</p>
+    <div id="rfc-album-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:13px"></div>
+    <div class="form-row">
+      <label>Rechercher dans les données RYM</label>
+      <input type="text" id="rfc-search" placeholder="Artiste ou album…" oninput="renderRFCList()" style="width:100%">
+    </div>
+    <div id="rfc-list" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:10px"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="rfc-unlink-btn" onclick="unlinkRYMFromCollection()" style="margin-right:auto;display:none">🗑 Supprimer l'association</button>
+      <button class="btn" onclick="document.getElementById('modal-rym-from-collection').classList.remove('open')">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal association morceau last.fm -->
 <div class="modal-overlay" id="modal-track-assoc">
   <div class="modal" style="width:540px">
@@ -2620,7 +2638,7 @@ function getRymIndex() {
 
 // Recherche RYM tolérante : clé exacte d'abord (fiable), variante ensuite
 // (ignorée si ambiguë, c.à.d. partagée par plusieurs artistes différents).
-function lookupRym(artist, album) {
+function lookupRym(artist, album, albumId) {
   const { exact, fuzzy } = getRymIndex();
   const exactHit = exact.get(normalizeKey(artist, album));
   if (exactHit) return exactHit;
@@ -2628,6 +2646,11 @@ function lookupRym(artist, album) {
   for (const av of artistVariants(artist)) {
     const hit = fuzzy.get(av + '|||' + albumNorm);
     if (hit && hit !== '__ambiguous__') return hit;
+  }
+  // Fallback : association manuelle via rymAssociations
+  if (albumId) {
+    const assoc = rymAssociations.find(a => a.albumKey === albumId);
+    if (assoc) return rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey);
   }
   return undefined;
 }
@@ -2694,7 +2717,7 @@ function filteredAlbums() {
     // Filtre note RYM
     let rymMatch = true;
     if (rymNf) {
-      const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
+      const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
       if (rymNf === '0') rymMatch = !rymEntry || !rymEntry.rating;
       else rymMatch = !!(rymEntry && rymEntry.rating >= parseFloat(rymNf));
     }
@@ -2709,8 +2732,8 @@ function sortedAlbums(list) {
   const col = document.getElementById('sort-col').value;
   if (col === 'rym') {
     return [...list].sort((a, b) => {
-      const ra = lookupRym(a.artist, a.album)?.rating || 0;
-      const rb = lookupRym(b.artist, b.album)?.rating || 0;
+      const ra = (lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id))?.rating || 0;
+      const rb = (lookupRym(b.artist, b.album, b.id) || lookupRym(cleanDiscogsArtist(b.artist), b.album, b.id))?.rating || 0;
       return rb - ra;
     });
   }
@@ -2767,10 +2790,16 @@ function renderAlbums() {
         ).join('');
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
 
-    // Note RYM
-    const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
-    const rymHtml = rymEntry?.rating
-      ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>`
+    // Note RYM — avec bouton d'association manuelle
+    const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album)
+      || (() => { const assoc = rymAssociations.find(x => x.albumKey === a.id); return assoc ? rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey) : null; })();
+    const hasManualAssoc = rymAssociations.some(x => x.albumKey === a.id);
+    const rymHtml = rymData.length
+      ? `<span onclick="event.stopPropagation();openRYMAssocFromCollection('${sid(a.id)}')" title="Cliquer pour associer/modifier la note RYM" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+          ${rymEntry?.rating
+            ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${rymEntry.rating.toFixed(2)}<span style="font-size:10px;opacity:0.7">★</span></span>${hasManualAssoc ? '<span style="font-size:9px;color:var(--accent)" title="Association manuelle">🔗</span>' : ''}`
+            : `<span style="color:var(--text3);font-size:11px;opacity:0.5">⭐</span>`}
+        </span>`
       : `<span style="color:var(--text3);font-size:11px">–</span>`;
 
     const onclickRow = isStock ? `openStockModal('${sid(a.id)}')` : `editAlbum('${sid(a.id)}')`;
@@ -9006,7 +9035,116 @@ function loadDemo() {
   ];
 }
 
-// ===================== STARTUP =====================
+// ===================== ASSOCIATION RYM DEPUIS COLLECTION =====================
+let _rfcTargetAlbumId = null; // album de la collection qu'on veut lier à RYM
+
+function openRYMAssocFromCollection(albumId) {
+  const album = albums.find(a => a.id === albumId);
+  if (!album) return;
+  _rfcTargetAlbumId = albumId;
+
+  document.getElementById('rfc-album-info').innerHTML =
+    `<strong>Collection :</strong> ${esc(album.album)} — ${esc(album.artist)}`
+    + (album.year ? ` <span style="color:var(--text3);font-size:11px">${album.year}</span>` : '');
+
+  // Pré-remplir la recherche avec l'artiste (nettoyé)
+  document.getElementById('rfc-search').value = cleanDiscogsArtist(album.artist);
+
+  // Bouton "supprimer association" si déjà liée
+  const existingAssoc = rymAssociations.find(a => a.albumKey === albumId);
+  const unlinkBtn = document.getElementById('rfc-unlink-btn');
+  if (unlinkBtn) unlinkBtn.style.display = existingAssoc ? '' : 'none';
+
+  renderRFCList();
+  document.getElementById('modal-rym-from-collection').classList.add('open');
+}
+
+function renderRFCList() {
+  const q = (document.getElementById('rfc-search').value || '').toLowerCase().trim();
+  const album = albums.find(a => a.id === _rfcTargetAlbumId);
+  if (!rymData.length) {
+    document.getElementById('rfc-list').innerHTML =
+      '<div style="color:var(--text3);font-size:12px;padding:8px">Aucune donnée RYM chargée — importez d\'abord votre collection RYM.</div>';
+    return;
+  }
+
+  // Scorer chaque entrée RYM par similarité avec l'album cible
+  const albumNormTarget = album ? normalizeKey('', album.album).replace('|||', '') : '';
+  const artistNormTarget = album ? normalizeKey(cleanDiscogsArtist(album.artist), '').replace('|||', '') : '';
+  const artistVariantsTarget = album ? artistVariants(album.artist) : new Set();
+
+  const scored = rymData
+    .filter(r => {
+      if (!q) return true;
+      return (r.artist + ' ' + r.album).toLowerCase().includes(q);
+    })
+    .map(r => {
+      const rAlbumNorm  = normalizeKey('', r.album).replace('|||', '');
+      const rArtistNorm = normalizeKey(cleanDiscogsArtist(r.artist), '').replace('|||', '');
+      let score = 0;
+      // Titre album
+      if (rAlbumNorm === albumNormTarget) score += 4;
+      else if (albumNormTarget && (rAlbumNorm.includes(albumNormTarget) || albumNormTarget.includes(rAlbumNorm))) score += 2;
+      // Artiste
+      if (rArtistNorm === artistNormTarget) score += 3;
+      else {
+        for (const av of artistVariants(r.artist)) {
+          if (artistVariantsTarget.has(av)) { score += 2; break; }
+        }
+        if (artistNormTarget && rArtistNorm.includes(artistNormTarget)) score += 1;
+      }
+      return { r, score };
+    })
+    .sort((a, b) => b.score - a.score || a.r.artist.localeCompare(b.r.artist, 'fr'))
+    .slice(0, 80);
+
+  // Association courante
+  const currentAssoc = rymAssociations.find(a => a.albumKey === _rfcTargetAlbumId);
+
+  const el = document.getElementById('rfc-list');
+  if (!scored.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun résultat</div>';
+    return;
+  }
+
+  el.innerHTML = scored.map(({ r, score }) => {
+    const rymKey = normalizeKey(r.artist, r.album);
+    const isCurrent = currentAssoc?.rymKey === rymKey;
+    const isLinkedElsewhere = !isCurrent && rymAssociations.some(a => a.rymKey === rymKey);
+    const bg = isCurrent ? 'var(--accent-dim)' : score >= 5 ? 'rgba(200,240,100,0.06)' : 'var(--bg3)';
+    const border = isCurrent ? 'rgba(200,240,100,0.3)' : score >= 5 ? 'rgba(200,240,100,0.15)' : 'var(--border)';
+    const matchLabel = score >= 7 ? '✅ match fort' : score >= 4 ? '≈ match probable' : score >= 2 ? '~ similaire' : '';
+    const matchColor = score >= 7 ? 'var(--accent)' : score >= 4 ? 'var(--amber)' : 'var(--text3)';
+    const ratingHtml = r.rating
+      ? `<span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${r.rating.toFixed(2)}★</span>`
+      : `<span style="color:var(--text3);font-size:11px">non noté</span>`;
+    const linkedBadge = isLinkedElsewhere
+      ? '<span style="font-size:10px;color:var(--text3);margin-left:6px">déjà associé</span>' : '';
+    return `<div onclick="applyRFCAssoc('${rymKey.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')"
+      style="background:${bg};border:1px solid ${border};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(r.album)}${isCurrent ? ' <span style="font-size:10px;color:var(--accent)">● actuel</span>' : ''}${linkedBadge}
+        </div>
+        <div style="font-size:11px;color:var(--text2)">${esc(r.artist)}${r.year ? ' · ' + r.year : ''}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
+        ${ratingHtml}
+        ${matchLabel ? `<span style="font-size:10px;color:${matchColor};font-family:var(--mono)">${matchLabel}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function applyRFCAssoc(rymKey) {
+  if (!_rfcTargetAlbumId) return;
+  // Supprimer toute association existante pour cet album ou cette clé RYM
+  rymAssociations = rymAssociations.filter(a => a.albumKey !== _rfcTargetAlbumId && a.rymKey !== rymKey);
+  rymAssociations.push({ rymKey, albumKey: _rfcTargetAlbumId });
+  document.getElementById('modal-rym-from-collection').classList.remove('open');
+  invalidateCache();
+  saveToStorage();
+  renderAlbums();
 async function initApp() {
   loadLastfmTrackStatus();
   loadLovedTracks();
