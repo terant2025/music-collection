@@ -9145,6 +9145,25 @@ function applyRFCAssoc(rymKey) {
   invalidateCache();
   saveToStorage();
   renderAlbums();
+  updateNavBadges();
+  const rEntry = rymData.find(r => normalizeKey(r.artist, r.album) === rymKey);
+  toast(`⭐ RYM lié : ${rEntry ? rEntry.artist + ' — ' + rEntry.album : rymKey}`);
+  _rfcTargetAlbumId = null;
+}
+
+function unlinkRYMFromCollection() {
+  if (!_rfcTargetAlbumId) return;
+  if (!confirm('Supprimer l\'association RYM pour cet album ?')) return;
+  rymAssociations = rymAssociations.filter(a => a.albumKey !== _rfcTargetAlbumId);
+  document.getElementById('modal-rym-from-collection').classList.remove('open');
+  invalidateCache();
+  saveToStorage();
+  renderAlbums();
+  updateNavBadges();
+  toast('Association RYM supprimée');
+  _rfcTargetAlbumId = null;
+}
+
 async function initApp() {
   loadLastfmTrackStatus();
   loadLovedTracks();
