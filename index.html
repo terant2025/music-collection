@@ -1014,6 +1014,14 @@ input[type="file"] { display: none; }
           </div>
           <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Entrées RYM avec ownership non retrouvées dans Discogs ou Discographie.</p>
           <div id="rym-orphan-list"></div>
+
+          <!-- 3. Notés et possédés mais sans association manuelle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;border-top:1px solid var(--border);padding-top:16px">
+            <div style="font-size:13px;font-weight:500;color:var(--text)">Notés et possédés — non associés manuellement</div>
+            <span class="nav-badge" id="rym-unlinked-count">0</span>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Entrées RYM notées et présentes dans la collection mais sans association manuelle — le matching automatique peut être imprécis.</p>
+          <div id="rym-unlinked-list"></div>
         </div>
 
       </div>
@@ -3003,8 +3011,6 @@ let _cache = {};
 
 function invalidateCache() {
   _cache = {};
-  // Réinitialiser aussi les renders debounces pour forcer le recalcul immédiat
-  // si une mutation se produit (ex: import XML recharge albumTracksCache)
   delete _debouncedRenders['allTracks'];
 }
 
@@ -8140,6 +8146,7 @@ let _rymAssocTarget = null;
 let _rymMissingCache  = [];
 let _rymUnratedCache  = [];
 let _rymOrphansCache  = [];
+let _rymUnlinkedCache = [];
 
 function openRYMAssocModalIdx(idx) {
   const r = _rymMissingCache[idx];
@@ -8153,6 +8160,11 @@ function openRYMUnratedAssocIdx(idx) {
 }
 function openRYMOrphanAssocIdx(idx) {
   const r = _rymOrphansCache[idx];
+  if (!r) return;
+  openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
+}
+function openRYMUnlinkedAssocIdx(idx) {
+  const r = _rymUnlinkedCache[idx];
   if (!r) return;
   openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
 }
@@ -8412,6 +8424,31 @@ function computeRYMOrphans() {
   return _cache.rymOrphans;
 }
 
+// Entrées RYM notées ET possédées mais sans association manuelle dans rymAssociations
+// Ces albums sont matchés automatiquement (ou via ownership) mais jamais confirmés manuellement —
+// utile pour repérer les faux positifs du matching automatique.
+function computeRYMUnlinked() {
+  if (_cache.rymUnlinked) return _cache.rymUnlinked;
+  if (!rymData.length) return (_cache.rymUnlinked = []);
+  const { keys: ownedKeys } = getOwnedRymKeys();
+  const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
+  _cache.rymUnlinked = rymData
+    .filter(r => {
+      if (!r.rating) return false;
+      const rymKey = normalizeKey(r.artist, r.album);
+      // Déjà associé manuellement → ne pas afficher
+      if (associatedRymKeys.has(rymKey)) return false;
+      // Vérifier si possédé (auto-match via ownedKeys ou ownership renseigné)
+      const albumNorm = normalizeKey('', r.album).replace('|||', '');
+      const ownedByKey = Array.from(artistVariants(r.artist))
+        .some(av => ownedKeys.has(av + '|||' + albumNorm));
+      const hasOwnership = !!(r.ownership || '').trim();
+      return ownedByKey || hasOwnership;
+    })
+    .sort((a, b) => b.rating - a.rating || a.artist.localeCompare(b.artist, 'fr'));
+  return _cache.rymUnlinked;
+}
+
 function rymStars(rating) {
   // RYM note sur 5 avec demi-étoiles
   const full = Math.floor(rating);
@@ -8522,6 +8559,53 @@ function renderRYM() {
           </div>
         </div>`;
     }).join('');
+  }
+
+  // --- Notés et possédés mais non associés manuellement ---
+  let unlinked = computeRYMUnlinked();
+  if (q) unlinked = unlinked.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  const unlinkedBadge = document.getElementById('rym-unlinked-count');
+  if (unlinkedBadge) unlinkedBadge.textContent = unlinked.length;
+  const unlinkedEl = document.getElementById('rym-unlinked-list');
+  if (unlinkedEl) {
+    if (!unlinked.length) {
+      unlinkedEl.innerHTML = '<div class="empty" style="padding:16px"><div class="empty-icon">✅</div>Tous les albums possédés sont associés manuellement !</div>';
+    } else {
+      _rymUnlinkedCache = unlinked;
+      unlinkedEl.innerHTML = unlinked.map((r, i) => {
+        const own = r.ownership ? `<span class="badge badge-cd" style="font-size:10px">${esc(r.ownership)}</span>` : '';
+        // Chercher l'album matché automatiquement pour l'afficher
+        const albumNorm = normalizeKey('', r.album).replace('|||', '');
+        let autoMatch = null;
+        for (const av of artistVariants(r.artist)) {
+          autoMatch = albums.find(a => {
+            const aNorm = normalizeKey('', a.album).replace('|||', '');
+            return aNorm === albumNorm && artistVariants(a.artist).has(av);
+          });
+          if (autoMatch) break;
+        }
+        const matchHtml = autoMatch
+          ? `<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">→ match auto : ${esc(autoMatch.artist)} — ${esc(autoMatch.album)}</span>`
+          : r.ownership ? `<span style="font-size:10px;color:var(--text3)">ownership : ${esc(r.ownership)}</span>` : '';
+        return `
+          <div class="missing-card" style="padding:10px 14px;gap:10px">
+            <div class="missing-info" style="min-width:0;flex:1">
+              <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.album)}</div>
+              <div class="sub" style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <span>${esc(r.artist)}${r.year ? ' · ' + r.year : ''}</span>
+                ${own}
+              </div>
+              <div style="margin-top:3px;display:flex;align-items:center;gap:8px">
+                ${rymStars(r.rating)}
+                ${matchHtml}
+              </div>
+            </div>
+            <div style="display:flex;gap:5px;flex-shrink:0">
+              <button class="btn btn-sm btn-accent" onclick="openRYMUnlinkedAssocIdx(${i})" title="Créer une association manuelle">🔗 Associer</button>
+            </div>
+          </div>`;
+      }).join('');
+    }
   }
 
   updateNavBadges();
