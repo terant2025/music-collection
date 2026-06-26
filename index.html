@@ -775,11 +775,50 @@ input[type="file"] { display: none; }
           <option value="no-ep">Hors EPs/singles</option>
           <option value="studio">Albums studio seuls</option>
         </select>
+        <input id="filter-disco-artist" type="text" placeholder="Artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:110px" oninput="renderDiscographie()">
+        <input id="filter-disco-album" type="text" placeholder="Album…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:110px" oninput="renderDiscographie()">
         <input id="filter-disco-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4" oninput="renderDiscographie()">
+        <select id="filter-disco-genre" onchange="renderDiscographie()">
+          <option value="">Tous genres</option>
+        </select>
+        <select id="filter-disco-note" onchange="renderDiscographie()">
+          <option value="">Note MB</option>
+          <option value="5">MB ★★★★★</option>
+          <option value="4">MB ★★★★+</option>
+          <option value="3">MB ★★★+</option>
+          <option value="0">MB non notés</option>
+        </select>
+        <select id="filter-disco-dc-note" onchange="renderDiscographie()">
+          <option value="">Note DC</option>
+          <option value="5">DC ★★★★★</option>
+          <option value="4">DC ★★★★+</option>
+          <option value="3">DC ★★★+</option>
+          <option value="0">DC non notés</option>
+        </select>
+        <select id="filter-disco-rym-note" onchange="renderDiscographie()">
+          <option value="">Note RYM</option>
+          <option value="4.5">RYM ≥ 4.5</option>
+          <option value="4">RYM ≥ 4.0</option>
+          <option value="3.5">RYM ≥ 3.5</option>
+          <option value="3">RYM ≥ 3.0</option>
+          <option value="0">RYM non notés</option>
+        </select>
+        <select id="filter-disco-min-plays" onchange="renderDiscographie()">
+          <option value="">Écoutes</option>
+          <option value="1">≥ 1</option>
+          <option value="10">≥ 10</option>
+          <option value="25">≥ 25</option>
+          <option value="50">≥ 50</option>
+          <option value="100">≥ 100</option>
+        </select>
         <select id="disco-sort" onchange="renderDiscographie()">
           <option value="artist">Tri : Artiste</option>
           <option value="album">Tri : Album</option>
           <option value="year">Tri : Année</option>
+          <option value="note">Tri : Note MB</option>
+          <option value="dc">Tri : Note DC</option>
+          <option value="rym">Tri : Note RYM</option>
+          <option value="plays">Tri : Écoutes</option>
         </select>
         <button class="btn btn-sm" onclick="nav('albums');document.getElementById('modal-album').classList.add('open');openAlbumModal()">＋ Ajouter CD</button>
         <button class="btn btn-sm" onclick="exportDiscoCSV()">↓ CSV</button>
@@ -799,8 +838,10 @@ input[type="file"] { display: none; }
               <th>Statut</th>
               <th>Supports liés</th>
               <th>Tracklist</th>
-              <th>Note</th>
-              <th>RYM</th>
+              <th>Note MB</th>
+              <th>Note DC</th>
+              <th>Note RYM</th>
+              <th>Écoutes</th>
               <th style="width:120px"></th>
             </tr>
           </thead>
@@ -1106,15 +1147,63 @@ input[type="file"] { display: none; }
     <div class="section" id="sec-ok-albums">
       <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums du dossier <code>Ok/</code> — écoutés, potentiellement à wishlist. Numériques uniquement si pas de CD Discogs.</p>
       <div class="toolbar" style="margin-bottom:12px">
-        <input id="filter-ok-artist" type="text" placeholder="Artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
+        <input id="filter-ok-artist" type="text" placeholder="Artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:120px"/>
+        <input id="filter-ok-album" type="text" placeholder="Album…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:120px"/>
         <input id="filter-ok-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
+        <select id="filter-ok-genre" onchange="renderOkAlbums()">
+          <option value="">Tous genres</option>
+        </select>
+        <select id="filter-ok-note" onchange="renderOkAlbums()">
+          <option value="">Note MB</option>
+          <option value="5">MB ★★★★★</option>
+          <option value="4">MB ★★★★+</option>
+          <option value="3">MB ★★★+</option>
+          <option value="0">MB non notés</option>
+        </select>
+        <select id="filter-ok-dc-note" onchange="renderOkAlbums()">
+          <option value="">Note DC</option>
+          <option value="5">DC ★★★★★</option>
+          <option value="4">DC ★★★★+</option>
+          <option value="3">DC ★★★+</option>
+          <option value="0">DC non notés</option>
+        </select>
+        <select id="filter-ok-rym-note" onchange="renderOkAlbums()">
+          <option value="">Note RYM</option>
+          <option value="4.5">RYM ≥ 4.5</option>
+          <option value="4">RYM ≥ 4.0</option>
+          <option value="3.5">RYM ≥ 3.5</option>
+          <option value="3">RYM ≥ 3.0</option>
+          <option value="0">RYM non notés</option>
+        </select>
+        <select id="filter-ok-support" onchange="renderOkAlbums()">
+          <option value="">Tous supports</option>
+          <option value="cd">CD</option>
+          <option value="flac">FLAC</option>
+          <option value="mp3">MP3</option>
+          <option value="digital">Numérique</option>
+        </select>
+        <select id="filter-ok-min-plays" onchange="renderOkAlbums()">
+          <option value="">Écoutes</option>
+          <option value="1">≥ 1</option>
+          <option value="10">≥ 10</option>
+          <option value="25">≥ 25</option>
+          <option value="50">≥ 50</option>
+        </select>
+        <select id="sort-ok" onchange="renderOkAlbums()">
+          <option value="artist">Tri : Artiste</option>
+          <option value="album">Tri : Album</option>
+          <option value="year">Tri : Année</option>
+          <option value="note">Tri : Note MB</option>
+          <option value="rym">Tri : Note RYM</option>
+          <option value="plays">Tri : Écoutes</option>
+        </select>
         <div class="toolbar-right">
           <span id="ok-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportOkAlbumsCSV()">↓ CSV</button>
         </div>
       </div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th>RYM</th><th style="width:120px"></th></tr></thead>
+     <div class="table-wrap"><table>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Genre</th><th>Supports</th><th>Note MB</th><th>Note DC</th><th>Note RYM</th><th>Écoutes</th><th style="width:120px"></th></tr></thead>
         <tbody id="ok-tbody"></tbody>
       </table></div>
     </div>
@@ -6813,22 +6902,91 @@ function markWishAcquired(id) {
 
 // ===================== OK ALBUMS =====================
 function renderOkAlbums() {
-  const q  = (document.getElementById('global-search').value || '').toLowerCase();
-  const af = (document.getElementById('filter-ok-artist')?.value || '').toLowerCase().trim();
-  const yf = (document.getElementById('filter-ok-year')?.value || '').trim();
-  const list = albums.filter(a => a.okFolder)
-    .filter(a => (!q || (a.artist+' '+a.album).toLowerCase().includes(q))
-              && (!af || a.artist.toLowerCase().includes(af))
-              && (!yf || (a.year||'').startsWith(yf)))
-    .sort((a,b) => a.artist.localeCompare(b.artist,'fr'));
+  const q       = (document.getElementById('global-search').value || '').toLowerCase();
+  const af      = (document.getElementById('filter-ok-artist')?.value || '').toLowerCase().trim();
+  const albf    = (document.getElementById('filter-ok-album')?.value  || '').toLowerCase().trim();
+  const yf      = (document.getElementById('filter-ok-year')?.value   || '').trim();
+  const genreF  = document.getElementById('filter-ok-genre')?.value   || '';
+  const noteF   = document.getElementById('filter-ok-note')?.value    || '';
+  const dcNoteF = document.getElementById('filter-ok-dc-note')?.value || '';
+  const rymNoteF= document.getElementById('filter-ok-rym-note')?.value|| '';
+  const supF    = document.getElementById('filter-ok-support')?.value || '';
+  const minPlays= parseInt(document.getElementById('filter-ok-min-plays')?.value || '0') || 0;
+  const sortF   = document.getElementById('sort-ok')?.value || 'artist';
+
+  // Mettre à jour le select genre
+  const genreSel = document.getElementById('filter-ok-genre');
+  if (genreSel && genreSel.options.length <= 1) {
+    const genres = [...new Set(albums.filter(a=>a.okFolder).map(a=>a.genre).filter(Boolean))].sort();
+    genres.forEach(g => { const o=document.createElement('option');o.value=g;o.textContent=g;genreSel.appendChild(o); });
+  }
+
+  let list = albums.filter(a => a.okFolder).filter(a => {
+    if (q   && !(a.artist+' '+a.album).toLowerCase().includes(q)) return false;
+    if (af  && !a.artist.toLowerCase().includes(af))  return false;
+    if (albf&& !a.album.toLowerCase().includes(albf)) return false;
+    if (yf  && !(a.year||'').startsWith(yf))          return false;
+    if (genreF && a.genre !== genreF)                 return false;
+    // Note MB
+    if (noteF) {
+      if (noteF==='5' && a.note!==5) return false;
+      if (noteF==='4' && (a.note||0)<4) return false;
+      if (noteF==='3' && (a.note||0)<3) return false;
+      if (noteF==='0' && a.note)        return false;
+    }
+    // Note DC
+    if (dcNoteF) {
+      const dc = a.discogsRating || 0;
+      if (dcNoteF==='5' && dc!==5) return false;
+      if (dcNoteF==='4' && dc<4)   return false;
+      if (dcNoteF==='3' && dc<3)   return false;
+      if (dcNoteF==='0' && dc)     return false;
+    }
+    // Note RYM
+    if (rymNoteF) {
+      const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+      if (rymNoteF==='0') { if (rymEntry?.rating) return false; }
+      else if (!(rymEntry && rymEntry.rating >= parseFloat(rymNoteF))) return false;
+    }
+    // Support
+    if (supF==='cd'      && !a.cd)                           return false;
+    if (supF==='flac'    && !a.flac)                          return false;
+    if (supF==='mp3'     && !a.mp3)                           return false;
+    if (supF==='digital' && !(a.flac||a.mp3||a.digital))     return false;
+    // Écoutes min
+    if (minPlays > 0 && (a.plays||0) < minPlays)             return false;
+    return true;
+  });
+
+  // Tri
+  if (sortF==='album')  list.sort((a,b)=>a.album.localeCompare(b.album,'fr'));
+  else if (sortF==='year')  list.sort((a,b)=>(b.year||0)-(a.year||0));
+  else if (sortF==='note')  list.sort((a,b)=>(b.note||0)-(a.note||0));
+  else if (sortF==='plays') list.sort((a,b)=>(b.plays||0)-(a.plays||0));
+  else if (sortF==='rym')   list.sort((a,b)=>{
+    const ra=(lookupRym(a.artist,a.album,a.id)||lookupRym(cleanDiscogsArtist(a.artist),a.album,a.id))?.rating||0;
+    const rb=(lookupRym(b.artist,b.album,b.id)||lookupRym(cleanDiscogsArtist(b.artist),b.album,b.id))?.rating||0;
+    return rb-ra;
+  });
+  else list.sort((a,b)=>a.artist.localeCompare(b.artist,'fr'));
+
   const ctr = document.getElementById('ok-counter');
-  if (ctr) ctr.textContent = list.length + ' albums';
+  if (ctr) ctr.textContent = list.length + ' / ' + albums.filter(a=>a.okFolder).length + ' albums';
   const badge = document.getElementById('nav-ok-count');
   if (badge) badge.textContent = albums.filter(a=>a.okFolder).length;
   const tbody = document.getElementById('ok-tbody');
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
-  const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
-  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${sid(a.id)}',${i});renderOkAlbums()">★</button>`).join('');
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
+
+  const fmtBadge = a => [
+    a.cd  ?'<span class="badge badge-cd">CD</span>':'',
+    a.flac?'<span class="badge badge-flac">FLAC</span>':'',
+    a.mp3 ?'<span class="badge badge-mp3">MP3</span>':'',
+  ].filter(Boolean).join('');
+
+  const stars = a => [1,2,3,4,5].map(i=>
+    `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${sid(a.id)}',${i});renderOkAlbums()">★</button>`
+  ).join('');
+
   const rymCell = a => {
     const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
     const hasManual = rymAssociations.some(x => x.albumKey === a.id);
@@ -6838,12 +6996,21 @@ function renderOkAlbums() {
         : `<span style="color:var(--text3);font-size:12px;opacity:0.35">⭐</span>`}
     </span>`;
   };
+
   tbody.innerHTML = list.map(a => `<tr>
     <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
-    <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">numérique seul</span>'}</div></td>
+    <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
+    <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
     <td><div class="stars">${stars(a)}</div></td>
+    <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
     <td>${rymCell(a)}</td>
+    <td>
+      <div class="plays-bar-wrap">
+        <div class="plays-bar"><div class="plays-fill" style="width:${Math.round((a.plays||0)/Math.max(1,...albums.map(x=>x.plays||0))*100)}%"></div></div>
+        <span class="plays-num">${a.plays||0}</span>
+      </div>
+    </td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="addToWishlist('${sid(a.artist)}','${sid(a.album)}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
       <button class="btn btn-sm btn-danger" onclick="markOkDone('${sid(a.id)}')" title="Retirer de Ok">✕</button>
@@ -7810,6 +7977,13 @@ function discoFilteredList() {
   const sort = document.getElementById('disco-sort')?.value || 'artist';
   const q = document.getElementById('global-search').value.toLowerCase();
   const stockKeys = getStockKeysSet();
+  const af       = (document.getElementById('filter-disco-artist')?.value || '').toLowerCase().trim();
+  const albf     = (document.getElementById('filter-disco-album')?.value  || '').toLowerCase().trim();
+  const genreF   = document.getElementById('filter-disco-genre')?.value   || '';
+  const noteF    = document.getElementById('filter-disco-note')?.value    || '';
+  const dcNoteF  = document.getElementById('filter-disco-dc-note')?.value || '';
+  const rymNoteF = document.getElementById('filter-disco-rym-note')?.value|| '';
+  const minPlays = parseInt(document.getElementById('filter-disco-min-plays')?.value || '0') || 0;
 
   // Détecte une compilation (Various Artists / Various)
   const isVA = a => /^various/i.test(a.artist) || a.isCompilation;
@@ -7821,7 +7995,6 @@ function discoFilteredList() {
   if (filter === 'no-cd') {
     list = getNumericWithoutCD().filter(a => !a.okFolder && !a.forSale);
   } else {
-    // Afficher : albums avec CD Discogs OU dans le dossier Discographie MusicBee
     list = albums.filter(a =>
       (a.cd || a.has_cd || a.folders?.includes('discographie'))
       && !stockKeys.has(normalizeKey(a.artist, a.album))
@@ -7838,13 +8011,68 @@ function discoFilteredList() {
   if (typeFilter === 'no-ep')   list = list.filter(a => !isEP(a));
   if (typeFilter === 'studio')  list = list.filter(a => !isVA(a) && !isEP(a));
 
-  if (q) list = list.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
+  // Filtres texte + genre
+  if (q)     list = list.filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q));
+  if (af)    list = list.filter(a => a.artist.toLowerCase().includes(af));
+  if (albf)  list = list.filter(a => a.album.toLowerCase().includes(albf));
+  if (genreF)list = list.filter(a => a.genre === genreF);
+
+  // Filtre année
   const discoYearF = (document.getElementById('filter-disco-year')?.value || '').trim();
   if (discoYearF) list = list.filter(a => (a.year||'').startsWith(discoYearF));
 
+  // Filtre note MB
+  if (noteF) list = list.filter(a => {
+    if (noteF === '5') return a.note === 5;
+    if (noteF === '4') return (a.note||0) >= 4;
+    if (noteF === '3') return (a.note||0) >= 3;
+    if (noteF === '0') return !a.note;
+    return true;
+  });
+
+  // Filtre note Discogs
+  if (dcNoteF) list = list.filter(a => {
+    const dc = a.discogsRating || 0;
+    if (dcNoteF === '5') return dc === 5;
+    if (dcNoteF === '4') return dc >= 4;
+    if (dcNoteF === '3') return dc >= 3;
+    if (dcNoteF === '0') return !dc;
+    return true;
+  });
+
+  // Filtre note RYM
+  if (rymNoteF) list = list.filter(a => {
+    const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+    if (rymNoteF === '0') return !rymEntry || !rymEntry.rating;
+    return !!(rymEntry && rymEntry.rating >= parseFloat(rymNoteF));
+  });
+
+  // Filtre écoutes min
+  if (minPlays > 0) list = list.filter(a => (a.plays || 0) >= minPlays);
+
+  // Mettre à jour le select genre
+  const genreSel = document.getElementById('filter-disco-genre');
+  if (genreSel && genreSel.options.length <= 1) {
+    const genres = [...new Set(albums
+      .filter(a => a.cd || a.has_cd || a.folders?.includes('discographie'))
+      .map(a => a.genre).filter(Boolean))].sort();
+    genres.forEach(g => {
+      const o = document.createElement('option'); o.value = g; o.textContent = g;
+      genreSel.appendChild(o);
+    });
+  }
+
   return [...list].sort((a, b) => {
-    if (sort === 'year') return (b.year || 0) - (a.year || 0);
+    if (sort === 'year')  return (b.year || 0) - (a.year || 0);
     if (sort === 'album') return (a.album || '').localeCompare(b.album || '', 'fr');
+    if (sort === 'note')  return (b.note || 0) - (a.note || 0);
+    if (sort === 'dc')    return (b.discogsRating || 0) - (a.discogsRating || 0);
+    if (sort === 'rym')   {
+      const ra = (lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id))?.rating || 0;
+      const rb = (lookupRym(b.artist, b.album, b.id) || lookupRym(cleanDiscogsArtist(b.artist), b.album, b.id))?.rating || 0;
+      return rb - ra;
+    }
+    if (sort === 'plays') return (b.plays || 0) - (a.plays || 0);
     return (a.artist || '').localeCompare(b.artist || '', 'fr');
   });
 }
@@ -7940,8 +8168,15 @@ function renderDiscographie() {
       <td class="mono">${a.year || '–'}</td>
       <td>${statusBadge}</td>
       <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
-      <td><div class="stars">${stars}</div></td>
+ <td><div class="stars">${stars}</div></td>
+      <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
       <td>${rymCell}</td>
+      <td>
+        <div class="plays-bar-wrap">
+          <div class="plays-bar"><div class="plays-fill" style="width:${Math.round((a.plays||0)/Math.max(1,...albums.map(x=>x.plays||0))*100)}%"></div></div>
+          <span class="plays-num">${a.plays||0}</span>
+        </div>
+      </td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
         ${assocBtn}${unlinkBtn}
         <button class="btn btn-sm" onclick="event.stopPropagation();markForSale('${safeId}')" title="${a.forSale?'Déjà à vendre':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
@@ -8389,8 +8624,12 @@ function computeRYMUnrated() {
   _cache.rymUnrated = rymData
     .filter(r => !r.rating || r.rating === 0)
     .filter(r => {
-      // Garder seulement si possédé ou associé
-      if (associatedRymKeys.has(normalizeKey(r.artist, r.album))) return true;
+      const rymKey = normalizeKey(r.artist, r.album);
+      // Associé manuellement → toujours inclure
+      if (associatedRymKeys.has(rymKey)) return true;
+      // Ownership renseigné → inclure même si non matchable automatiquement
+      if ((r.ownership || '').trim()) return true;
+      // Possédé via matching automatique
       const albumNorm = normalizeKey('', r.album).replace('|||', '');
       for (const av of artistVariants(r.artist)) {
         if (ownedKeys.has(av + '|||' + albumNorm)) return true;
@@ -9392,6 +9631,9 @@ document.addEventListener('DOMContentLoaded', () => {
     ['filter-forsale-year',  () => renderForSale(),                      300],
     ['filter-wish-year',     () => renderWishlist(),                     300],
     ['filter-missing-year',  () => renderMissing(),                      300],
+    ['filter-disco-artist',  () => renderDiscographie(),                  300],
+    ['filter-disco-album',   () => renderDiscographie(),                  300],
+    ['filter-ok-album',      () => renderOkAlbums(),                     300],
   ];
 	rules.forEach(([id, fn, delay]) => {
     const el = document.getElementById(id);
