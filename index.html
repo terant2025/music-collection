@@ -4547,20 +4547,20 @@ async function importMusicBeeXML(input) {
         albumByVariantKey.get(gNoThe),
         g.mbReleaseId ? albumByVariantKey.get('mbid:' + g.mbReleaseId) : null,
       ];
-      // Dédoublonner les candidats et, en cas de collision sur la même clé normalisée,
-      // préférer celui dont l'année correspond (albums homonymes : Weezer 1994 vs 2001)
-      const uniqueCandidates = [...new Set(candidates.filter(isValidMatch))];
-      if (uniqueCandidates.length > 1 && g.year) {
-        const byYear = uniqueCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
-        if (byYear) { existing = byYear; }
-      }
       // Various Artists ↔ Various
       const normArt = normalizeKey(g.artist,'').replace('|||','');
       if (normArt === 'various' || normArt === 'various artists') {
         candidates.push(albumByVariantKey.get('various|||' + gAlbumNorm));
         candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
       }
-      if (!existing) existing = candidates.find(isValidMatch) || null;
+      // En cas d'albums homonymes (même normalizeKey, années différentes : Weezer 1994 vs 2001),
+      // préférer le candidat dont l'année correspond. Calculé APRÈS l'ajout des variantes Various.
+      const validCandidates = [...new Set(candidates.filter(isValidMatch))];
+      if (validCandidates.length > 1 && g.year) {
+        const byYear = validCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
+        if (byYear) existing = byYear;
+      }
+      if (!existing) existing = validCandidates[0] || null;
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
       if (g.forSaleFolder) newFolders.push('forsale');
@@ -4670,7 +4670,7 @@ async function importMusicBeeXML(input) {
       const k = normalizeKey(s.artist, s.album);
       const albumNorm = normalizeKey('', s.album).replace('|||', '');
       const meta = existingStockMeta[k] || { note: 0, notes: '' };
-      // Chercher dans albums[] (peut avoir été ajouté par grouped ou stocké précédemment)
+      // Chercher dans albums[] — plusieurs stratégies pour éviter les doublons
       let ex = albums.find(a => a.id === k || a.id === stableAlbumId(s.artist, s.album, null));
       if (!ex) {
         for (const av of artistVariants(s.artist)) {
@@ -4678,13 +4678,29 @@ async function importMusicBeeXML(input) {
           if (ex) break;
         }
       }
+      // Fallback : normalizeKey direct (couvre les variantes &/and, casse, etc.)
+      if (!ex) {
+        ex = albums.find(a => normalizeKey(a.artist, a.album) === k);
+      }
       if (ex) {
         if (!ex.folders) ex.folders = [];
         if (!ex.folders.includes('stock')) ex.folders.push('stock');
         if (meta.note && !ex.note) ex.note = meta.note;
         if (meta.notes && !ex.notes) ex.notes = meta.notes;
+        ex.primaryFolder = 'stock';
       } else {
         const newId = stableAlbumId(s.artist, s.album, null);
+        // Vérifier qu'aucun album avec ce normalizeKey n'existe déjà sous un id différent
+        // (peut arriver si &→and crée une clé légèrement différente)
+        const dupCheck = albums.find(a => normalizeKey(a.artist, a.album) === k);
+        if (dupCheck) {
+          if (!dupCheck.folders) dupCheck.folders = [];
+          if (!dupCheck.folders.includes('stock')) dupCheck.folders.push('stock');
+          dupCheck.primaryFolder = 'stock';
+          if (meta.note && !dupCheck.note) dupCheck.note = meta.note;
+          if (meta.notes && !dupCheck.notes) dupCheck.notes = meta.notes;
+          return;
+        }
         albums.push({
           id:      newId,
           artist:  s.artist, album: s.album,
@@ -4694,7 +4710,7 @@ async function importMusicBeeXML(input) {
           note:    meta.note, notes: meta.notes,
           plays:   0, isCompilation: false,
           cd: false, flac: s.format==='flac', mp3: s.format==='mp3', digital: false,
-          okFolder: false, forSale: false,
+          okFolder: false, forSale: false, primaryFolder: 'stock',
         });
       }
     });
