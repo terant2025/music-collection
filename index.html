@@ -2537,7 +2537,7 @@ function normalizeKey(artist, album) {
       .toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // diacritiques
       // Supprimer les apostrophes et guillemets (pas d'espace, just remove)
-      .replace(/[''"`]/g, '')
+       .replace(/[''"`""\u201C\u201D]/g, '')
       // Supprimer annotations entre parenthèses/crochets très courantes
       // ex: "(feat. X)", "[live]", "(radio edit)", "(remaster)", "(bonus track)"
       .replace(/\s*[\(\[](feat\.?|ft\.?|featuring|live|radio\s*edit|single\s*edit|remaster(?:ed)?|bonus\s*track|demo|instrumental|acoustic|extended|album\s*version|original\s*mix)[^\)\]]*[\)\]]/gi, '')
@@ -2953,7 +2953,13 @@ function esc(s) {
 // Échappe un id (normalizeKey texte) pour usage dans un attribut onclick HTML
 // ex: "o'brother|||where art thou" → "o\\'brother|||where art thou"
 function sid(id) {
-  return String(id||'').replace(/[\r\n\t]/g,' ').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  // Encoder en base64 pour éviter tout problème de caractères spéciaux dans onclick
+  return btoa(unescape(encodeURIComponent(String(id||''))));
+}
+
+// Décoder côté réception — à utiliser dans toutes les fonctions qui reçoivent un id via sid()
+function unsid(encoded) {
+  try { return decodeURIComponent(escape(atob(encoded))); } catch(e) { return encoded; }
 }
 
 function updateStats() {
