@@ -4557,25 +4557,29 @@ async function importMusicBeeXML(input) {
         if (byId && isValidMatch(byId)) existing = byId;
       }
       if (!existing) {
-        const candidates = [
-          albumByVariantKey.get(gExact),
-          albumByVariantKey.get(gClean),
-          albumByVariantKey.get(gNoThe),
-        ];
+        // Collecter TOUS les albums homonymes (pas juste le premier dans l'index)
+        // albumByVariantKey ne garde que le premier par clé texte → albums homonymes invisibles
+        const allHomonyms = albums.filter(a => isValidMatch(a) && (
+          normalizeKey(a.artist, a.album) === gExact ||
+          normalizeKey(cleanDiscogsArtist(a.artist), a.album) === gClean ||
+          normalizeKey((a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'').trim(), a.album) === gNoThe
+        ));
         // Various Artists ↔ Various
         const normArt = normalizeKey(g.artist,'').replace('|||','');
         if (normArt === 'various' || normArt === 'various artists') {
-          candidates.push(albumByVariantKey.get('various|||' + gAlbumNorm));
-          candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
+          albums.forEach(a => {
+            const an = normalizeKey(a.artist,'').replace('|||','');
+            if ((an === 'various' || an === 'various artists') && isValidMatch(a) && !allHomonyms.includes(a))
+              allHomonyms.push(a);
+          });
         }
-        // Parmi les candidats valides, si plusieurs → homonymes sans MBID :
-        // - exclure ceux qui ont un mb_release_id différent du groupe courant (évite la mauvaise fusion)
-        // - puis préférer par année
-        const validCandidates = [...new Set(candidates.filter(isValidMatch))].filter(a => {
-          if (!g.mbReleaseId) return true; // pas de MBID XML → on accepte tous
-          if (!a.mb_release_id) return true; // l'entrée existante n'a pas de MBID → accepter
-          return a.mb_release_id === g.mbReleaseId; // MBID doit correspondre
+        // Filtrer : si MBID XML présent, exclure les candidats qui ont un MBID différent
+        const validCandidates = [...new Set(allHomonyms)].filter(a => {
+          if (!g.mbReleaseId) return true;
+          if (!a.mb_release_id) return true; // pas encore de MBID → candidat valide, on le prendra par année
+          return a.mb_release_id === g.mbReleaseId;
         });
+        // Départager par année si plusieurs candidats
         if (validCandidates.length > 1 && g.year) {
           const byYear = validCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
           if (byYear) existing = byYear;
