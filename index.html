@@ -2522,6 +2522,7 @@ function normalizeKey(artist, album) {
   const norm = s => {
     if (s === null || s === undefined) return '';
     return String(s)
+      .replace(/[\r\n\t]/g, ' ')  // retours chariot, tabulations → espace
       // Apostrophes typographiques → apostrophe ASCII puis suppression
       .replace(/[\u2018\u2019\u02bc\u0060\u00b4]/g, "'")
       // Tirets longs / demi-tirets → tiret simple
@@ -2952,7 +2953,7 @@ function esc(s) {
 // Échappe un id (normalizeKey texte) pour usage dans un attribut onclick HTML
 // ex: "o'brother|||where art thou" → "o\\'brother|||where art thou"
 function sid(id) {
-  return String(id||'').replace(/\\/g,'\\\\').replace(/[\r\n]/g,' ').replace(/'/g,"\\'");
+  return String(id||'').replace(/[\r\n\t]/g,' ').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 }
 
 function updateStats() {
@@ -8470,9 +8471,8 @@ function closeRYMAssocModal() {
 
 function renderRYMAssocList() {
   const q = document.getElementById('rym-assoc-search').value.toLowerCase();
-  const usedAlbumKeys = new Set(rymAssociations.map(a => a.albumKey));
   const candidates = albums
-    .filter(a => (a.cd || a.flac || a.mp3 || a.digital) && !usedAlbumKeys.has(a.id))
+    .filter(a => (a.cd || a.flac || a.mp3 || a.digital))
     .filter(a => !q || (a.artist + ' ' + a.album).toLowerCase().includes(q))
     .sort((a, b) => a.artist.localeCompare(b.artist, 'fr'))
     .slice(0, 50);
