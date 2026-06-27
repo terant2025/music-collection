@@ -1816,8 +1816,11 @@ let _saveTimer = null;
 // Génère un ID stable pour un album : toujours normalizeKey(artist, album)
 // On n'utilise PAS mb_release_id comme ID — trop instable (Picard re-tague)
 // Le MBID est stocké séparément dans mb_release_id pour les lookups optionnels
-function stableAlbumId(artist, album, mb_release_id) {
-  return normalizeKey(artist, album);
+function stableAlbumId(artist, album, mb_release_id, discogs_id) {
+  const base = normalizeKey(artist, album);
+  // Pour les albums homonymes du même artiste, le discogsId est le seul discriminant fiable
+  if (discogs_id) return base + '|||dc:' + discogs_id;
+  return base;
 }
 
 // ===================== LOCALSTORAGE =====================
@@ -4120,13 +4123,27 @@ async function importDiscogs(input) {
       if (!existing) {
         const albumNorm = normalizeKey('', album).replace('|||', '');
         for (const av of artistVariants(artist)) {
-          existing = albums.find(a => normalizeKey(a.artist, a.album) === av + '|||' + albumNorm
+          const candidate = albums.find(a => normalizeKey(a.artist, a.album) === av + '|||' + albumNorm
             || normalizeKey(cleanDiscogsArtist(a.artist), a.album) === av + '|||' + albumNorm);
-          if (existing) break;
+          // Ne pas fusionner si l'entrée trouvée a un discogsId différent (albums homonymes)
+          if (candidate && discogsId && candidate.discogsId && candidate.discogsId !== discogsId) continue;
+          if (candidate) { existing = candidate; break; }
         }
-        // Fallback clé standard
-        if (!existing) existing = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
+        if (!existing) {
+          const candidate = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
+          if (candidate && discogsId && candidate.discogsId && candidate.discogsId !== discogsId) {
+            // Albums homonymes avec Discogs IDs différents → créer une nouvelle entrée avec ID unique
+            existing = null; // forcer la création
+          } else {
+            existing = candidate;
+          }
+        }
       }
+
+      // Pour les albums homonymes (même normalizeKey, discogsId différent), utiliser un ID avec suffixe
+      const albumId = (discogsId && albums.some(a =>
+        normalizeKey(a.artist, a.album) === normalizeKey(artist, album) && a.discogsId !== discogsId && !existing
+      )) ? normalizeKey(artist, album) + '|||dc:' + discogsId : null;
 
       if (existing) {
         if (isCd) existing.cd = true;
@@ -4140,8 +4157,9 @@ async function importDiscogs(input) {
         }
         updated++;
       } else {
+     const newDiscogsId = albumId || uid();
         albums.push({
-          id: uid(), artist, artistRaw, album,
+          id: albumId || normalizeKey(artist, album), artist, artistRaw, album,
           year: year.slice(0, 4), genre: '',
           cd: isCd, flac: false, mp3: false, digital: false,
           note: 0, discogsRating: Math.min(5, rating) || 0, plays: 0,
