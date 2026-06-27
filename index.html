@@ -837,7 +837,6 @@ input[type="file"] { display: none; }
               <th>Année</th>
               <th>Statut</th>
               <th>Supports liés</th>
-              <th>Tracklist</th>
               <th>Note MB</th>
               <th>Note DC</th>
               <th>Note RYM</th>
@@ -2782,7 +2781,16 @@ function filteredAlbums() {
         let nm = true;
         if (nf==='5') nm=s.note===5; else if(nf==='4') nm=s.note>=4; else if(nf==='3') nm=s.note>=3; else if(nf==='0') nm=!s.note;
         const ym = !yearF || (s.year||'').startsWith(yearF);
-        return match && am && albm && gm && nm && ym;
+        // Filtre note RYM
+        let rymMatch = true;
+        if (rymNf) {
+          const rymEntry = lookupRym(s.artist, s.album) || lookupRym(cleanDiscogsArtist(s.artist), s.album);
+          if (rymNf === '0') rymMatch = !rymEntry || !rymEntry.rating;
+          else rymMatch = !!(rymEntry && rymEntry.rating >= parseFloat(rymNf));
+        }
+        // Filtre écoutes min
+        const playsMatch = (s.plays || 0) >= minPlays;
+        return match && am && albm && gm && nm && ym && rymMatch && playsMatch;
       })
       .map(s => ({
         id: s.id, artist: s.artist, album: s.album, year: s.year||'',
@@ -8168,7 +8176,7 @@ function renderDiscographie() {
       <td class="mono">${a.year || '–'}</td>
       <td>${statusBadge}</td>
       <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
- <td><div class="stars">${stars}</div></td>
+      <td><div class="stars">${stars}</div></td>
       <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
       <td>${rymCell}</td>
       <td>
