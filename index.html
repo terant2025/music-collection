@@ -4547,13 +4547,20 @@ async function importMusicBeeXML(input) {
         albumByVariantKey.get(gNoThe),
         g.mbReleaseId ? albumByVariantKey.get('mbid:' + g.mbReleaseId) : null,
       ];
+      // Dédoublonner les candidats et, en cas de collision sur la même clé normalisée,
+      // préférer celui dont l'année correspond (albums homonymes : Weezer 1994 vs 2001)
+      const uniqueCandidates = [...new Set(candidates.filter(isValidMatch))];
+      if (uniqueCandidates.length > 1 && g.year) {
+        const byYear = uniqueCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
+        if (byYear) { existing = byYear; }
+      }
       // Various Artists ↔ Various
       const normArt = normalizeKey(g.artist,'').replace('|||','');
       if (normArt === 'various' || normArt === 'various artists') {
         candidates.push(albumByVariantKey.get('various|||' + gAlbumNorm));
         candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
       }
-      existing = candidates.find(isValidMatch) || null;
+      if (!existing) existing = candidates.find(isValidMatch) || null;
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
       if (g.forSaleFolder) newFolders.push('forsale');
