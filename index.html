@@ -4158,8 +4158,11 @@ async function importDiscogs(input) {
         updated++;
       } else {
      const newDiscogsId = albumId || uid();
+		const baseKey = normalizeKey(artist, album);
+        const collision = albums.some(a => normalizeKey(a.artist, a.album) === baseKey);
+        const newId = (collision && discogsId) ? baseKey + '|||dc:' + discogsId : baseKey;
         albums.push({
-          id: albumId || normalizeKey(artist, album), artist, artistRaw, album,
+          id: newId, artist, artistRaw, album,
           year: year.slice(0, 4), genre: '',
           cd: isCd, flac: false, mp3: false, digital: false,
           note: 0, discogsRating: Math.min(5, rating) || 0, plays: 0,
