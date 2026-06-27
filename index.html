@@ -4140,10 +4140,13 @@ async function importDiscogs(input) {
         }
       }
 
-      // Pour les albums homonymes (même normalizeKey, discogsId différent), utiliser un ID avec suffixe
-      const albumId = (discogsId && albums.some(a =>
-        normalizeKey(a.artist, a.album) === normalizeKey(artist, album) && a.discogsId !== discogsId && !existing
-      )) ? normalizeKey(artist, album) + '|||dc:' + discogsId : null;
+      // Pour les albums homonymes (même normalizeKey, discogsId différent), utiliser un ID avec suffixe.
+      // IMPORTANT : une "collision" n'est réelle que si l'entrée existante a déjà un discogsId différent.
+      // Si elle n'a pas de discogsId, c'est le même album (numérique sans CD) → on fusionne, pas de suffixe.
+      const baseKey = normalizeKey(artist, album);
+      const trueCollision = discogsId && !existing && albums.some(a =>
+        normalizeKey(a.artist, a.album) === baseKey && a.discogsId && a.discogsId !== discogsId
+      );
 
       if (existing) {
         if (isCd) existing.cd = true;
@@ -4157,10 +4160,7 @@ async function importDiscogs(input) {
         }
         updated++;
       } else {
-     const newDiscogsId = albumId || uid();
-		const baseKey = normalizeKey(artist, album);
-        const collision = albums.some(a => normalizeKey(a.artist, a.album) === baseKey);
-        const newId = (collision && discogsId) ? baseKey + '|||dc:' + discogsId : baseKey;
+        const newId = trueCollision ? baseKey + '|||dc:' + discogsId : baseKey;
         albums.push({
           id: newId, artist, artistRaw, album,
           year: year.slice(0, 4), genre: '',
@@ -4435,7 +4435,11 @@ async function importMusicBeeXML(input) {
       } else {
         // Album normal
         if (!album) return;
-        const key = normalizeKey(effectiveArtist, album);
+        // Clé de groupement : si un MBID Album est disponible, l'utiliser comme discriminant
+        // pour séparer les albums homonymes (ex: Weezer Blue 1994 vs Green 2001, tous deux "Weezer").
+        // Sans MBID, fallback sur normalizeKey seul (comportement historique).
+        const baseKey = normalizeKey(effectiveArtist, album);
+        const key = mbidAlbum ? baseKey + '|||mbid:' + mbidAlbum : baseKey;
         const albumRating = parseRating(num(d, 'Album Rating'));
 		if (!grouped[key]) {
 		grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
@@ -4500,9 +4504,12 @@ async function importMusicBeeXML(input) {
     // On n'utilise PAS artistVariants ici — trop de faux positifs (clés "volées")
     const albumByVariantKey = new Map();
     albums.forEach(a => {
+      // MBID en premier : discriminant parfait pour les homonymes (Weezer Blue vs Green)
+      // On écrase volontairement si un autre album a le même MBID (ne devrait pas arriver)
+      if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
       // ID stable
       if (!albumByVariantKey.has(a.id)) albumByVariantKey.set(a.id, a);
-      // normalizeKey exact
+      // normalizeKey exact — ne pas écraser une entrée déjà indexée par MBID ou id
       const exactKey = normalizeKey(a.artist, a.album);
       if (!albumByVariantKey.has(exactKey)) albumByVariantKey.set(exactKey, a);
       // Discogs nettoyé
@@ -4519,7 +4526,6 @@ async function importMusicBeeXML(input) {
           if (!albumByVariantKey.has(k)) albumByVariantKey.set(k, a);
         });
       }
-      if (a.mb_release_id) albumByVariantKey.set('mbid:' + a.mb_release_id, a);
     });
 	let albumsAdded = 0, albumsUpdated = 0;
 	Object.values(grouped).forEach(g => {
@@ -4540,27 +4546,42 @@ async function importMusicBeeXML(input) {
       };
 
       let existing = null;
-      const candidates = [
-        albumByVariantKey.get(gId),
-        albumByVariantKey.get(gExact),
-        albumByVariantKey.get(gClean),
-        albumByVariantKey.get(gNoThe),
-        g.mbReleaseId ? albumByVariantKey.get('mbid:' + g.mbReleaseId) : null,
-      ];
-      // Various Artists ↔ Various
-      const normArt = normalizeKey(g.artist,'').replace('|||','');
-      if (normArt === 'various' || normArt === 'various artists') {
-        candidates.push(albumByVariantKey.get('various|||' + gAlbumNorm));
-        candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
+      // Priorité 1 : MBID Album (discriminant parfait pour les homonymes)
+      if (g.mbReleaseId) {
+        const byMbid = albumByVariantKey.get('mbid:' + g.mbReleaseId);
+        if (byMbid) existing = byMbid;
       }
-      // En cas d'albums homonymes (même normalizeKey, années différentes : Weezer 1994 vs 2001),
-      // préférer le candidat dont l'année correspond. Calculé APRÈS l'ajout des variantes Various.
-      const validCandidates = [...new Set(candidates.filter(isValidMatch))];
-      if (validCandidates.length > 1 && g.year) {
-        const byYear = validCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
-        if (byYear) existing = byYear;
+      // Priorité 2 : ID stable (inclut déjà le MBID dans stableAlbumId)
+      if (!existing) {
+        const byId = albumByVariantKey.get(gId);
+        if (byId && isValidMatch(byId)) existing = byId;
       }
-      if (!existing) existing = validCandidates[0] || null;
+      if (!existing) {
+        const candidates = [
+          albumByVariantKey.get(gExact),
+          albumByVariantKey.get(gClean),
+          albumByVariantKey.get(gNoThe),
+        ];
+        // Various Artists ↔ Various
+        const normArt = normalizeKey(g.artist,'').replace('|||','');
+        if (normArt === 'various' || normArt === 'various artists') {
+          candidates.push(albumByVariantKey.get('various|||' + gAlbumNorm));
+          candidates.push(albumByVariantKey.get('various artists|||' + gAlbumNorm));
+        }
+        // Parmi les candidats valides, si plusieurs → homonymes sans MBID :
+        // - exclure ceux qui ont un mb_release_id différent du groupe courant (évite la mauvaise fusion)
+        // - puis préférer par année
+        const validCandidates = [...new Set(candidates.filter(isValidMatch))].filter(a => {
+          if (!g.mbReleaseId) return true; // pas de MBID XML → on accepte tous
+          if (!a.mb_release_id) return true; // l'entrée existante n'a pas de MBID → accepter
+          return a.mb_release_id === g.mbReleaseId; // MBID doit correspondre
+        });
+        if (validCandidates.length > 1 && g.year) {
+          const byYear = validCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
+          if (byYear) existing = byYear;
+        }
+        if (!existing) existing = validCandidates[0] || null;
+      }
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
       if (g.forSaleFolder) newFolders.push('forsale');
