@@ -9048,7 +9048,13 @@ async function reimportCSV(input) {
   try {
     const text = await readFile(file);
     const rows = parseCSV(text);
-    let added = 0, updated = 0;
+      let added = 0, updated = 0;
+    // LOG TEMPORAIRE — à supprimer après diagnostic
+    const weezerRows = rows.filter(r => (r['artist']||'').toLowerCase().includes('weezer'));
+    console.log('Weezer dans CSV:', JSON.stringify(weezerRows.map(r => ({
+      artist: r['artist'], title: r['title'], year: r['released'], id: r['release_id']
+    })), null, 2));
+    // FIN LOG
     rows.forEach(row => {
       const artist = row['artist'] || '';
       const album = row['album'] || '';
