@@ -4392,11 +4392,11 @@ async function importMusicBeeXML(input) {
         trackArtist = cleanDiscogsArtist(trackArtist);
 
         if (!trackTitle) return;
-        const mbRecordingId = str(d, 'MBID Track      const mbRecordingId = str(d, 'MusicBrainz Recording Id')
+             const mbRecordingId = str(d, 'MusicBrainz Recording Id')
                          || str(d, 'MusicBrainz Track Id')
                          || str(d, 'MBID Track')
                          || str(d, 'MUSICBRAINZ_TRACKID')
-                         || null;') || str(d, 'MusicBrainz Track Id') || null;
+                         || null;
         isolatedTracks.push({
           title: trackTitle, artist: trackArtist, album,
           format: flac ? 'flac' : mp3 ? 'mp3' : 'autre',
