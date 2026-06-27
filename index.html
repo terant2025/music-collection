@@ -4553,8 +4553,18 @@ async function importMusicBeeXML(input) {
         // Folders : ajouter sans dupliquer
         if (!existing.folders) existing.folders = [];
         newFolders.forEach(f => { if (!existing.folders.includes(f)) existing.folders.push(f); });
-        existing.okFolder = existing.folders.includes('ok');
-        existing.forSale  = existing.folders.includes('forsale');
+		existing.okFolder = existing.folders.includes('ok');
+        // Ne pas écraser forSale s'il a été positionné manuellement
+        // (markForSale met forSale=true mais n'écrit pas dans folders[])
+        // On synchronise folders[] ↔ forSale dans les deux sens
+        if (existing.folders.includes('forsale')) {
+          existing.forSale = true;
+        }
+        // Si forSale était true avant l'import et que le dossier n'est pas dans XML,
+        // conserver le flag ET l'écrire dans folders[] pour la prochaine fois
+        if (existing.forSale && !existing.folders.includes('forsale')) {
+          existing.folders.push('forsale');
+        }
         existing.isCompilation = g.isCompilation || existing.isCompilation;
 		if (g.mbReleaseId !== (existing.mb_release_id || '')) {
           if (g.mbReleaseId) {
@@ -7047,6 +7057,7 @@ function markOkDone(id) {
   const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   a.okFolder = false;
+  if (a.folders) a.folders = a.folders.filter(f => f !== 'ok');
   invalidateCache(); saveToStorage(); renderOkAlbums(); updateNavBadges();
 }
 
@@ -7081,6 +7092,8 @@ function markForSale(id) {
   const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   a.forSale = true;
+  if (!a.folders) a.folders = [];
+  if (!a.folders.includes('forsale')) a.folders.push('forsale');
   invalidateCache(); saveToStorage(); renderDiscographie(); renderForSale(); updateNavBadges();
   toast(`${a.artist} — ${a.album} marqué à vendre`);
 }
@@ -7088,6 +7101,7 @@ function unmarkForSale(id) {
   const a = albums.find(x => x.id === id || x.id === String(id));
   if (!a) return;
   a.forSale = false;
+  if (a.folders) a.folders = a.folders.filter(f => f !== 'forsale');
   invalidateCache(); saveToStorage(); renderForSale(); updateNavBadges();
 }
 
