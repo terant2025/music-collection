@@ -4120,7 +4120,7 @@ async function importDiscogs(input) {
 
       // Appariement par discogsId d'abord (le plus fiable), puis par variantes artiste+album
       let existing = discogsId ? albums.find(a => a.discogsId === discogsId) : null;
-      if (!existing) {
+     if (!existing) {
         const albumNorm = normalizeKey('', album).replace('|||', '');
         for (const av of artistVariants(artist)) {
           const candidate = albums.find(a => normalizeKey(a.artist, a.album) === av + '|||' + albumNorm
@@ -4129,11 +4129,11 @@ async function importDiscogs(input) {
           if (candidate && discogsId && candidate.discogsId && candidate.discogsId !== discogsId) continue;
           if (candidate) { existing = candidate; break; }
         }
+        // Fallback clé standard — même vérification
         if (!existing) {
           const candidate = albums.find(a => normalizeKey(a.artist, a.album) === normalizeKey(artist, album));
           if (candidate && discogsId && candidate.discogsId && candidate.discogsId !== discogsId) {
-            // Albums homonymes avec Discogs IDs différents → créer une nouvelle entrée avec ID unique
-            existing = null; // forcer la création
+            // Albums homonymes avec discogsIds différents → laisser existing = null pour créer
           } else {
             existing = candidate;
           }
