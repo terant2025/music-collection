@@ -4556,11 +4556,14 @@ async function importMusicBeeXML(input) {
         existing.okFolder = existing.folders.includes('ok');
         existing.forSale  = existing.folders.includes('forsale');
         existing.isCompilation = g.isCompilation || existing.isCompilation;
-        if (g.mbReleaseId && !existing.mb_release_id) {
-          existing.mb_release_id = g.mbReleaseId;
-          // Mettre à jour l'ID stable si on a maintenant un MBID
-          const newId = stableAlbumId(existing.artist, existing.album, g.mbReleaseId);
-          if (newId !== existing.id) existing.id = newId;
+		if (g.mbReleaseId !== (existing.mb_release_id || '')) {
+          if (g.mbReleaseId) {
+            existing.mb_release_id = g.mbReleaseId;
+            const newId = stableAlbumId(existing.artist, existing.album, g.mbReleaseId);
+            if (newId !== existing.id) existing.id = newId;
+          } else {
+            existing.mb_release_id = undefined;
+          }
         }
         albumsUpdated++;
       } else {
