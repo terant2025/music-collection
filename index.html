@@ -2952,7 +2952,7 @@ function esc(s) {
 // Échappe un id (normalizeKey texte) pour usage dans un attribut onclick HTML
 // ex: "o'brother|||where art thou" → "o\\'brother|||where art thou"
 function sid(id) {
-  return String(id||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  return String(id||'').replace(/\\/g,'\\\\').replace(/[\r\n]/g,' ').replace(/'/g,"\\'");
 }
 
 function updateStats() {
@@ -4273,8 +4273,14 @@ async function importMusicBeeXML(input) {
 	
 		
       // Champs Picard MusicBrainz
-      const mbidAlbum  = str(d, 'MBID Album');
-      const mbidArtist = str(d, 'MBID Artiste');
+      const mbidAlbum  = str(d, 'MusicBrainz Album Id')
+                      || str(d, 'MBID Album')
+                      || str(d, 'MUSICBRAINZ_ALBUMID')
+                      || str(d, 'MusicBrainz Release Id')
+                      || str(d, 'MusicBrainz Release Group Id');
+      const mbidArtist = str(d, 'MusicBrainz Artist Id')
+                      || str(d, 'MBID Artiste')
+                      || str(d, 'MUSICBRAINZ_ARTISTID');
       const isCompilTag = bool(d, 'Compilation');
       const composer   = str(d, 'Composer');
       const discNum    = num(d, 'Disc Number') || 1;
@@ -4386,7 +4392,11 @@ async function importMusicBeeXML(input) {
         trackArtist = cleanDiscogsArtist(trackArtist);
 
         if (!trackTitle) return;
-        const mbRecordingId = str(d, 'MBID Track') || str(d, 'MusicBrainz Track Id') || null;
+        const mbRecordingId = str(d, 'MBID Track      const mbRecordingId = str(d, 'MusicBrainz Recording Id')
+                         || str(d, 'MusicBrainz Track Id')
+                         || str(d, 'MBID Track')
+                         || str(d, 'MUSICBRAINZ_TRACKID')
+                         || null;') || str(d, 'MusicBrainz Track Id') || null;
         isolatedTracks.push({
           title: trackTitle, artist: trackArtist, album,
           format: flac ? 'flac' : mp3 ? 'mp3' : 'autre',
@@ -6333,7 +6343,11 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
       last_played:     dateStr ? dateStr(d, 'Last Played') || null : null,
       date_added:      dateStr ? dateStr(d, 'Date Added')  || null : null,
       composer:        str(d, 'Composer')    || null,
-      mb_recording_id: str(d, 'MBID Track')  || str(d, 'MusicBrainz Track Id') || null,
+          mb_recording_id: str(d, 'MusicBrainz Recording Id')
+                    || str(d, 'MusicBrainz Track Id')
+                    || str(d, 'MBID Track')
+                    || str(d, 'MUSICBRAINZ_TRACKID')
+                    || null,
       disc_number:     num(d, 'Disc Number') || null,
       rating:          (() => { const r = num(d, 'Rating'); return r ? Math.round(r / 20) : 0; })(),
     });
@@ -8135,6 +8149,7 @@ function renderDiscographie() {
     // Supports liés
     const numBadges = [];
     const fmt = a.format;
+    if (a.cd || a.has_cd) numBadges.push('<span class="badge badge-cd">💿 CD</span>');
     if (fmt==='flac' || a.flac || (linked && (linked.format==='flac'||linked.flac))) numBadges.push('<span class="badge badge-flac">FLAC</span>');
     if (fmt==='mp3'  || a.mp3  || (linked && (linked.format==='mp3' ||linked.mp3)))  numBadges.push('<span class="badge badge-mp3">MP3</span>');
     if (fmt==='digital'||a.digital||(linked&&(linked.format==='digital'||linked.digital))) numBadges.push('<span class="badge badge-digital">Digital</span>');
@@ -8438,9 +8453,9 @@ function closeRYMAssocModal() {
 
 function renderRYMAssocList() {
   const q = document.getElementById('rym-assoc-search').value.toLowerCase();
-  const usedAlbumIds = new Set(rymAssociations.map(a => a.albumId));
+  const usedAlbumKeys = new Set(rymAssociations.map(a => a.albumKey));
   const candidates = albums
-    .filter(a => (a.cd || a.flac || a.mp3 || a.digital) && !usedAlbumIds.has(a.id))
+    .filter(a => (a.cd || a.flac || a.mp3 || a.digital) && !usedAlbumKeys.has(a.id))
     .filter(a => !q || (a.artist + ' ' + a.album).toLowerCase().includes(q))
     .sort((a, b) => a.artist.localeCompare(b.artist, 'fr'))
     .slice(0, 50);
