@@ -4579,6 +4579,10 @@ async function importMusicBeeXML(input) {
           if (!a.mb_release_id) return true; // pas encore de MBID → candidat valide, on le prendra par année
           return a.mb_release_id === g.mbReleaseId;
         });
+        // LOG diagnostic homonymes
+        if (validCandidates.length > 1) {
+          console.log(`[homonyme] "${g.artist} — ${g.album}" (${g.year}) MBID=${g.mbReleaseId||'none'} → ${validCandidates.length} candidats:`, validCandidates.map(a => `${a.year} id=${a.id} mb=${a.mb_release_id||'none'}`));
+        }
         // Départager par année si plusieurs candidats
         if (validCandidates.length > 1 && g.year) {
           const byYear = validCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
