@@ -8158,12 +8158,17 @@ function discoFilteredList() {
   if (filter === 'no-cd') {
     list = getNumericWithoutCD().filter(a => !a.okFolder && !a.forSale);
   } else {
-    list = albums.filter(a =>
-      (a.cd || a.has_cd || a.folders?.includes('discographie'))
+    // Construire le Set des numKeys associés pour masquer les doublons liés
+    const linkedNumKeySet = new Set(associations.map(a => String(a.numKey)));
+    list = albums.filter(a => {
+      // Exclure les entrées numériques-sans-CD qui sont déjà liées à un CD via associations[]
+      // (elles sont représentées par leur entrée CD, les afficher en double crée de la confusion)
+      if (!(a.cd || a.has_cd) && linkedNumKeySet.has(String(a.id))) return false;
+      return (a.cd || a.has_cd || a.folders?.includes('discographie'))
       && !stockKeys.has(normalizeKey(a.artist, a.album))
       && !a.okFolder
-      && !a.forSale
-    );
+      && !a.forSale;
+    });
     if (filter === 'missing') list = list.filter(a => !hasDigitalBackup(a));
     if (filter === 'ok') list = list.filter(a => hasDigitalBackup(a));
   }
