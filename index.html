@@ -4151,12 +4151,18 @@ async function importDiscogs(input) {
       if (existing) {
         if (isCd) existing.cd = true;
         if (rating) existing.discogsRating = Math.min(5, rating);
-        if (discogsId && !existing.discogsId) existing.discogsId = discogsId;
+        if (discogsId && !existing.discogsId) {
+          existing.discogsId = discogsId;
+          // Si d'autres albums ont le même normalizeKey, s'assurer que cet existing a un ID unique
+          const hasHomonym = albums.some(a => a !== existing && normalizeKey(a.artist, a.album) === baseKey && a.discogsId && a.discogsId !== discogsId);
+          if (hasHomonym && existing.id === baseKey) {
+            existing.id = baseKey + '|||dc:' + discogsId;
+          }
+        }
         if (label && !existing.label) existing.label = label;
         if (catno && !existing.catno) existing.catno = catno;
-        // Mettre à jour l'artiste avec le nom nettoyé si différent
         if (existing.artist !== artist && cleanDiscogsArtist(existing.artist) === cleanDiscogsArtist(existing.artist)) {
-          existing.artistRaw = artistRaw; // garder le nom brut Discogs
+          existing.artistRaw = artistRaw;
         }
         updated++;
       } else {
@@ -4637,7 +4643,8 @@ async function importMusicBeeXML(input) {
 		if (g.mbReleaseId !== (existing.mb_release_id || '')) {
           if (g.mbReleaseId) {
             existing.mb_release_id = g.mbReleaseId;
-            const newId = stableAlbumId(existing.artist, existing.album, g.mbReleaseId);
+            // Passer le discogsId existant pour préserver le suffixe |||dc: des homonymes
+            const newId = stableAlbumId(existing.artist, existing.album, g.mbReleaseId, existing.discogsId);
             if (newId !== existing.id) existing.id = newId;
           } else {
             existing.mb_release_id = undefined;
