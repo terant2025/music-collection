@@ -8413,7 +8413,8 @@ function openAssocModalReverse(albumId) {
     document.getElementById('assoc-cd-info').innerHTML =
       `<strong>Numérique :</strong> ${esc(a.album)} — ${esc(a.artist)} — chercher le CD correspondant`;
     const searchEl = document.getElementById('assoc-search');
-    searchEl.value = a.artist || '';
+    // Pré-remplir avec le titre de l'album (plus fiable que l'artiste pour les artistes avec variantes)
+    searchEl.value = a.album || '';
     searchEl.oninput = () => (_assocReverseNumKey ? renderAssocListReverse() : renderAssocList());
     renderAssocListReverse();
     document.getElementById('modal-assoc').classList.add('open');
@@ -8426,6 +8427,7 @@ let _assocReverseNumKey = null;
 function renderAssocListReverse() {
   const q = document.getElementById('assoc-search').value.toLowerCase().trim();
   const numAlbum = albumByKey(_assocReverseNumKey);
+  const numAlbumNorm = normalizeKey('', numAlbum?.album || '').replace('|||','');
   const candidates = albums
     .filter(a => a.cd || a.has_cd)
     .filter(a => {
@@ -8437,13 +8439,18 @@ function renderAssocListReverse() {
       ].join(' ').toLowerCase();
       return terms.includes(q);
     })
-    .sort((a, b) => cleanDiscogsArtist(a.artist).localeCompare(cleanDiscogsArtist(b.artist), 'fr'));
+    .sort((a, b) => {
+      // Trier par similarité de titre album d'abord
+      const aSim = normalizeKey('', a.album).replace('|||','') === numAlbumNorm ? 1 : 0;
+      const bSim = normalizeKey('', b.album).replace('|||','') === numAlbumNorm ? 1 : 0;
+      if (bSim !== aSim) return bSim - aSim;
+      return cleanDiscogsArtist(a.artist).localeCompare(cleanDiscogsArtist(b.artist), 'fr');
+    });
   const el = document.getElementById('assoc-list');
   if (!candidates.length) {
     el.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:12px">Aucun CD trouvé</div>';
     return;
   }
-  const numAlbumNorm = normalizeKey('', numAlbum?.album || '').replace('|||','');
   el.innerHTML = candidates.map(a => {
     const similar = normalizeKey('', a.album).replace('|||','') === numAlbumNorm;
     return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociationReverse('${sid(a.id)}')">
