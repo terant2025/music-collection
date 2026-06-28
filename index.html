@@ -4553,9 +4553,21 @@ async function importMusicBeeXML(input) {
 
       let existing = null;
       // Priorité 1 : MBID Album (discriminant parfait pour les homonymes)
+      // GARDE-FOUS :
+      // a) Si l'entrée trouvée a déjà un mb_release_id DIFFÉRENT → MBID croisé → ignorer
+      // b) Si l'entrée n'a pas de mb_release_id mais une année différente ET qu'un autre
+      //    homonyme existe → probable état corrompu → laisser la Priorité 3 (allHomonyms+année) décider
       if (g.mbReleaseId) {
         const byMbid = albumByVariantKey.get('mbid:' + g.mbReleaseId);
-        if (byMbid) existing = byMbid;
+        if (byMbid) {
+          const mbOk = !byMbid.mb_release_id || byMbid.mb_release_id === g.mbReleaseId;
+          const yearOk = !g.year || !byMbid.year || byMbid.year.slice(0,4) === g.year.slice(0,4);
+          // N'accepter que si MBID correct ET (année compatible OU pas d'autre candidat homonyme)
+          const hasOtherHomonym = albums.some(a => a !== byMbid && isValidMatch(a));
+          if (mbOk && (yearOk || !hasOtherHomonym)) {
+            existing = byMbid;
+          }
+        }
       }
       // Priorité 2 : ID stable (inclut déjà le MBID dans stableAlbumId)
       if (!existing) {
