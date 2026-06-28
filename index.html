@@ -4600,6 +4600,10 @@ async function importMusicBeeXML(input) {
       const fmt = g.flac ? 'flac' : g.mp3 ? 'mp3' : g.digital ? 'digital' : null;
 
       if (existing) {
+        // LOG diagnostic Weezer
+        if (g.artist === 'Weezer' && g.album === 'Weezer') {
+          console.log(`[weezer] groupe year=${g.year} mbid=${g.mbReleaseId} flac=${g.flac} mp3=${g.mp3} fmt=${g.flac?'flac':g.mp3?'mp3':g.digital?'digital':null} → existing id=${existing.id} year=${existing.year} mb=${existing.mb_release_id||'none'}`);
+        }
         // Mettre à jour toujours depuis XML
         if (g.year)  existing.year  = g.year;
         if (g.genre) existing.genre = g.genre;
