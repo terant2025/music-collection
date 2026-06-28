@@ -2996,13 +2996,15 @@ function updateArtistFilter() {
 }
 
 function rateAlbum(id, note) {
-  const a = albums.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (a) { a.note = a.note === note ? 0 : note; renderAlbums(); saveToStorage(); }
 }
 
 function deleteAlbum(id) {
   if (!confirm('Supprimer cet album ?')) return;
-  albums = albums.filter(a => a.id !== id && a.id !== String(id));
+  const realId = unsid(id);
+  albums = albums.filter(a => a.id !== realId && a.id !== String(realId));
   renderAlbums();
   saveToStorage();
   toast('Album supprimé');
@@ -3447,7 +3449,8 @@ function renderLastfmAssocList() {
 
 function applyLastfmAssoc(albumId) {
   if (!_lastfmAssocTarget) return;
-  const album = albums.find(a => a.id === albumId);
+  const realId = unsid(albumId);
+  const album = albums.find(a => a.id === realId);
   if (!album) return;
   if (!album.lastfmAliases) album.lastfmAliases = [];
   const key = normalizeKey(_lastfmAssocTarget.artist, _lastfmAssocTarget.album);
@@ -3737,9 +3740,9 @@ function renderTrackAssocList() {
     const srcLabel = t.type === 'isolated'
       ? `<span class="badge ${fmtBadge[t.format]||'badge-digital'}" style="font-size:9px">${(t.format||'?').toUpperCase()}</span>`
       : `<span class="badge badge-cd" style="font-size:9px;background:var(--accent-dim);color:var(--accent);border-color:rgba(200,240,100,0.2)">Album</span>`;
-    const safeTitle = (t.title || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const safeId = String(t.id || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const safeAlbumId = String(t.albumId || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const safeTitle = sid(t.title || '');
+    const safeId = sid(String(t.id || ''));
+    const safeAlbumId = sid(String(t.albumId || ''));
     const onclick = t.type === 'isolated'
       ? `applyTrackAssoc('isolated','${safeId}','')`
       : `applyTrackAssoc('album','${safeAlbumId}','${safeTitle}')`;
@@ -3755,19 +3758,21 @@ function renderTrackAssocList() {
 
 function applyTrackAssoc(type, idOrAlbumId, trackTitle) {
   if (!_trackAssocTarget) return;
+  const realId = unsid(idOrAlbumId);
+  const realTitle = unsid(trackTitle);
   const key = normalizeKey(_trackAssocTarget.artist, _trackAssocTarget.track);
   if (!_lastfmTrackStatus[key]) _lastfmTrackStatus[key] = {};
   _lastfmTrackStatus[key].status = 'linked';
   let label = '';
   if (type === 'isolated') {
-    _lastfmTrackStatus[key].linkedTrackId = idOrAlbumId;
-    const t = tracks.find(x => String(x.id) === String(idOrAlbumId));
+    _lastfmTrackStatus[key].linkedTrackId = realId;
+    const t = tracks.find(x => String(x.id) === String(realId));
     label = t ? `${t.artist} — ${t.title}` : 'morceau isolé';
   } else {
-    _lastfmTrackStatus[key].linkedAlbumId = idOrAlbumId;
-    _lastfmTrackStatus[key].linkedTrackTitle = trackTitle;
-    const a = albums.find(x => x.id === idOrAlbumId);
-    label = a ? `${a.artist} — ${trackTitle} (${a.album})` : trackTitle;
+    _lastfmTrackStatus[key].linkedAlbumId = realId;
+    _lastfmTrackStatus[key].linkedTrackTitle = realTitle;
+    const a = albums.find(x => x.id === realId);
+    label = a ? `${a.artist} — ${realTitle} (${a.album})` : realTitle;
   }
   document.getElementById('modal-track-assoc').classList.remove('open');
   persistLastfmTrackStatus();
@@ -3862,9 +3867,10 @@ function openAlbumModal() {
 }
 
 function editAlbum(id) {
-  const a = albums.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
-  document.getElementById('edit-id').value = id;
+  document.getElementById('edit-id').value = realId;
   document.getElementById('modal-album-title').textContent = 'Modifier l\'album';
   document.getElementById('f-artist').value = a.artist;
   document.getElementById('f-album').value = a.album;
@@ -7150,14 +7156,15 @@ function renderOkAlbums() {
       </div>
     </td>
     <td style="display:flex;gap:4px">
-      <button class="btn btn-sm" onclick="addToWishlist('${sid(a.artist)}','${sid(a.album)}','${a.year||''}','manual',${a.plays||0},0,'')" title="Wishlist">🎯</button>
+      <button class="btn btn-sm" onclick="addToWishlistFromAlbumId('${sid(a.id)}')" title="Wishlist">🎯</button>
       <button class="btn btn-sm btn-danger" onclick="markOkDone('${sid(a.id)}')" title="Retirer de Ok">✕</button>
     </td>
   </tr>`).join('');
 }
 
 function markOkDone(id) {
-  const a = albums.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
   a.okFolder = false;
   if (a.folders) a.folders = a.folders.filter(f => f !== 'ok');
@@ -7192,7 +7199,8 @@ function renderForSale() {
 }
 
 function markForSale(id) {
-  const a = albums.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
   a.forSale = true;
   if (!a.folders) a.folders = [];
@@ -7201,7 +7209,8 @@ function markForSale(id) {
   toast(`${a.artist} — ${a.album} marqué à vendre`);
 }
 function unmarkForSale(id) {
-  const a = albums.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
   a.forSale = false;
   if (a.folders) a.folders = a.folders.filter(f => f !== 'forsale');
@@ -7745,8 +7754,16 @@ function addToWishlistFromRYMIdx(idx) {
   const plays = (lastfmData.find(d => normalizeKey(d.artist, d.album) === normalizeKey(r.artist, r.album)) || {}).plays || 0;
   addToWishlist(r.artist, r.album, r.year || '', 'rym', plays, r.rating || 0, '');
 }
+function addToWishlistFromAlbumId(albumId) {
+  const realId = unsid(albumId);
+  const a = albums.find(x => x.id === realId);
+  if (!a) return;
+  addToWishlist(a.artist, a.album, a.year || '', 'manual', a.plays || 0, 0, '');
+}
+
 function addToWishlistFromStock(stockId) {
-  const s = stockItems.find(x => x.id === stockId || x.id === String(stockId));
+  const realId = unsid(stockId);
+  const s = stockItems.find(x => x.id === realId || x.id === String(realId));
   if (!s) return;
   addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, 0, s.notes || '');
 }
@@ -7827,10 +7844,11 @@ let _stockNote = 0;
 
 function openStockModal(id) {
   _stockNote = 0;
-  document.getElementById('s-edit-id').value = id || '';
-  document.getElementById('modal-stock-title').textContent = id ? 'Modifier' : 'Ajouter au stock';
-  if (id) {
-    const s = stockItems.find(x => x.id === id);
+  const realId = id ? unsid(id) : null;
+  document.getElementById('s-edit-id').value = realId || '';
+  document.getElementById('modal-stock-title').textContent = realId ? 'Modifier' : 'Ajouter au stock';
+  if (realId) {
+    const s = stockItems.find(x => x.id === realId);
     if (s) {
       document.getElementById('s-artist').value = s.artist;
       document.getElementById('s-album').value = s.album;
@@ -7885,8 +7903,9 @@ function saveStockItem() {
 
 function deleteStockItem(id) {
   if (!confirm('Retirer cet album du stock ?')) return;
-  albums = albums.filter(a => a.id !== id && a.id !== String(id));
-  stockItems = stockItems.filter(s => s.id !== id && s.id !== String(id));
+  const realId = unsid(id);
+  albums = albums.filter(a => a.id !== realId && a.id !== String(realId));
+  stockItems = stockItems.filter(s => s.id !== realId && s.id !== String(realId));
   invalidateCache();
   renderStock();
   if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
@@ -7895,7 +7914,8 @@ function deleteStockItem(id) {
 }
 
 function moveStockToCollection(id) {
-  const s = stockItems.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const s = stockItems.find(x => x.id === realId || x.id === String(realId));
   if (!s) return;
   const fmt = s.format || 'flac';
   albums.push({
@@ -7903,7 +7923,7 @@ function moveStockToCollection(id) {
     cd: false, flac: fmt === 'flac', mp3: fmt === 'mp3', digital: fmt === 'digital' || fmt === 'autre',
     note: s.note || 0, plays: 0, notes: s.notes || ''
   });
-  stockItems = stockItems.filter(x => x.id !== id);
+  stockItems = stockItems.filter(x => x.id !== realId);
   invalidateCache();
   renderStock();
   saveToStorage();
@@ -7949,7 +7969,7 @@ function renderStock() {
   ).join('');
 
   tbody.innerHTML = list.map(s => `
-    <tr onclick="openStockModal('${s.id}')" style="cursor:pointer">
+    <tr onclick="openStockModal('${sid(s.id)}')" style="cursor:pointer">
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${initials(s.artist)}</div>
@@ -7964,15 +7984,16 @@ function renderStock() {
       <td><span class="badge ${fmtBadge[s.format]||'badge-digital'}">${(s.format||'?').toUpperCase()}</span></td>
       <td><div class="stars">${stars(s)}</div></td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px">
-        <button class="btn btn-sm" onclick="moveStockToCollection('${s.id}')" title="Déplacer vers la collection">→ Collecter</button>
-        <button class="btn btn-sm" onclick="addToWishlistFromStock('${s.id}')" title="Ajouter à la wishlist">🎯</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteStockItem('${s.id}')">✕</button>
+        <button class="btn btn-sm" onclick="moveStockToCollection('${sid(s.id)}')" title="Déplacer vers la collection">→ Collecter</button>
+        <button class="btn btn-sm" onclick="addToWishlistFromStock('${sid(s.id)}')" title="Ajouter à la wishlist">🎯</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteStockItem('${sid(s.id)}')">✕</button>
       </td>
     </tr>`).join('');
 }
 
 function rateStock(id, note) {
-  const s = stockItems.find(x => x.id === id || x.id === String(id));
+  const realId = unsid(id);
+  const s = stockItems.find(x => x.id === realId || x.id === String(realId));
   if (s) {
     s.note = s.note === note ? 0 : note;
     renderStock();
@@ -8276,7 +8297,7 @@ function renderDiscographie() {
     if (linked) numBadges.push(`<span class="badge" style="background:var(--purple-dim);color:var(--purple);border:1px solid rgba(176,140,255,0.2)">🔗 ${esc(linked.album)}</span>`);
 
     // Bouton associer — passer l'id (texte) entre guillemets
-    const safeId = aKey.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const safeId = sid(aKey);
     const assocBtn = isCD
       ? `<button class="btn btn-sm" onclick="openAssocModal('${safeId}')" title="Associer à une entrée numérique">🔗 Associer</button>`
       : (isDigital && !linkedKeys.length)
@@ -8342,7 +8363,8 @@ function nextDiscoPage() {
 let _assocTargetKey = null; // cdKey texte
 
 function openAssocModal(albumId) {
-  const a = albums.find(x => x.id === albumId);
+  const realId = unsid(albumId);
+  const a = albums.find(x => x.id === realId);
   if (!a) return;
   _assocTargetKey = a.id;
   document.getElementById('assoc-cd-info').innerHTML =
@@ -8362,7 +8384,8 @@ function closeAssocModal() {
 }
 
 function openAssocModalReverse(albumId) {
-  const a = albums.find(x => x.id === albumId);
+  const realId = unsid(albumId);
+  const a = albums.find(x => x.id === realId);
   if (!a) return;
   const numKey = a.id;
   const cdCandidates = albums
@@ -8436,11 +8459,12 @@ function renderAssocListReverse() {
 function applyAssociationReverse(cdKey) {
   const numKey = _assocReverseNumKey;
   if (!numKey) return;
-  associations.push({ cdKey, numKey });
+  const realCdKey = unsid(cdKey);
+  associations.push({ cdKey: realCdKey, numKey });
   _assocReverseNumKey = null;
   document.getElementById('modal-assoc').classList.remove('open');
   invalidateCache(); saveToStorage(); renderDiscographie();
-  const cdA = albumByKey(cdKey);
+  const cdA = albumByKey(realCdKey);
   toast(`Association créée : ${cdA?.artist} — ${cdA?.album}`);
 }
 
@@ -8498,8 +8522,9 @@ function renderAssocList() {
 
 function applyAssociation(numKey) {
   if (!_assocTargetKey) return;
+  const realNumKey = unsid(numKey);
   associations = associations.filter(a => a.cdKey !== _assocTargetKey);
-  associations.push({ cdKey: _assocTargetKey, numKey });
+  associations.push({ cdKey: _assocTargetKey, numKey: realNumKey });
   closeAssocModal();
   renderDiscographie();
   saveToStorage();
@@ -8508,7 +8533,8 @@ function applyAssociation(numKey) {
 
 function removeAssociation(albumId) {
   // albumId peut être cdKey ou numKey selon le contexte
-  associations = associations.filter(a => a.cdKey !== albumId && a.numKey !== albumId);
+  const realId = unsid(albumId);
+  associations = associations.filter(a => a.cdKey !== realId && a.numKey !== realId);
   renderDiscographie();
   saveToStorage();
   toast('Association supprimée');
@@ -8622,8 +8648,9 @@ function renderRYMAssocList() {
 
 function applyRYMAssociation(albumId) {
   if (!_rymAssocTarget) return;
-  const album = albums.find(a => a.id === albumId);
-  const albumKey = album ? album.id : albumId; // id est déjà la clé stable
+  const realId = unsid(albumId);
+  const album = albums.find(a => a.id === realId);
+  const albumKey = album ? album.id : realId; // id est déjà la clé stable
   rymAssociations = rymAssociations.filter(a => a.rymKey !== _rymAssocTarget);
   rymAssociations.push({ rymKey: _rymAssocTarget, albumKey });
   invalidateCache();
@@ -9531,9 +9558,10 @@ function loadDemo() {
 let _rfcTargetAlbumId = null; // album de la collection qu'on veut lier à RYM
 
 function openRYMAssocFromCollection(albumId) {
-  const album = albums.find(a => a.id === albumId);
+  const realId = unsid(albumId);
+  const album = albums.find(a => a.id === realId);
   if (!album) return;
-  _rfcTargetAlbumId = albumId;
+  _rfcTargetAlbumId = realId;
 
   document.getElementById('rfc-album-info').innerHTML =
     `<strong>Collection :</strong> ${esc(album.album)} — ${esc(album.artist)}`
