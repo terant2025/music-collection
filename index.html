@@ -449,6 +449,49 @@ input[type="file"] { display: none; }
 .save-indicator.error .save-dot { background: var(--red); }
 .save-indicator.error { color: var(--red); }
 
+/* Filtre note inline */
+.note-filter {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  height: 32px;
+}
+.note-filter select {
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 0 5px;
+  height: 100%;
+  border-radius: 0;
+  outline: none;
+  cursor: pointer;
+}
+.note-filter input[type="number"] {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 0 5px;
+  width: 44px;
+  height: 100%;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.note-filter input[type="number"]::-webkit-inner-spin-button,
+.note-filter input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+.note-filter:focus-within { border-color: var(--border2); }
+.note-filter-label {
+  font-size: 10px; font-family: var(--mono); color: var(--text3);
+  padding: 0 4px 0 6px; white-space: nowrap; pointer-events: none;
+}
+
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .save-indicator.saving .save-dot { animation: pulse 1s infinite; }
 
@@ -523,14 +566,8 @@ input[type="file"] { display: none; }
     <span class="nav-icon">🎼</span> Tous les morceaux
     <span class="nav-badge" id="nav-all-tracks-count">0</span>
   </div>
-  <div class="nav-item" onclick="nav('album-tracks')">
-    <span class="nav-icon">💿</span> Morceaux des albums
-    <span class="nav-badge" id="nav-album-tracks-count">0</span>
-  </div>
-  <div class="nav-item" onclick="nav('tracks')">
-    <span class="nav-icon">🎵</span> Morceaux isolés
-    <span class="nav-badge" id="nav-tracks-count">0</span>
-  </div>
+  <span id="nav-album-tracks-count" style="display:none"></span>
+  <span id="nav-tracks-count" style="display:none"></span>
   <div class="nav-item" onclick="nav('track-wishlist')">
     <span class="nav-icon">🎯</span> Wishlist morceaux
     <span class="nav-badge" id="nav-track-wish-count">0</span>
@@ -620,21 +657,32 @@ input[type="file"] { display: none; }
         <select id="filter-genre" onchange="renderAlbums()">
           <option value="">Tous genres</option>
         </select>
-        <select id="filter-note" onchange="renderAlbums()">
-          <option value="">Note MB</option>
-          <option value="5">MB ★★★★★</option>
-          <option value="4">MB ★★★★+</option>
-          <option value="3">MB ★★★+</option>
-          <option value="0">MB non notés</option>
-        </select>
-        <select id="filter-rym-note" onchange="renderAlbums()">
-          <option value="">Note RYM</option>
-          <option value="4.5">RYM ≥ 4.5</option>
-          <option value="4">RYM ≥ 4.0</option>
-          <option value="3.5">RYM ≥ 3.5</option>
-          <option value="3">RYM ≥ 3.0</option>
-          <option value="0">RYM non notés</option>
-        </select>
+        <div class="note-filter" title="Note MusicBee">
+          <span class="note-filter-label">MB</span>
+          <select id="filter-note-op" onchange="onNoteOpChange('filter-note-op','filter-note-val');renderAlbums()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderAlbums()" style="display:none">
+        </div>
+        <div class="note-filter" title="Note RYM">
+          <span class="note-filter-label">RYM</span>
+          <select id="filter-rym-note-op" onchange="onNoteOpChange('filter-rym-note-op','filter-rym-note-val');renderAlbums()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-rym-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderAlbums()" style="display:none">
+        </div>
         <input id="filter-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <select id="filter-min-plays" onchange="renderAlbums()">
           <option value="">Écoutes</option>
@@ -779,28 +827,45 @@ input[type="file"] { display: none; }
         <select id="filter-disco-genre" onchange="renderDiscographie()">
           <option value="">Tous genres</option>
         </select>
-        <select id="filter-disco-note" onchange="renderDiscographie()">
-          <option value="">Note MB</option>
-          <option value="5">MB ★★★★★</option>
-          <option value="4">MB ★★★★+</option>
-          <option value="3">MB ★★★+</option>
-          <option value="0">MB non notés</option>
-        </select>
-        <select id="filter-disco-dc-note" onchange="renderDiscographie()">
-          <option value="">Note DC</option>
-          <option value="5">DC ★★★★★</option>
-          <option value="4">DC ★★★★+</option>
-          <option value="3">DC ★★★+</option>
-          <option value="0">DC non notés</option>
-        </select>
-        <select id="filter-disco-rym-note" onchange="renderDiscographie()">
-          <option value="">Note RYM</option>
-          <option value="4.5">RYM ≥ 4.5</option>
-          <option value="4">RYM ≥ 4.0</option>
-          <option value="3.5">RYM ≥ 3.5</option>
-          <option value="3">RYM ≥ 3.0</option>
-          <option value="0">RYM non notés</option>
-        </select>
+        <div class="note-filter" title="Note MusicBee">
+          <span class="note-filter-label">MB</span>
+          <select id="filter-disco-note-op" onchange="onNoteOpChange('filter-disco-note-op','filter-disco-note-val');renderDiscographie()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-disco-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderDiscographie()" style="display:none">
+        </div>
+        <div class="note-filter" title="Note Discogs">
+          <span class="note-filter-label">DC</span>
+          <select id="filter-disco-dc-op" onchange="onNoteOpChange('filter-disco-dc-op','filter-disco-dc-val');renderDiscographie()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-disco-dc-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderDiscographie()" style="display:none">
+        </div>
+        <div class="note-filter" title="Note RYM">
+          <span class="note-filter-label">RYM</span>
+          <select id="filter-disco-rym-op" onchange="onNoteOpChange('filter-disco-rym-op','filter-disco-rym-val');renderDiscographie()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-disco-rym-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderDiscographie()" style="display:none">
+        </div>
         <select id="filter-disco-min-plays" onchange="renderDiscographie()">
           <option value="">Écoutes</option>
           <option value="1">≥ 1</option>
@@ -1242,13 +1307,19 @@ input[type="file"] { display: none; }
           <option value="isolated">Top titres</option>
           <option value="discogs">Dans Discogs</option>
         </select>
-        <select id="filter-at-note" onchange="renderAllTracks()">
-          <option value="">Note MB</option>
-          <option value="5">MB ★★★★★</option>
-          <option value="4">MB ★★★★+</option>
-          <option value="3">MB ★★★+</option>
-          <option value="0">Non notés</option>
-        </select>
+        <div class="note-filter" title="Note MusicBee">
+          <span class="note-filter-label">MB</span>
+          <select id="filter-at-note-op" onchange="onNoteOpChange('filter-at-note-op','filter-at-note-val');renderAllTracks()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-at-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderAllTracks()" style="display:none">
+        </div>
         <select id="filter-at-min-plays" onchange="renderAllTracks()">
           <option value="">Écoutes</option>
           <option value="1">≥ 1</option>
@@ -2750,6 +2821,29 @@ function lookupRym(artist, album, albumId) {
   return undefined;
 }
 
+// Évalue un filtre note inline [op, val] contre une valeur réelle
+// op: 'gte'|'gt'|'eq'|'lte'|'none'|'any'|''
+function matchNoteFilter(op, valStr, actual) {
+  if (!op) return true;
+  const v = parseFloat(valStr);
+  if (op === 'none') return !actual || actual === 0;
+  if (op === 'any')  return !!(actual && actual > 0);
+  if (isNaN(v)) return true; // valeur pas encore saisie → pas de filtre
+  if (op === 'gte') return (actual || 0) >= v;
+  if (op === 'gt')  return (actual || 0) >  v;
+  if (op === 'eq')  return Math.abs((actual || 0) - v) < 0.01;
+  if (op === 'lte') return (actual || 0) <= v && (actual || 0) > 0;
+  return true;
+}
+
+// Affiche/masque le champ valeur selon l'opérateur sélectionné
+function onNoteOpChange(opId, valId) {
+  const op  = document.getElementById(opId)?.value  || '';
+  const inp = document.getElementById(valId);
+  if (!inp) return;
+  inp.style.display = (op && op !== 'none' && op !== 'any') ? '' : 'none';
+}
+
 function filteredAlbums() {
   const q = document.getElementById('global-search').value.toLowerCase();
   const af = (document.getElementById('filter-artist').value || '').toLowerCase().trim();
@@ -2757,8 +2851,10 @@ function filteredAlbums() {
   const sf = document.getElementById('filter-support').value;
   const ff = document.getElementById('filter-folder')?.value || '';
   const gf = document.getElementById('filter-genre').value;
-  const nf = document.getElementById('filter-note').value;
-  const rymNf = document.getElementById('filter-rym-note')?.value || '';
+  const nfOp = document.getElementById('filter-note-op')?.value || '';
+  const nfVal = document.getElementById('filter-note-val')?.value || '';
+  const rymNfOp = document.getElementById('filter-rym-note-op')?.value || '';
+  const rymNfVal = document.getElementById('filter-rym-note-val')?.value || '';
   const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
   const yearF = (document.getElementById('filter-year')?.value || '').trim();
 
@@ -2786,16 +2882,12 @@ function filteredAlbums() {
     if (yearF && !(a.year||'').startsWith(yearF)) return false;
 
     // ── Filtre note MusicBee ─────────────────────────────────────────────
-    if (nf === '5' && a.note !== 5)      return false;
-    if (nf === '4' && (a.note||0) < 4)  return false;
-    if (nf === '3' && (a.note||0) < 3)  return false;
-    if (nf === '0' && a.note)            return false;
+    if (!matchNoteFilter(nfOp, nfVal, a.note || 0)) return false;
 
     // ── Filtre note RYM ──────────────────────────────────────────────────
-    if (rymNf) {
+    if (rymNfOp) {
       const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
-      if (rymNf === '0') { if (rymEntry?.rating) return false; }
-      else if (!(rymEntry && rymEntry.rating >= parseFloat(rymNf))) return false;
+      if (!matchNoteFilter(rymNfOp, rymNfVal, rymEntry?.rating || 0)) return false;
     }
 
     // ── Filtre écoutes min ───────────────────────────────────────────────
@@ -7267,7 +7359,8 @@ function renderAllTracks() {
   const albf    = (document.getElementById('filter-at-album')?.value||'').toLowerCase().trim();
   const sf      = document.getElementById('filter-at-source')?.value||'';
   const folder  = document.getElementById('filter-at-folder')?.value||'';
-  const nf      = document.getElementById('filter-at-note')?.value||'';
+  const nfOp    = document.getElementById('filter-at-note-op')?.value||'';
+  const nfVal   = document.getElementById('filter-at-note-val')?.value||'';
   const minPlays= parseInt(document.getElementById('filter-at-min-plays')?.value||'0')||0;
   const lovedF  = document.getElementById('filter-at-loved')?.value||'';
   const sort    = document.getElementById('sort-at')?.value||'artist';
@@ -7317,12 +7410,9 @@ function renderAllTracks() {
       }
     }
     // Filtre note MB
-    if (nf) {
+    if (nfOp) {
       const note = t.note || _cache.mbNoteByKey.get(normalizeKey(t.artist, t.title)) || 0;
-      if (nf==='5' && note!==5) return false;
-      if (nf==='4' && note<4)  return false;
-      if (nf==='3' && note<3)  return false;
-      if (nf==='0' && note>0)  return false;
+      if (!matchNoteFilter(nfOp, nfVal, note)) return false;
     }
     // Filtre écoutes min
     if (minPlays > 0 && (lfExact.get(normalizeKey(t.artist,t.title))||0) < minPlays) return false;
@@ -8118,9 +8208,12 @@ function discoFilteredList() {
   const af       = (document.getElementById('filter-disco-artist')?.value || '').toLowerCase().trim();
   const albf     = (document.getElementById('filter-disco-album')?.value  || '').toLowerCase().trim();
   const genreF   = document.getElementById('filter-disco-genre')?.value   || '';
-  const noteF    = document.getElementById('filter-disco-note')?.value    || '';
-  const dcNoteF  = document.getElementById('filter-disco-dc-note')?.value || '';
-  const rymNoteF = document.getElementById('filter-disco-rym-note')?.value|| '';
+  const noteOp   = document.getElementById('filter-disco-note-op')?.value  || '';
+  const noteVal  = document.getElementById('filter-disco-note-val')?.value || '';
+  const dcOp     = document.getElementById('filter-disco-dc-op')?.value    || '';
+  const dcVal    = document.getElementById('filter-disco-dc-val')?.value   || '';
+  const rymOp    = document.getElementById('filter-disco-rym-op')?.value   || '';
+  const rymVal   = document.getElementById('filter-disco-rym-val')?.value  || '';
   const minPlays = parseInt(document.getElementById('filter-disco-min-plays')?.value || '0') || 0;
 
   // Détecte une compilation (Various Artists / Various)
@@ -8165,29 +8258,15 @@ function discoFilteredList() {
   if (discoYearF) list = list.filter(a => (a.year||'').startsWith(discoYearF));
 
   // Filtre note MB
-  if (noteF) list = list.filter(a => {
-    if (noteF === '5') return a.note === 5;
-    if (noteF === '4') return (a.note||0) >= 4;
-    if (noteF === '3') return (a.note||0) >= 3;
-    if (noteF === '0') return !a.note;
-    return true;
-  });
+  if (noteOp) list = list.filter(a => matchNoteFilter(noteOp, noteVal, a.note || 0));
 
   // Filtre note Discogs
-  if (dcNoteF) list = list.filter(a => {
-    const dc = a.discogsRating || 0;
-    if (dcNoteF === '5') return dc === 5;
-    if (dcNoteF === '4') return dc >= 4;
-    if (dcNoteF === '3') return dc >= 3;
-    if (dcNoteF === '0') return !dc;
-    return true;
-  });
+  if (dcOp) list = list.filter(a => matchNoteFilter(dcOp, dcVal, a.discogsRating || 0));
 
   // Filtre note RYM
-  if (rymNoteF) list = list.filter(a => {
+  if (rymOp) list = list.filter(a => {
     const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
-    if (rymNoteF === '0') return !rymEntry || !rymEntry.rating;
-    return !!(rymEntry && rymEntry.rating >= parseFloat(rymNoteF));
+    return matchNoteFilter(rymOp, rymVal, rymEntry?.rating || 0);
   });
 
   // Filtre écoutes min
@@ -9353,7 +9432,8 @@ function exportAllTracksCSV() {
   const albf    = (document.getElementById('filter-at-album')?.value||'').toLowerCase().trim();
   const sf      = document.getElementById('filter-at-source')?.value||'';
   const folder  = document.getElementById('filter-at-folder')?.value||'';
-  const nf      = document.getElementById('filter-at-note')?.value||'';
+  const nfOp    = document.getElementById('filter-at-note-op')?.value||'';
+  const nfVal   = document.getElementById('filter-at-note-val')?.value||'';
   const minPlays= parseInt(document.getElementById('filter-at-min-plays')?.value||'0')||0;
   const lovedF  = document.getElementById('filter-at-loved')?.value||'';
   const albumById   = _cache.albumById;
@@ -9372,7 +9452,7 @@ function exportAllTracksCSV() {
         if(folder==='discographie'&&!(a.cd||a.flac||a.mp3)) return false;
         if(folder==='ok'&&!a.okFolder) return false; if(folder==='forsale'&&!a.forSale) return false; if(folder==='discogs'&&!a.cd) return false; }
     }
-    if (nf) { const note=t.note||_cache.mbNoteByKey.get(normalizeKey(t.artist,t.title))||0; if(nf==='5'&&note!==5) return false; if(nf==='4'&&note<4) return false; if(nf==='3'&&note<3) return false; if(nf==='0'&&note>0) return false; }
+    if (nfOp) { const note=t.note||_cache.mbNoteByKey.get(normalizeKey(t.artist,t.title))||0; if(!matchNoteFilter(nfOp,nfVal,note)) return false; }
     if (minPlays>0 && (lfExact.get(normalizeKey(t.artist,t.title))||0)<minPlays) return false;
     if (lovedF==='loved'   && !_lovedTracks.has(normalizeKey(t.artist,t.title))) return false;
     if (lovedF==='present' && !(lfExact.get(normalizeKey(t.artist,t.title))||0))  return false;
