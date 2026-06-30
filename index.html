@@ -2957,10 +2957,11 @@ function renderAlbums() {
       isForSale ? '<span class="badge badge-stock" style="background:rgba(255,192,0,0.08);color:var(--amber);border-color:rgba(255,192,0,0.25)">💸 Vendre</span>' : '',
     ].filter(Boolean).join('');
 
-    const rateFunc = isStock ? 'rateStock' : 'rateAlbum';
-    const stars = [1,2,3,4,5].map(i =>
-      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="${rateFunc}('${sid(a.id)}',${i});event.stopPropagation()">★</button>`
-    ).join('');
+    const noteCell = isStock
+      ? `<div class="stars">${[1,2,3,4,5].map(i =>
+          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateStock('${sid(a.id)}',${i});event.stopPropagation()">★</button>`
+        ).join('')}</div>`
+      : (a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`);
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
 
     // Note RYM
@@ -3000,7 +3001,7 @@ function renderAlbums() {
       <td class="mono">${a.year || '–'}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
-      <td><div class="stars">${stars}</div></td>
+        <td>${noteCell}</td>
       <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
       <td>${rymHtml}</td>
       <td>
@@ -4314,10 +4315,10 @@ async function importMusicBeeXML(input) {
 
     // Convertir la note iTunes/MusicBee : 0-100 → 0-5 étoiles
     // MusicBee : 20=1★, 40=2★, 60=3★, 80=4★, 100=5★
-    function parseRating(r) {
+   function parseRating(r) {
       if (!r) return 0;
-      if (r <= 5) return r;           // déjà en étoiles
-      return Math.round(r / 20);      // % → étoiles
+      if (r <= 5) return r;                  // déjà en étoiles
+      return Math.round(r / 2) / 10;         // % → étoiles avec décimales (ex: 90 → 4.5)
     }
 
     // Détecter le format depuis Kind ou Location
@@ -7194,9 +7195,7 @@ function renderOkAlbums() {
     a.mp3 ?'<span class="badge badge-mp3">MP3</span>':'',
   ].filter(Boolean).join('');
 
-  const stars = a => [1,2,3,4,5].map(i=>
-    `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${sid(a.id)}',${i});renderOkAlbums()">★</button>`
-  ).join('');
+const noteCell = a => a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`;
 
   const rymCell = a => {
     const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
@@ -7213,7 +7212,7 @@ function renderOkAlbums() {
     <td class="mono">${a.year||'–'}</td>
     <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
     <td><div class="badges-cell">${fmtBadge(a)||'<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
-    <td><div class="stars">${stars(a)}</div></td>
+    <td>${noteCell(a)}</td>
     <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
     <td>${rymCell(a)}</td>
     <td>
@@ -7255,12 +7254,12 @@ function renderForSale() {
   const tbody = document.getElementById('forsale-tbody');
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
-  const stars = a => [1,2,3,4,5].map(i=>`<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${sid(a.id)}',${i});renderForSale()">★</button>`).join('');
+   const noteCell = a => a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`;
   tbody.innerHTML = list.map(a => `<tr>
     <td><div class="artist-cell"><div class="artist-avatar">${albumAvatar(a)}</div><div class="artist-info"><div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)}</div></div></div></td>
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
-    <td><div class="stars">${stars(a)}</div></td>
+    <td>${noteCell(a)}</td>
     <td><button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}')" title="Retirer">✓</button></td>
   </tr>`).join('');
 }
@@ -8366,9 +8365,7 @@ function renderDiscographie() {
       ? `<button class="btn btn-sm btn-danger" onclick="removeAssociation('${safeId}')" title="Supprimer l'association">✕</button>`
       : '';
 
-    const stars = [1,2,3,4,5].map(i =>
-      `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateAlbum('${safeId}',${i});renderDiscographie();event.stopPropagation()">★</button>`
-    ).join('');
+  const noteCell = a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`;
 
     const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
     const hasManualRym = rymAssociations.some(x => x.albumKey === a.id);
@@ -8390,8 +8387,8 @@ function renderDiscographie() {
       </td>
       <td class="mono">${a.year || '–'}</td>
       <td>${statusBadge}</td>
-      <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
-      <td><div class="stars">${stars}</div></td>
+           <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
+      <td>${noteCell}</td>
       <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
       <td>${rymCell}</td>
       <td>
