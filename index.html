@@ -4523,7 +4523,7 @@ async function importMusicBeeXML(input) {
         const albumRating = parseRating(num(d, 'Album Rating'));
 		if (!grouped[key]) {
 		grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
-			flac: false, mp3: false, digital: false, albumRating: 0,
+			flac: false, mp3: false, digital: false, albumRating: 0, albumRatingCounts: {},
 			isCompilation, trackArtists: [],
 			okFolder: false, forSaleFolder: false, discoFolder: false,
 			primaryFolder: folder === 'discographie' ? 'discographie'
@@ -4549,7 +4549,15 @@ async function importMusicBeeXML(input) {
         else grouped[key].digital = true;
         if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
         if (!grouped[key].genre && genre) grouped[key].genre = genre;
-        if (albumRating > grouped[key].albumRating) grouped[key].albumRating = albumRating;
+        if (albumRating) {
+          grouped[key].albumRatingCounts[albumRating] = (grouped[key].albumRatingCounts[albumRating] || 0) + 1;
+          // Valeur la plus fréquente parmi les tags Album Rating de l'album (robuste face à un tag isolé non synchronisé)
+          let bestRating = 0, bestCount = 0;
+          for (const [val, cnt] of Object.entries(grouped[key].albumRatingCounts)) {
+            if (cnt > bestCount) { bestCount = cnt; bestRating = parseFloat(val); }
+          }
+          grouped[key].albumRating = bestRating;
+        }
         // Pour les compilations : collecter les artistes individuels (Array, pas de doublon)
         if (isCompilation && artist && artist !== 'Various Artists') {
           if (!Array.isArray(grouped[key].trackArtists)) grouped[key].trackArtists = [];
