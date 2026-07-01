@@ -276,6 +276,8 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .star { font-size: 14px; cursor: pointer; color: var(--border2); transition: color 0.1s; background: none; border: none; padding: 0; line-height: 1; }
 .star.on { color: var(--amber); }
 .star:hover { color: var(--amber); }
+.star-dc.on { color: var(--blue); }
+.star-dc:hover { color: var(--blue); }
 
 /* ARTIST CELL */
 .artist-cell { display: flex; align-items: center; gap: 10px; }
@@ -3002,7 +3004,9 @@ function renderAlbums() {
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
         <td>${noteCell}</td>
-      <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
+      <td><div class="stars">${[1,2,3,4,5].map(i =>
+          `<button class="star star-dc ${(a.discogsRating||0)>=i?'on':''}" onclick="rateDiscogs('${sid(a.id)}',${i});event.stopPropagation()">★</button>`
+        ).join('')}</div></td>
       <td>${rymHtml}</td>
       <td>
         <div class="plays-bar-wrap">
@@ -3067,6 +3071,17 @@ function rateAlbum(id, note) {
   const realId = unsid(id);
   const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (a) { a.note = a.note === note ? 0 : note; renderAlbums(); saveToStorage(); }
+}
+
+function rateDiscogs(id, note) {
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (a) {
+    a.discogsRating = a.discogsRating === note ? 0 : note;
+    renderAlbums();
+    if (typeof renderDiscographie === 'function') renderDiscographie();
+    saveToStorage();
+  }
 }
 
 function deleteAlbum(id) {
@@ -8397,7 +8412,9 @@ function renderDiscographie() {
       <td>${statusBadge}</td>
            <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td>${noteCell}</td>
-      <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
+      <td><div class="stars">${[1,2,3,4,5].map(i =>
+          `<button class="star star-dc ${(a.discogsRating||0)>=i?'on':''}" onclick="rateDiscogs('${safeId}',${i});event.stopPropagation()">★</button>`
+        ).join('')}</div></td>
       <td>${rymCell}</td>
       <td>
         <div class="plays-bar-wrap">
