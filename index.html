@@ -2989,6 +2989,7 @@ function renderAlbums() {
     } else {
       actionBtn = `<button class="btn btn-sm btn-danger" onclick="deleteAlbum('${sid(a.id)}');event.stopPropagation()" title="Supprimer">✕</button>`;
     }
+
     // Wishlist — uniquement pour les albums en stock ou dans Ok/
     const wishBtn = (isStock || isOk)
       ? `<button class="btn btn-sm" onclick="addToWishlistFromAlbumId('${sid(a.id)}');event.stopPropagation()" title="Ajouter à la wishlist">🎯</button>`
@@ -4379,6 +4380,7 @@ async function importMusicBeeXML(input) {
     const grouped = {};       // albums normaux
     const isolatedTracks = []; // morceaux isolés
     const stockAlbums = [];    // stock
+    const importedTrackKeys = new Set(); // clés artiste|||titre de tous les morceaux du XML (pour matcher la wishlist morceaux)
 
     trackDicts.forEach(d => {
       const name        = str(d, 'Name');
@@ -4419,7 +4421,13 @@ async function importMusicBeeXML(input) {
       const isCompilation = isCompilTag || albumArtist === 'Various Artists';
       const effectiveArtist = isCompilation ? 'Various Artists' : (albumArtist || artist);
 
-      if (folder === 'ignore') return;
+	if (folder === 'ignore') return;
+
+      // Alimente l'ensemble des morceaux possédés (matching wishlist morceaux)
+      if (name) {
+        if (artist) importedTrackKeys.add(normalizeKey(artist, name));
+        if (effectiveArtist && effectiveArtist !== artist) importedTrackKeys.add(normalizeKey(effectiveArtist, name));
+      }
 
       if (folder === 'stock') {
         // Structure : !_00_stock/YYYY/Artist - Album (Date)/Artist - NN - Track.flac
@@ -4943,6 +4951,22 @@ window._skipLoadAlbumTracks = true;
     const tlCount = importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracks);
     console.log(`importMusicBeeTracklists résultat : ${tlCount} albums`);
     setTimeout(() => { window._skipLoadAlbumTracks = false; }, 10000);
+
+     // ── Wishlist morceaux : proposer de retirer les titres désormais possédés ──
+    const matchedWishTracks = trackWishlist.filter(w => importedTrackKeys.has(normalizeKey(w.artist, w.title)));
+    if (matchedWishTracks.length) {
+      const n = matchedWishTracks.length;
+      const listStr = matchedWishTracks.slice(0, 20).map(w => `• ${w.artist} — ${w.title}`).join('\n')
+        + (n > 20 ? `\n… et ${n - 20} autres` : '');
+      if (confirm(
+        `${n} morceau${n > 1 ? 'x' : ''} de la wishlist morceaux semble${n > 1 ? 'nt' : ''} maintenant présent${n > 1 ? 's' : ''} dans votre bibliothèque :\n\n${listStr}\n\nLes retirer de la wishlist morceaux ?`
+      )) {
+        const matchedIds = new Set(matchedWishTracks.map(w => w.id));
+        trackWishlist = trackWishlist.filter(w => !matchedIds.has(w.id));
+        renderTrackWishlist();
+        updateNavBadges();
+      }
+    }
 
     invalidateCache();
     renderAlbums(); renderTracks(); renderStock();
