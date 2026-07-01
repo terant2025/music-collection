@@ -2989,6 +2989,10 @@ function renderAlbums() {
     } else {
       actionBtn = `<button class="btn btn-sm btn-danger" onclick="deleteAlbum('${sid(a.id)}');event.stopPropagation()" title="Supprimer">✕</button>`;
     }
+    // Wishlist — uniquement pour les albums en stock ou dans Ok/
+    const wishBtn = (isStock || isOk)
+      ? `<button class="btn btn-sm" onclick="addToWishlistFromAlbumId('${sid(a.id)}');event.stopPropagation()" title="Ajouter à la wishlist">🎯</button>`
+      : '';
 
     return `<tr onclick="${onclickRow}" style="cursor:pointer">
       <td>
@@ -3014,7 +3018,7 @@ function renderAlbums() {
           <span class="plays-num">${a.plays||0}</span>
         </div>
       </td>
-      <td onclick="event.stopPropagation()">${actionBtn}</td>
+      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${actionBtn}</td>
     </tr>`;
   }).join('');
 
