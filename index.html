@@ -672,6 +672,19 @@ input[type="file"] { display: none; }
           </select>
           <input type="number" id="filter-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderAlbums()" style="display:none">
         </div>
+        <div class="note-filter" title="Note Discogs">
+          <span class="note-filter-label">DC</span>
+          <select id="filter-dc-note-op" onchange="onNoteOpChange('filter-dc-note-op','filter-dc-note-val');renderAlbums()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-dc-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderAlbums()" style="display:none">
+        </div>
         <div class="note-filter" title="Note RYM">
           <span class="note-filter-label">RYM</span>
           <select id="filter-rym-note-op" onchange="onNoteOpChange('filter-rym-note-op','filter-rym-note-val');renderAlbums()">
@@ -699,6 +712,7 @@ input[type="file"] { display: none; }
           <option value="album">Tri : Album</option>
           <option value="year">Tri : Année</option>
           <option value="note">Tri : Note MB</option>
+          <option value="dc">Tri : Note DC</option>
           <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
@@ -2855,6 +2869,8 @@ function filteredAlbums() {
   const gf = document.getElementById('filter-genre').value;
   const nfOp = document.getElementById('filter-note-op')?.value || '';
   const nfVal = document.getElementById('filter-note-val')?.value || '';
+  const dcNfOp = document.getElementById('filter-dc-note-op')?.value || '';
+  const dcNfVal = document.getElementById('filter-dc-note-val')?.value || '';
   const rymNfOp = document.getElementById('filter-rym-note-op')?.value || '';
   const rymNfVal = document.getElementById('filter-rym-note-val')?.value || '';
   const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
@@ -2886,6 +2902,9 @@ function filteredAlbums() {
     // ── Filtre note MusicBee ─────────────────────────────────────────────
     if (!matchNoteFilter(nfOp, nfVal, a.note || 0)) return false;
 
+    // ── Filtre note Discogs ──────────────────────────────────────────────
+    if (!matchNoteFilter(dcNfOp, dcNfVal, a.discogsRating || 0)) return false;
+
     // ── Filtre note RYM ──────────────────────────────────────────────────
     if (rymNfOp) {
       const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
@@ -2907,6 +2926,9 @@ function sortedAlbums(list) {
       const rb = (lookupRym(b.artist, b.album, b.id) || lookupRym(cleanDiscogsArtist(b.artist), b.album, b.id))?.rating || 0;
       return rb - ra;
     });
+  }
+  if (col === 'dc') {
+    return [...list].sort((a, b) => (b.discogsRating||0) - (a.discogsRating||0));
   }
   return [...list].sort((a, b) => {
     if (col === 'year') return (b.year||0) - (a.year||0);
@@ -3009,9 +3031,9 @@ function renderAlbums() {
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
         <td>${noteCell}</td>
-      <td><div class="stars">${[1,2,3,4,5].map(i =>
-          `<button class="star star-dc ${(a.discogsRating||0)>=i?'on':''}" onclick="rateDiscogs('${sid(a.id)}',${i});event.stopPropagation()">★</button>`
-        ).join('')}</div></td>
+      <td><span onclick="event.stopPropagation();promptDiscogsRating('${sid(a.id)}')" title="Modifier la note Discogs" style="cursor:pointer;display:inline-flex;align-items:center">
+          ${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(a.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}
+        </span></td>
       <td>${rymHtml}</td>
       <td>
         <div class="plays-bar-wrap">
@@ -3087,6 +3109,24 @@ function rateDiscogs(id, note) {
     if (typeof renderDiscographie === 'function') renderDiscographie();
     saveToStorage();
   }
+}
+
+function promptDiscogsRating(id) {
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (!a) return;
+  const raw = prompt('Note Discogs (0 à 5, pas de 0.5) :', a.discogsRating || '');
+  if (raw === null) return;
+  const trimmed = raw.trim().replace(',', '.');
+  if (trimmed === '') { a.discogsRating = 0; }
+  else {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)'); return; }
+    a.discogsRating = Math.round(n * 2) / 2;
+  }
+  renderAlbums();
+  if (typeof renderDiscographie === 'function') renderDiscographie();
+  saveToStorage();
 }
 
 function deleteAlbum(id) {
@@ -8440,9 +8480,9 @@ function renderDiscographie() {
       <td>${statusBadge}</td>
            <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td>${noteCell}</td>
-      <td><div class="stars">${[1,2,3,4,5].map(i =>
-          `<button class="star star-dc ${(a.discogsRating||0)>=i?'on':''}" onclick="rateDiscogs('${safeId}',${i});event.stopPropagation()">★</button>`
-        ).join('')}</div></td>
+      <td><span onclick="event.stopPropagation();promptDiscogsRating('${safeId}')" title="Modifier la note Discogs" style="cursor:pointer;display:inline-flex;align-items:center">
+          ${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(a.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}
+        </span></td>
       <td>${rymCell}</td>
       <td>
         <div class="plays-bar-wrap">
