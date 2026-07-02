@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-1 — ajout fusion manuelle de fiches (bouton 🔗) -->
+<!-- APP_VERSION: v2026.07.02-2 — détecteur de doublons potentiels (🔍) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-1</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-2</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1562,6 +1562,7 @@ input[type="file"] { display: none; }
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
           <button class="btn" onclick="runDeduplication()">🔧 Fusionner les doublons</button>
+          <button class="btn btn-accent" onclick="openDupFinderModal()">🔍 Détecter les doublons potentiels</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
@@ -1860,6 +1861,19 @@ input[type="file"] { display: none; }
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="rfc-unlink-btn" onclick="unlinkRYMFromCollection()" style="margin-right:auto;display:none">🗑 Supprimer l'association</button>
       <button class="btn" onclick="document.getElementById('modal-rym-from-collection').classList.remove('open')">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal détection de doublons potentiels -->
+<div class="modal-overlay" id="modal-dup-finder">
+  <div class="modal" style="width:720px;max-width:92vw">
+    <h2>🔍 Doublons potentiels</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Fiches du même artiste avec un titre très proche (ex: CD + numérique restés séparés, sous-titre entre parenthèses, edition différente…). Vérifie avant de fusionner : certains albums homonymes sont légitimement distincts.</p>
+    <div id="dup-finder-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div id="dup-finder-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeDupFinderModal()">Fermer</button>
     </div>
   </div>
 </div>
@@ -10036,6 +10050,168 @@ function mergeAlbumsManual(sourceId, targetId) {
 
 document.getElementById('modal-merge-album').addEventListener('click', function(e) {
   if (e.target === this) closeMergeAlbumModal();
+});
+
+// ===================== DÉTECTION DE DOUBLONS POTENTIELS =====================
+// Repère les paires d'albums du même artiste dont le titre est quasi identique
+// mais dont la clé normalisée diffère (donc pas fusionnés automatiquement) —
+// typiquement CD + numérique restés séparés, ou un sous-titre entre parenthèses.
+const DUP_IGNORE_KEY = 'discotheque_dup_ignored';
+
+function _dupIgnoredSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(DUP_IGNORE_KEY) || '[]')); }
+  catch(e) { return new Set(); }
+}
+function _dupIgnoreAdd(pairKey) {
+  const s = _dupIgnoredSet();
+  s.add(pairKey);
+  localStorage.setItem(DUP_IGNORE_KEY, JSON.stringify([...s]));
+}
+function _dupPairKey(idA, idB) {
+  return [idA, idB].sort().join('¤');
+}
+
+// Titre "nettoyé" : enlève le contenu entre parenthèses/crochets, la ponctuation,
+// les mentions d'édition courantes, et compresse les espaces.
+function _dupCleanTitle(title) {
+  return String(title || '')
+    .replace(/[\(\[][^\)\]]*[\)\]]/g, ' ')
+    .replace(/\b(deluxe|remaster(ed)?|edition|reissue|bonus|version|explicit|ep|lp|expanded|anniversary)\b/gi, ' ')
+    .replace(/[^\p{L}\p{N}+/]+/gu, ' ')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function _dupTitleTokens(title) {
+  return new Set(_dupCleanTitle(title).split(' ').filter(t => t.length > 1));
+}
+
+function _dupDiceScore(setA, setB) {
+  if (!setA.size || !setB.size) return 0;
+  let inter = 0;
+  setA.forEach(t => { if (setB.has(t)) inter++; });
+  return (2 * inter) / (setA.size + setB.size);
+}
+
+function computeAlbumDuplicateCandidates() {
+  const ignored = _dupIgnoredSet();
+  const candidates = [];
+
+  // Regroupe par artiste normalisé (variantes incluses) pour limiter les comparaisons
+  const byArtist = new Map();
+  albums.forEach(a => {
+    const key = normalizeKey(cleanDiscogsArtist(a.artist), '').replace('|||', '');
+    if (!byArtist.has(key)) byArtist.set(key, []);
+    byArtist.get(key).push(a);
+  });
+
+  byArtist.forEach(list => {
+    if (list.length < 2) return;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        if (a.id === b.id) continue;
+        // Discogs IDs différents et tous deux renseignés → probable homonyme distinct, on ne suggère pas
+        if (a.discogsId && b.discogsId && a.discogsId !== b.discogsId) continue;
+        const pairKey = _dupPairKey(a.id, b.id);
+        if (ignored.has(pairKey)) continue;
+
+        const cleanA = _dupCleanTitle(a.album);
+        const cleanB = _dupCleanTitle(b.album);
+        if (!cleanA || !cleanB) continue;
+
+        let score = 0, reason = '';
+        if (cleanA === cleanB) { score = 10; reason = 'titre identique une fois nettoyé'; }
+        else if (cleanA.startsWith(cleanB) || cleanB.startsWith(cleanA)) { score = 7; reason = 'un titre préfixe de l\'autre'; }
+        else {
+          const dice = _dupDiceScore(_dupTitleTokens(a.album), _dupTitleTokens(b.album));
+          if (dice >= 0.6) { score = 5; reason = 'mots du titre très proches'; }
+        }
+        if (score > 0) candidates.push({ a, b, score, reason, pairKey });
+      }
+    }
+  });
+
+  return candidates.sort((x, y) => y.score - x.score);
+}
+
+function openDupFinderModal() {
+  renderDupFinderList();
+  document.getElementById('modal-dup-finder').classList.add('open');
+}
+
+function closeDupFinderModal() {
+  document.getElementById('modal-dup-finder').classList.remove('open');
+}
+
+function renderDupFinderList() {
+  const candidates = computeAlbumDuplicateCandidates();
+  document.getElementById('dup-finder-counter').textContent =
+    candidates.length ? `${candidates.length} paire${candidates.length > 1 ? 's' : ''} détectée${candidates.length > 1 ? 's' : ''}` : '';
+
+  const el = document.getElementById('dup-finder-list');
+  if (!candidates.length) {
+    el.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">✅</div>Aucun doublon potentiel détecté !</div>';
+    return;
+  }
+
+  const fmtBadges = a => [
+    a.cd      ? '<span class="badge badge-cd">💿 CD</span>' : '',
+    a.flac    ? '<span class="badge badge-flac">FLAC</span>' : '',
+    a.mp3     ? '<span class="badge badge-mp3">MP3</span>' : '',
+    a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
+  ].filter(Boolean).join('');
+
+  el.innerHTML = candidates.map(({ a, b, score, reason, pairKey }) => {
+    const matchLabel = score >= 10 ? '✅ match fort' : score >= 7 ? '≈ match probable' : '~ similaire';
+    const matchColor = score >= 10 ? 'var(--accent)' : score >= 7 ? 'var(--amber)' : 'var(--text3)';
+    return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:11px;color:${matchColor};font-family:var(--mono)">${matchLabel} — ${esc(reason)}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
+          <div style="margin-top:4px">${fmtBadges(a) || '<span style="font-size:10px;color:var(--text3)">–</span>'}</div>
+        </div>
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.album)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${esc(b.artist)}${b.year ? ' · ' + b.year : ''}</div>
+          <div style="margin-top:4px">${fmtBadges(b) || '<span style="font-size:10px;color:var(--text3)">–</span>'}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end">
+        <button class="btn btn-sm" onclick="dupFinderIgnore('${pairKey}')">Ignorer</button>
+        <button class="btn btn-sm btn-accent" onclick="dupFinderMerge('${sid(a.id)}','${sid(b.id)}')">🔗 Fusionner</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function dupFinderIgnore(pairKey) {
+  _dupIgnoreAdd(pairKey);
+  renderDupFinderList();
+}
+
+function dupFinderMerge(idA, idB) {
+  const realA = unsid(idA), realB = unsid(idB);
+  const a = albums.find(x => x.id === realA);
+  const b = albums.find(x => x.id === realB);
+  if (!a || !b) return;
+  if (!confirm(`Fusionner "${a.artist} — ${a.album}" avec "${b.artist} — ${b.album}" ?\n\nAction irréversible.`)) return;
+  mergeAlbumsManual(realA, realB);
+  invalidateCache();
+  renderAlbums();
+  updateNavBadges();
+  saveToStorage();
+  renderDupFinderList();
+  toast('Fiches fusionnées ✓');
+}
+
+document.getElementById('modal-dup-finder').addEventListener('click', function(e) {
+  if (e.target === this) closeDupFinderModal();
 });
 
 async function initApp() {
