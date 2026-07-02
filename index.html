@@ -1862,6 +1862,23 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
+<!-- Modal fusion manuelle de deux fiches album -->
+<div class="modal-overlay" id="modal-merge-album">
+  <div class="modal" style="width:560px">
+    <h2>🔗 Fusionner deux fiches</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Choisissez la fiche avec laquelle fusionner. Supports (CD/FLAC/MP3/Digital), notes MB/DC/RYM et métadonnées seront combinés en une seule entrée. Action irréversible.</p>
+    <div id="merge-album-info" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:13px"></div>
+    <div class="form-row">
+      <label>Rechercher la fiche à fusionner</label>
+      <input type="text" id="merge-search" placeholder="Artiste ou album…" oninput="renderMergeAlbumList()" style="width:100%">
+    </div>
+    <div id="merge-list" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:10px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeMergeAlbumModal()">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal association morceau last.fm -->
 <div class="modal-overlay" id="modal-track-assoc">
   <div class="modal" style="width:540px">
@@ -3017,6 +3034,11 @@ function renderAlbums() {
       ? `<button class="btn btn-sm" onclick="addToWishlistFromAlbumId('${sid(a.id)}');event.stopPropagation()" title="Ajouter à la wishlist">🎯</button>`
       : '';
 
+    // Fusion manuelle — seulement pour les fiches "normales" (pas stock)
+    const mergeBtn = !isStock
+      ? `<button class="btn btn-sm" onclick="openMergeAlbumModal('${sid(a.id)}');event.stopPropagation()" title="Fusionner avec une autre fiche (ex: CD + numérique séparés)">🔗</button>`
+      : '';
+
     return `<tr onclick="${onclickRow}" style="cursor:pointer">
       <td>
         <div class="artist-cell">
@@ -3041,7 +3063,7 @@ function renderAlbums() {
           <span class="plays-num">${a.plays||0}</span>
         </div>
       </td>
-      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${actionBtn}</td>
+      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${mergeBtn}${actionBtn}</td>
     </tr>`;
   }).join('');
 
@@ -9840,6 +9862,179 @@ function unlinkRYMFromCollection() {
   toast('Association RYM supprimée');
   _rfcTargetAlbumId = null;
 }
+
+// ===================== FUSION MANUELLE DE FICHES ALBUM =====================
+// Sert notamment à fusionner deux entrées d'un même album (ex: CD Discogs + fichier
+// numérique MusicBee) restées séparées faute de clé identique — ce qui empêche aussi
+// certaines notes MB/DC/RYM de s'afficher car elles ne sont attachées qu'à une seule ligne.
+let _mergeSourceId = null;
+
+function openMergeAlbumModal(albumId) {
+  const realId = unsid(albumId);
+  const album = albums.find(a => a.id === realId);
+  if (!album) return;
+  _mergeSourceId = realId;
+
+  document.getElementById('merge-album-info').innerHTML =
+    `<strong>Fiche source :</strong> ${esc(album.album)} — ${esc(album.artist)}`
+    + (album.year ? ` <span style="color:var(--text3);font-size:11px">${album.year}</span>` : '');
+
+  document.getElementById('merge-search').value = album.album;
+  renderMergeAlbumList();
+  document.getElementById('modal-merge-album').classList.add('open');
+  setTimeout(() => document.getElementById('merge-search').focus(), 150);
+}
+
+function closeMergeAlbumModal() {
+  document.getElementById('modal-merge-album').classList.remove('open');
+  _mergeSourceId = null;
+}
+
+function renderMergeAlbumList() {
+  const q = (document.getElementById('merge-search').value || '').toLowerCase().trim();
+  const src = albums.find(a => a.id === _mergeSourceId);
+  const el = document.getElementById('merge-list');
+  if (!src) { el.innerHTML = ''; return; }
+
+  const albumNormTarget = normalizeKey('', src.album).replace('|||', '');
+  const artistNormTarget = normalizeKey(cleanDiscogsArtist(src.artist), '').replace('|||', '');
+  const artistVariantsTarget = artistVariants(src.artist);
+
+  const scored = albums
+    .filter(a => a.id !== src.id)
+    .filter(a => {
+      if (!q) return true;
+      return (a.artist + ' ' + a.album).toLowerCase().includes(q);
+    })
+    .map(a => {
+      const aAlbumNorm  = normalizeKey('', a.album).replace('|||', '');
+      const aArtistNorm = normalizeKey(cleanDiscogsArtist(a.artist), '').replace('|||', '');
+      let score = 0;
+      if (aAlbumNorm === albumNormTarget) score += 4;
+      else if (albumNormTarget && (aAlbumNorm.includes(albumNormTarget) || albumNormTarget.includes(aAlbumNorm))) score += 2;
+      if (aArtistNorm === artistNormTarget) score += 3;
+      else {
+        for (const av of artistVariants(a.artist)) {
+          if (artistVariantsTarget.has(av)) { score += 2; break; }
+        }
+        if (artistNormTarget && aArtistNorm.includes(artistNormTarget)) score += 1;
+      }
+      return { a, score };
+    })
+    .sort((x, y) => y.score - x.score || x.a.artist.localeCompare(y.a.artist, 'fr'))
+    .slice(0, 80);
+
+  if (!scored.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px">Aucun résultat</div>';
+    return;
+  }
+
+  el.innerHTML = scored.map(({ a, score }) => {
+    const badges = [
+      a.cd      ? '<span class="badge badge-cd">💿 CD</span>' : '',
+      a.flac    ? '<span class="badge badge-flac">FLAC</span>' : '',
+      a.mp3     ? '<span class="badge badge-mp3">MP3</span>' : '',
+      a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
+    ].filter(Boolean).join('');
+    const matchLabel = score >= 7 ? '✅ match fort' : score >= 4 ? '≈ match probable' : score >= 2 ? '~ similaire' : '';
+    const matchColor = score >= 7 ? 'var(--accent)' : score >= 4 ? 'var(--amber)' : 'var(--text3)';
+    const bg = score >= 5 ? 'rgba(200,240,100,0.06)' : 'var(--bg3)';
+    const border = score >= 5 ? 'rgba(200,240,100,0.15)' : 'var(--border)';
+    return `<div style="background:${bg};border:1px solid ${border};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div>
+        <div style="font-size:11px;color:var(--text2);display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px">
+          <span>${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</span>
+          ${badges}
+          ${matchLabel ? `<span style="font-size:10px;color:${matchColor};font-family:var(--mono)">${matchLabel}</span>` : ''}
+        </div>
+      </div>
+      <button class="btn btn-sm btn-accent" onclick="confirmMergeAlbums('${sid(a.id)}')" style="flex-shrink:0">Fusionner</button>
+    </div>`;
+  }).join('');
+}
+
+function confirmMergeAlbums(targetAlbumId) {
+  const targetId = unsid(targetAlbumId);
+  const src = albums.find(a => a.id === _mergeSourceId);
+  const tgt = albums.find(a => a.id === targetId);
+  if (!src || !tgt) return;
+  if (!confirm(`Fusionner "${src.artist} — ${src.album}" avec "${tgt.artist} — ${tgt.album}" ?\n\nLes supports, notes et métadonnées seront combinés en une seule fiche. Action irréversible.`)) return;
+
+  mergeAlbumsManual(src.id, tgt.id);
+  closeMergeAlbumModal();
+  invalidateCache();
+  renderAlbums();
+  updateNavBadges();
+  saveToStorage();
+  toast('Fiches fusionnées ✓');
+}
+
+// Fusionne sourceId dans targetId : combine supports, notes (MB/DC/RYM), métadonnées,
+// repointe les associations RYM/Discogs, puis supprime la fiche source.
+function mergeAlbumsManual(sourceId, targetId) {
+  if (sourceId === targetId) return;
+  const src = albums.find(a => a.id === sourceId);
+  const tgt = albums.find(a => a.id === targetId);
+  if (!src || !tgt) return;
+
+  // Supports
+  tgt.cd      = tgt.cd      || src.cd;
+  tgt.has_cd  = tgt.has_cd  || src.has_cd || tgt.cd;
+  tgt.flac    = tgt.flac    || src.flac;
+  tgt.mp3     = tgt.mp3     || src.mp3;
+  tgt.digital = tgt.digital || src.digital;
+  if (!tgt.format && src.format) tgt.format = src.format;
+
+  // Métadonnées manquantes
+  if (!tgt.year  && src.year)  tgt.year  = src.year;
+  if (!tgt.genre && src.genre) tgt.genre = src.genre;
+  if (!tgt.note  && src.note)  tgt.note  = src.note; // note MB (MusicBee)
+  if (!tgt.discogsRating && src.discogsRating) tgt.discogsRating = src.discogsRating;
+  if (!tgt.discogsId     && src.discogsId)     tgt.discogsId     = src.discogsId;
+  if (!tgt.mb_release_id && src.mb_release_id) tgt.mb_release_id = src.mb_release_id;
+  if (!tgt.label  && src.label)  tgt.label  = src.label;
+  if (!tgt.catno  && src.catno)  tgt.catno  = src.catno;
+  if (!tgt.cover_url && src.cover_url) tgt.cover_url = src.cover_url;
+  if (src.notes) tgt.notes = tgt.notes ? (tgt.notes + '\n' + src.notes) : src.notes;
+
+  tgt.plays = (tgt.plays || 0) + (src.plays || 0);
+  tgt.okFolder = tgt.okFolder || src.okFolder;
+  tgt.forSale  = tgt.forSale  || src.forSale;
+  tgt.isCompilation = tgt.isCompilation || src.isCompilation;
+  (src.folders || []).forEach(f => {
+    if (!tgt.folders) tgt.folders = [];
+    if (!tgt.folders.includes(f)) tgt.folders.push(f);
+  });
+
+  // Variantes d'artiste (utile pour le matching last.fm)
+  if (src.lastfmAliases?.length || src.artist !== tgt.artist) {
+    const extra = new Set([...(tgt.lastfmAliases || []), ...(src.lastfmAliases || [])]);
+    if (src.artist && src.artist !== tgt.artist) extra.add(src.artist);
+    tgt.lastfmAliases = [...extra];
+  }
+
+  // Repointer l'association RYM éventuelle de la source vers la fiche conservée,
+  // sans écraser une association RYM déjà présente sur la cible
+  rymAssociations.forEach(x => { if (x.albumKey === src.id) x.albumKey = tgt.id; });
+  const seenAlbumIds = new Set();
+  rymAssociations = rymAssociations.filter(x => {
+    if (x.albumKey !== tgt.id) return true;
+    if (seenAlbumIds.has(x.albumKey)) return false;
+    seenAlbumIds.add(x.albumKey);
+    return true;
+  });
+
+  // Les associations CD/numérique Discogs référençant la source deviennent obsolètes
+  associations = associations.filter(x => x.cdKey !== src.id && x.numKey !== src.id);
+
+  // Retirer la fiche source
+  albums = albums.filter(a => a.id !== src.id);
+}
+
+document.getElementById('modal-merge-album').addEventListener('click', function(e) {
+  if (e.target === this) closeMergeAlbumModal();
+});
 
 async function initApp() {
   loadLastfmTrackStatus();
