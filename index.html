@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-2 — détecteur de doublons potentiels (🔍) -->
+<!-- APP_VERSION: v2026.07.02-3 — alias de fusion pour éviter les doublons au réimport -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-2</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-3</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2136,6 +2136,7 @@ async function saveToSupabase() {
       mb_release_id:  a.mb_release_id || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
+      merged_aliases: a.mergedAliases?.length ? JSON.stringify(a.mergedAliases) : null,
       label:          a.label || null,
       catno:          a.catno || null,
       is_compilation: !!a.isCompilation,
@@ -2291,6 +2292,7 @@ async function loadFromSupabase() {
         mb_release_id: a.mb_release_id || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
+        mergedAliases: a.merged_aliases ? JSON.parse(a.merged_aliases) : undefined,
         label:         a.label || undefined,
         catno:         a.catno || undefined,
         isCompilation: !!a.is_compilation,
@@ -4292,6 +4294,11 @@ async function importDiscogs(input) {
 
       // Appariement par discogsId d'abord (le plus fiable), puis par variantes artiste+album
       let existing = discogsId ? albums.find(a => a.discogsId === discogsId) : null;
+      // Alias mémorisés lors de fusions manuelles (ex: réimport CSV sans discogsId)
+      if (!existing) {
+        const aliasKeyD = normalizeKey(artist, album);
+        existing = albums.find(a => (a.mergedAliases || []).some(al => normalizeKey(al.artist, al.album) === aliasKeyD));
+      }
      if (!existing) {
         const albumNorm = normalizeKey('', album).replace('|||', '');
         for (const av of artistVariants(artist)) {
@@ -4719,6 +4726,12 @@ async function importMusicBeeXML(input) {
           if (!albumByVariantKey.has(k)) albumByVariantKey.set(k, a);
         });
       }
+      // Alias mémorisés lors de fusions manuelles (fiches CD/numérique fusionnées dont
+      // l'artiste/album ne matche aucune des variantes ci-dessus, ex: nom Discogs vs tag MusicBee)
+      (a.mergedAliases || []).forEach(al => {
+        const aliasKey = normalizeKey(al.artist, al.album);
+        if (!albumByVariantKey.has(aliasKey)) albumByVariantKey.set(aliasKey, a);
+      });
     });
 	let albumsAdded = 0, albumsUpdated = 0;
 	Object.values(grouped).forEach(g => {
@@ -10029,6 +10042,16 @@ function mergeAlbumsManual(sourceId, targetId) {
     if (src.artist && src.artist !== tgt.artist) extra.add(src.artist);
     tgt.lastfmAliases = [...extra];
   }
+
+  // Mémoriser l'identité (artiste, album) de la fiche fusionnée-et-supprimée, pour que les
+  // futurs réimports Discogs/MusicBee la reconnaissent au lieu de recréer une fiche en double
+  // (cas typique : le tag artiste MusicBee diffère du nom Discogs au-delà de ce que
+  // cleanDiscogsArtist() sait nettoyer, ex: "+/-" vs "+/- (Plus / Minus)").
+  if (!tgt.mergedAliases) tgt.mergedAliases = [];
+  if (src.artist !== tgt.artist || src.album !== tgt.album) {
+    tgt.mergedAliases.push({ artist: src.artist, album: src.album });
+  }
+  if (src.mergedAliases?.length) tgt.mergedAliases.push(...src.mergedAliases);
 
   // Repointer l'association RYM éventuelle de la source vers la fiche conservée,
   // sans écraser une association RYM déjà présente sur la cible
