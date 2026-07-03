@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-3 — indication visuelle wishlist albums manquante corrigée (page morceaux + page albums) -->
+<!-- APP_VERSION: v2026.07.03-4 — fix bitrate manquant sur occurrences dupliquées + filtre bitrate ≤320 -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-3</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-4</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1349,6 +1349,12 @@ input[type="file"] { display: none; }
           <option value="">Last.fm</option>
           <option value="loved">❤️ Lovés</option>
           <option value="present">✅ Scrobblés</option>
+        </select>
+        <select id="filter-at-bitrate" onchange="renderAllTracks()">
+          <option value="">Bitrate</option>
+          <option value="le320">≤ 320</option>
+          <option value="lt320">&lt; 320</option>
+          <option value="none">Sans bitrate</option>
         </select>
         <select id="sort-at" onchange="renderAllTracks()">
           <option value="artist">Artiste A→Z</option>
@@ -7688,6 +7694,26 @@ function buildAllTracksList() {
     const sources = new Set(Object.values(albumTracksCache).flat().map(t=>t.source));
     console.info('buildAllTracksList: sources dans cache =', [...sources]);
   }
+
+  // Filet de sécurité bitrate : un même morceau (artiste+titre) peut apparaître plusieurs
+  // fois dans result (version album + copie stock + entrée isolée...) et seule une de ces
+  // occurrences porte un bitrate valide selon la source d'où elle vient. On propage la
+  // valeur connue vers les occurrences du même morceau qui n'en ont pas, pour éviter un
+  // "–" trompeur alors que le morceau a bien un bitrate connu ailleurs dans la collection.
+  const bitrateByKey = new Map();
+  result.forEach(t => {
+    if (!t.bitrate) return;
+    const k = normalizeKey(t.artist, t.title);
+    const prev = bitrateByKey.get(k);
+    if (!prev || t.bitrate > prev) bitrateByKey.set(k, t.bitrate);
+  });
+  result.forEach(t => {
+    if (!t.bitrate) {
+      const k = normalizeKey(t.artist, t.title);
+      if (bitrateByKey.has(k)) t.bitrate = bitrateByKey.get(k);
+    }
+  });
+
   _cache.allTracksList = result;
   return result;
 }
@@ -7703,6 +7729,7 @@ function renderAllTracks() {
   const nfVal   = document.getElementById('filter-at-note-val')?.value||'';
   const minPlays= parseInt(document.getElementById('filter-at-min-plays')?.value||'0')||0;
   const lovedF  = document.getElementById('filter-at-loved')?.value||'';
+  const bitrateF= document.getElementById('filter-at-bitrate')?.value||'';
   const sort    = document.getElementById('sort-at')?.value||'artist';
   const lfExact = getLfExactMap();
 
@@ -7759,6 +7786,10 @@ function renderAllTracks() {
     // Filtre loved / scrobblé
     if (lovedF === 'loved'   && !_lovedTracks.has(normalizeKey(t.artist, t.title))) return false;
     if (lovedF === 'present' && !(lfExact.get(normalizeKey(t.artist, t.title))||0))  return false;
+    // Filtre bitrate
+    if (bitrateF === 'le320' && !(t.bitrate && t.bitrate <= 320)) return false;
+    if (bitrateF === 'lt320' && !(t.bitrate && t.bitrate < 320))  return false;
+    if (bitrateF === 'none'  && t.bitrate) return false;
     return true;
   });
 
@@ -9793,6 +9824,7 @@ function exportAllTracksCSV() {
   const nfVal   = document.getElementById('filter-at-note-val')?.value||'';
   const minPlays= parseInt(document.getElementById('filter-at-min-plays')?.value||'0')||0;
   const lovedF  = document.getElementById('filter-at-loved')?.value||'';
+  const bitrateF= document.getElementById('filter-at-bitrate')?.value||'';
   const albumById   = _cache.albumById;
   const stockKeySet = _cache.stockKeySet;
 
@@ -9813,6 +9845,9 @@ function exportAllTracksCSV() {
     if (minPlays>0 && (lfExact.get(normalizeKey(t.artist,t.title))||0)<minPlays) return false;
     if (lovedF==='loved'   && !_lovedTracks.has(normalizeKey(t.artist,t.title))) return false;
     if (lovedF==='present' && !(lfExact.get(normalizeKey(t.artist,t.title))||0))  return false;
+    if (bitrateF==='le320' && !(t.bitrate && t.bitrate<=320)) return false;
+    if (bitrateF==='lt320' && !(t.bitrate && t.bitrate<320))  return false;
+    if (bitrateF==='none'  && t.bitrate) return false;
     return true;
   });
 
