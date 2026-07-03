@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-1 — fix okFolder/discographie figés dans folders[] lors du réimport XML -->
+<!-- APP_VERSION: v2026.07.03-2 — retrait logs diag SLUMP/Weezer, confirmation retrait wishlist albums possédés -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-1</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-2</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -4529,20 +4529,6 @@ async function importMusicBeeXML(input) {
       return 'album';
     }
 
-    // Log pour diagnostiquer les albums non trouvés
-    trackDicts.forEach(d => {
-      const album = str(d, 'Album');
-      if (album && album.toLowerCase().includes('slump')) {
-        console.log('SLUMP:', {
-          artist: str(d, 'Artist'),
-          albumArtist: str(d, 'Album Artist'),
-          album,
-          location: str(d, 'Location'),
-          folder: detectFolder(str(d, 'Location'))
-        });
-      }
-    });
-
     // Grouper par album
     const grouped = {};       // albums normaux
     const isolatedTracks = []; // morceaux isolés
@@ -4900,10 +4886,6 @@ async function importMusicBeeXML(input) {
       const fmt = g.flac ? 'flac' : g.mp3 ? 'mp3' : g.digital ? 'digital' : null;
 
       if (existing) {
-        // LOG diagnostic Weezer
-        if (g.artist === 'Weezer' && g.album === 'Weezer') {
-          console.log(`[weezer] groupe year=${g.year} mbid=${g.mbReleaseId} flac=${g.flac} mp3=${g.mp3} fmt=${g.flac?'flac':g.mp3?'mp3':g.digital?'digital':null} → existing id=${existing.id} year=${existing.year} mb=${existing.mb_release_id||'none'}`);
-        }
         // Mettre à jour toujours depuis XML
         if (g.year)  existing.year  = g.year;
         if (g.genre) existing.genre = g.genre;
@@ -5142,6 +5124,27 @@ window._skipLoadAlbumTracks = true;
         trackWishlist = trackWishlist.filter(w => !matchedIds.has(w.id));
         renderTrackWishlist();
         updateNavBadges();
+      }
+    }
+
+     // ── Wishlist albums : proposer de retirer les albums désormais possédés ──
+    // (même logique que pruneWishlistOwned, mais avec confirmation explicite au lieu d'un
+    // retrait silencieux — pruneWishlistOwned() sera de toute façon appelée automatiquement
+    // ensuite via updateNavBadges() ; on l'anticipe ici uniquement pour informer l'utilisateur)
+    const ownedNow = wishlistOwnedSet();
+    const matchedWishAlbums = wishlist.filter(w =>
+      (w.source === 'lastfm' || w.source === 'rym') && ownedNow.has(normalizeKey(w.artist, w.album))
+    );
+    if (matchedWishAlbums.length) {
+      const n = matchedWishAlbums.length;
+      const listStr = matchedWishAlbums.slice(0, 20).map(w => `• ${w.artist} — ${w.album}`).join('\n')
+        + (n > 20 ? `\n… et ${n - 20} autres` : '');
+      if (confirm(
+        `${n} album${n > 1 ? 's' : ''} de la wishlist albums semble${n > 1 ? 'nt' : ''} maintenant présent${n > 1 ? 's' : ''} dans votre bibliothèque :\n\n${listStr}\n\nLes retirer de la wishlist albums ?`
+      )) {
+        const matchedIds = new Set(matchedWishAlbums.map(w => w.id));
+        wishlist = wishlist.filter(w => !matchedIds.has(w.id));
+        renderWishlist();
       }
     }
 
@@ -9552,12 +9555,6 @@ async function reimportCSV(input) {
     const text = await readFile(file);
     const rows = parseCSV(text);
       let added = 0, updated = 0;
-    // LOG TEMPORAIRE — à supprimer après diagnostic
-    const weezerRows = rows.filter(r => (r['artist']||'').toLowerCase().includes('weezer'));
-    console.log('Weezer dans CSV:', JSON.stringify(weezerRows.map(r => ({
-      artist: r['artist'], title: r['title'], year: r['released'], id: r['release_id']
-    })), null, 2));
-    // FIN LOG
     rows.forEach(row => {
       const artist = row['artist'] || '';
       const album = row['album'] || '';
