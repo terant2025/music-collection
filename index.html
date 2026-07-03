@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-7 — fix doublons last.fm (casse) + nettoyage Supabase -->
+<!-- APP_VERSION: v2026.07.02-8 — fix wishlist "[object Object]" + validation à l'ajout -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-7</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-8</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -3751,6 +3751,8 @@ function computeMissingTracks() {
   const result = Object.values(_lastfmTrackCounts)
     .filter(d => {
       if (!d.plays) return false;
+      if (typeof d.artist !== 'string' || typeof d.track !== 'string') return false;
+      if (d.artist === '[object Object]' || d.track === '[object Object]') return false;
       const keyTrack = normalizeKey(d.artist, d.track);
       // Statut ignoré ou associé manuellement
       const st = _lastfmTrackStatus[keyTrack];
@@ -7283,7 +7285,31 @@ function migrateTrackLikeWishlistEntries() {
   return moved;
 }
 
+// Purge les entrées wishlist déjà corrompues par le bug "[object Object]" (artiste ou
+// album non-string, hérité d'un ancien bug de récupération du tag album last.fm — l'API
+// retourne parfois album sous forme d'objet { "#text": "...", mbid: "..." } au lieu d'une chaîne).
+function cleanupCorruptedWishlistEntries() {
+  if (!wishlist.length) return 0;
+  const before = wishlist.length;
+  wishlist = wishlist.filter(w =>
+    typeof w.artist === 'string' && typeof w.album === 'string'
+    && w.artist.trim() && w.album.trim()
+    && w.artist !== '[object Object]' && w.album !== '[object Object]'
+  );
+  const removed = before - wishlist.length;
+  if (removed) saveToStorage();
+  return removed;
+}
+
 function addToWishlist(artist, album, year, source, plays, rymRating, notes) {
+  // Garde-fou : l'API last.fm retourne parfois le champ album sous forme d'objet
+  // ({ "#text": "...", mbid: "..." }) plutôt qu'une chaîne — sans ce contrôle, ça finissait
+  // stocké tel quel puis affiché comme "[object Object]" dans la wishlist.
+  if (typeof artist !== 'string' || typeof album !== 'string'
+      || !artist.trim() || !album.trim() || album === '[object Object]' || artist === '[object Object]') {
+    console.warn('addToWishlist: artist/album invalide, ignoré', artist, album);
+    return;
+  }
   const key = normalizeKey(artist, album);
   if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
     toast('Déjà dans la wishlist', 'warn'); return;
@@ -10448,6 +10474,8 @@ async function initApp() {
   // qui sont en fait des singles (tag Album == titre du morceau) ajoutées par erreur.
   const migrated = migrateTrackLikeWishlistEntries();
   if (migrated) toast(`${migrated} entrée${migrated>1?'s':''} de la wishlist déplacée${migrated>1?'s':''} vers les morceaux ✓`);
+  const cleanedCorrupted = cleanupCorruptedWishlistEntries();
+  if (cleanedCorrupted) toast(`${cleanedCorrupted} entrée${cleanedCorrupted>1?'s':''} corrompue${cleanedCorrupted>1?'s':''} ("[object Object]") retirée${cleanedCorrupted>1?'s':''} de la wishlist ✓`);
   pruneWishlistOwned();
   // Restaurer config last.fm et reconnecter automatiquement
   const lfmCfg = localStorage.getItem('lastfm_cfg');
