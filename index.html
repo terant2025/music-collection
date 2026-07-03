@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-2 — retrait logs diag SLUMP/Weezer, confirmation retrait wishlist albums possédés -->
+<!-- APP_VERSION: v2026.07.03-3 — indication visuelle wishlist albums manquante corrigée (page morceaux + page albums) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-2</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-3</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -3381,7 +3381,9 @@ let _lastfmStatus = {}; // { key: 'ignored'|'to_listen'|'wishlist' }
 let _lastfmTrackStatus = {}; // { normalizeKey(artist,track): { status, linkedTrackId, linkedAlbumId, linkedTrackTitle } }
 
 function getLastfmStatus(artist, album) {
-  return _lastfmStatus[normalizeKey(artist, album)] || '';
+  const k = normalizeKey(artist, album);
+  if (wishlist.find(w => normalizeKey(w.artist, w.album) === k)) return 'wishlist';
+  return _lastfmStatus[k] || '';
 }
 
 function setLastfmStatus(artist, album, status) {
@@ -3393,6 +3395,12 @@ function setLastfmStatus(artist, album, status) {
     if (d && !wishlist.find(w => normalizeKey(w.artist, w.album) === k)) {
       addToWishlist(d.artist, d.album, '', 'lastfm', d.plays, 0, '');
     }
+  } else {
+    // Statut retiré explicitement (bouton 🎯 décoché) : retirer aussi de wishlist[] si présent,
+    // sinon l'album y reste indéfiniment et le badge "wishlist" ne disparaît jamais.
+    const before = wishlist.length;
+    wishlist = wishlist.filter(w => normalizeKey(w.artist, w.album) !== k);
+    if (wishlist.length !== before) saveToStorage();
   }
   if (window._sb) {
     window._sb.from('meta').upsert(
@@ -3509,12 +3517,18 @@ function renderMissing() {
     genreSel.appendChild(frag);
   }
 
+  // Clés wishlist réelles (source de vérité pour l'indication visuelle, cf. ci-dessous)
+  const wishlistKeys = new Set(wishlist.map(w => normalizeKey(w.artist, w.album)));
+
   let filtered = list.filter(m => {
     const key = normalizeKey(m.artist, m.album);
     const rymEntry = lookupRym(m.artist, m.album);
     m._rymEntry = rymEntry;
     const genre = (rymEntry?.genre || '').toLowerCase();
-    const st = _lastfmStatus[key] || ''; // accès direct au lieu de getLastfmStatus()
+    // Le statut 'wishlist' doit refléter la présence réelle dans wishlist[] (source de vérité),
+    // pas seulement _lastfmStatus — sinon un album ajouté à la wishlist par un autre chemin
+    // (bouton manuel, page RYM...) n'affiche aucune indication ici alors qu'il y est bien.
+    const st = wishlistKeys.has(key) ? 'wishlist' : (_lastfmStatus[key] || '');
     if (statusF === 'none'      && st)               return false;
     if (statusF === 'ignored'   && st !== 'ignored')  return false;
     if (statusF === 'to_listen' && st !== 'to_listen') return false;
@@ -3582,7 +3596,7 @@ function renderMissing() {
       const genreBadge = rymGenre
         ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">${esc(rymGenre.split(',')[0].trim())}</span>`
         : '';
-      const st = _lastfmStatus[normalizeKey(m.artist, m.album)] || '';
+      const st = wishlistKeys.has(normalizeKey(m.artist, m.album)) ? 'wishlist' : (_lastfmStatus[normalizeKey(m.artist, m.album)] || '');
       const stColors = { ignored:'var(--text3)', to_listen:'var(--accent)', wishlist:'var(--amber)' };
       const stLabels = { ignored:'🚫', to_listen:'👂', wishlist:'🎯' };
       const stBadge = st ? `<span style="font-size:11px;color:${stColors[st]}">${stLabels[st]}</span>` : '';
@@ -3848,6 +3862,10 @@ function renderMissingTracks() {
     return;
   }
   const slice = list.slice(0, 200);
+  // Index des albums déjà en wishlist albums (clé normalisée artiste+album) — pour signaler
+  // sur cette page morceaux si l'album d'un morceau manquant est déjà dans la wishlist albums,
+  // ce qui n'était visible nulle part jusqu'ici (seul le statut morceau était indiqué).
+  const wishlistAlbumKeys = new Set(wishlist.map(w => normalizeKey(w.artist, w.album)));
   tbody.innerHTML = slice.map((d, i) => {
     const key = normalizeKey(d.artist, d.track);
     const st  = _lastfmTrackStatus[key];
@@ -3858,10 +3876,17 @@ function renderMissingTracks() {
                   : isLinked   ? ' <span style="font-size:10px;color:var(--accent)">🔗</span>'
                   : isWishlist ? ' <span style="font-size:10px;color:var(--amber)">🎯</span>'
                   : '';
+    // Un morceau peut avoir plusieurs tags Album différents (consolidés dans d.album,
+    // séparés par " / ") — on marque dès qu'un de ces albums est dans la wishlist albums.
+    const albumNames = (d.album || '').split(' / ').map(s => s.trim()).filter(Boolean);
+    const albumInWishlist = albumNames.some(al => wishlistAlbumKeys.has(normalizeKey(d.artist, al)));
+    const albumBadge = albumInWishlist
+      ? ' <span style="font-size:10px;color:var(--amber)" title="Cet album est dans la wishlist albums">🎯💿</span>'
+      : '';
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
     <td style="color:var(--text2);font-size:13px">${esc(d.artist)}</td>
-    <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}</td>
+    <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}${albumBadge}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
     <td style="display:flex;gap:3px;flex-wrap:wrap">
       <button class="btn btn-sm ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
