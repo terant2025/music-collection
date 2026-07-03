@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-5 — badge 🎯 Wishlist ajouté sur la page Collection -->
+<!-- APP_VERSION: v2026.07.03-6 — fix bitrate perdu pour les morceaux isolés (import XML + sauvegarde/chargement Supabase) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-5</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-6</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2196,6 +2196,7 @@ async function saveToSupabase() {
       duration:        t.duration || null,
       note:            t.note || 0,
       mb_recording_id: t.mb_recording_id || null,
+      bitrate:         t.bitrate || null,
       updated_at:      now,
     }));
     if (trackRows.length) await sbUpsert('tracks', trackRows, 'artist_norm,title_norm');
@@ -2396,6 +2397,7 @@ async function loadFromSupabase() {
       duration:        t.duration || '',
       note:            t.note || 0,
       mb_recording_id: t.mb_recording_id || undefined,
+      bitrate:         t.bitrate || undefined,
     }));
 
     // ── Associations (clés texte) ─────────────────────────────────────────────
@@ -5008,6 +5010,7 @@ async function importMusicBeeXML(input) {
           format: t.format, duration: '',
           note: existingTrackNotes[normalizeKey(t.artist, t.title)] || t.rating || 0,
           mb_recording_id: t.mbRecordingId || undefined,
+          bitrate: t.bitrate || undefined,
         };
       });
 
@@ -7692,7 +7695,7 @@ function buildAllTracksList() {
   // 3. Morceaux isolés
   tracks.forEach(t => {
     result.push({ title: t.title, artist: t.artist, album: t.album || '', albumId: null,
-      source: 'isolated', bitrate: null, duration: t.duration, play_count: null,
+      source: 'isolated', bitrate: t.bitrate || null, duration: t.duration, play_count: null,
       inStock: false });
   });
 
