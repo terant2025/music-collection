@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-10 — fix nettoyage wishlist jamais exécuté (mauvais chemin de code) -->
+<!-- APP_VERSION: v2026.07.02-12 — fix suppression groupée associations (variable window._assocRows vs let) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-10</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-12</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -7270,14 +7270,13 @@ let wishlist = []; // [{ id, artist, album, year, source, prio, plays, rymRating
 
 function wishlistOwnedSet() {
   // Albums déjà possédés (numérique ou discogs) — à exclure de la wishlist auto.
-  // Indexé avec les variantes d'artiste (&, The, casse, feat...) pour ne pas rater
-  // une légère différence de tag entre la source wishlist et la collection.
+  // Correspondance EXACTE uniquement (clé normalisée artiste+album) : un faux-positif ici
+  // supprime silencieusement une entrée qu'on vient d'ajouter, donc mieux vaut louper
+  // un match approximatif que perdre une entrée légitime.
   const s = new Set();
   albums.forEach(a => {
     if (!(a.flac || a.mp3 || a.digital || a.cd)) return;
     s.add(normalizeKey(a.artist, a.album));
-    const albumNorm = normalizeKey('', a.album).replace('|||', '');
-    for (const av of artistVariants(a.artist)) s.add(av + '|||' + albumNorm);
   });
   return s;
 }
@@ -7289,14 +7288,9 @@ function pruneWishlistOwned() {
   if (!wishlist.length) return 0;
   const owned = wishlistOwnedSet();
   const before = wishlist.length;
-  wishlist = wishlist.filter(w => {
-    const albumNorm = normalizeKey('', w.album).replace('|||', '');
-    if (owned.has(normalizeKey(w.artist, w.album))) return false;
-    for (const av of artistVariants(w.artist)) {
-      if (owned.has(av + '|||' + albumNorm)) return false;
-    }
-    return true;
-  });
+  const toRemove = wishlist.filter(w => owned.has(normalizeKey(w.artist, w.album)));
+  if (toRemove.length) console.warn('pruneWishlistOwned: entrées retirées (déjà possédées)', toRemove.map(w => `${w.artist} — ${w.album}`));
+  wishlist = wishlist.filter(w => !owned.has(normalizeKey(w.artist, w.album)));
   const removed = before - wishlist.length;
   if (removed) saveToStorage();
   return removed;
@@ -7943,27 +7937,31 @@ function deleteSelectedAssoc() {
   if (!checked.length) return;
   if (!confirm(`Supprimer ${checked.length} association${checked.length>1?'s':''} ?`)) return;
   const indices = checked.map(c => parseInt(c.dataset.idx));
+  let removedCount = 0;
   // Traiter de la fin pour ne pas décaler les indices
   indices.sort((a,b)=>b-a).forEach(i => {
     const r = _assocRows[i];
     if (!r) return;
     if (r.type === 'discogs-num') {
-      // Extraire cdId et numId depuis les actions
-      const m = r.actions.match(/removeDiscogsAssoc\((\d+),(\d+)\)/);
-      if (m) associations = associations.filter(a => !(a.cdId==m[1] && a.numId==m[2]));
+      const before = associations.length;
+      associations = associations.filter(a => !(a.cdKey === r.cdKey && a.numKey === r.numKey));
+      if (associations.length !== before) removedCount++;
     } else if (r.type === 'rym') {
-      const m = r.actions.match(/removeRYMAssoc\('([^']+)'\)/);
-      if (m) rymAssociations = rymAssociations.filter(a => a.rymKey !== m[1]);
+      const before = rymAssociations.length;
+      rymAssociations = rymAssociations.filter(a => a.rymKey !== r.rymKey);
+      if (rymAssociations.length !== before) removedCount++;
     } else if (r.type === 'lastfm') {
-      const m = r.actions.match(/removeLastfmAlias\((\d+),(\d+)\)/);
-      if (m) {
-        const album = albums.find(a => a.id == m[1]);
-        if (album?.lastfmAliases) album.lastfmAliases.splice(parseInt(m[2]), 1);
+      const album = albums.find(a => a.id === r.albumId);
+      if (album?.lastfmAliases && album.lastfmAliases.length > r.aliasIndex) {
+        album.lastfmAliases.splice(r.aliasIndex, 1);
+        removedCount++;
       }
     }
   });
   invalidateCache(); saveToStorage(); renderAssocReview(); updateNavBadges();
-  toast(`${indices.length} association${indices.length>1?'s':''} supprimée${indices.length>1?'s':''}`);
+  toast(removedCount
+    ? `${removedCount} association${removedCount>1?'s':''} supprimée${removedCount>1?'s':''}`
+    : `Aucune association supprimée (déjà absente ?)`, removedCount ? 'success' : 'warn');
 }
 
 function renderAssocReview() {
@@ -7988,6 +7986,7 @@ function renderAssocReview() {
         type: 'discogs-num',
         typeLabel: '💿 Discogs ↔ Numérique',
         broken,
+        cdKey: assoc.cdKey, numKey: assoc.numKey,
         a: cdAlbum  ? `<strong>${esc(cdAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(cdAlbum.artist)}</span><br><span class="badge badge-cd">CD</span>` : `<span style="color:var(--red)">⚠️ Introuvable</span><br><span style="color:var(--text3);font-size:11px">${esc(assoc.cdKey)}</span>`,
         b: numAlbum ? `<strong>${esc(numAlbum.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(numAlbum.artist)}</span><br>${(numAlbum.format==='flac'||numAlbum.flac)?'<span class="badge badge-flac">FLAC</span>':''} ${(numAlbum.format==='mp3'||numAlbum.mp3)?'<span class="badge badge-mp3">MP3</span>':''}` : `<span style="color:var(--red)">⚠️ Introuvable</span><br><span style="color:var(--text3);font-size:11px">${esc(assoc.numKey)}</span>`,
         actions: `<button class="btn btn-sm btn-danger" onclick="removeDiscogsAssoc('${assoc.cdKey.replace(/'/g,"\\'")}','${assoc.numKey.replace(/'/g,"\\'")}')">✕</button>`
@@ -8008,6 +8007,7 @@ function renderAssocReview() {
         type: 'rym',
         typeLabel: '⭐ RYM ↔ Album',
         broken,
+        rymKey: assoc.rymKey,
         a: rymEntry
           ? `<strong>${esc(rymEntry.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(rymEntry.artist)}</span><br><span style="font-size:11px;color:var(--amber)">${rymEntry.rating ? rymEntry.rating.toFixed(2) + '★' : 'Non noté'}</span>`
           : `<span style="color:var(--red)">⚠️ Introuvable</span><br><span style="font-size:11px;color:var(--text3)">${esc(assoc.rymKey)}</span>`,
@@ -8036,6 +8036,7 @@ function renderAssocReview() {
           type: 'lastfm',
           typeLabel: '🎵 last.fm alias',
           broken,
+          albumId: album.id, aliasIndex: ai,
           a: `<span style="font-size:12px;color:${broken?'var(--red)':'var(--text3)'};font-family:var(--mono)">${broken?'⚠️ ':''}${esc(alias)}</span>`,
           b: `<strong>${esc(album.album)}</strong><br><span style="font-size:11px;color:var(--text2)">${esc(album.artist)}</span>`,
           actions: `<button class="btn btn-sm btn-danger" onclick="removeLastfmAlias(${album.id},${ai})" title="Supprimer">✕</button>`
@@ -8064,7 +8065,7 @@ function renderAssocReview() {
     <td style="font-size:13px;line-height:1.5">${r.b}</td>
     <td style="white-space:nowrap">${r.actions}</td>
   </tr>`).join('');
-  window._assocRows = rows; // stocker pour la suppression groupée
+  _assocRows = rows; // stocker pour la suppression groupée
 
   // Filtre "Introuvables" actif : pré-cocher tout pour un nettoyage rapide en un clic
   if (wantBroken && rows.length) {
