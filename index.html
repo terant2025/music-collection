@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-3 — alias de fusion pour éviter les doublons au réimport -->
+<!-- APP_VERSION: v2026.07.02-7 — fix doublons last.fm (casse) + nettoyage Supabase -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-3</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-7</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1563,6 +1563,7 @@ input[type="file"] { display: none; }
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
           <button class="btn" onclick="runDeduplication()">🔧 Fusionner les doublons</button>
           <button class="btn btn-accent" onclick="openDupFinderModal()">🔍 Détecter les doublons potentiels</button>
+          <button class="btn" onclick="cleanupLastfmDuplicates()">🧹 Nettoyer les doublons last.fm</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
@@ -2198,13 +2199,29 @@ async function saveToSupabase() {
     }
 
     // ── lastfmData ────────────────────────────────────────────────────────────
+    // Dédoublonnage par clé NORMALISÉE (pas texte brut) : "Luck In The Valley" et
+    // "Luck in the Valley" doivent fusionner en une seule ligne, écoutes additionnées,
+    // sinon Postgres (conflict sur artist,album en texte brut, sensible à la casse)
+    // les traite comme deux albums distincts et les doublons s'accumulent à chaque save.
     if (lastfmData.length) {
       const lfDedup = new Map();
       lastfmData.forEach(d => {
-        const k = (d.artist||'') + '|||' + (d.album||'');
-        if (!lfDedup.has(k) || (d.plays||0) > (lfDedup.get(k).plays||0)) lfDedup.set(k, d);
+        if (!d.artist || !d.album) return;
+        const k = normalizeKey(d.artist, d.album);
+        const prev = lfDedup.get(k);
+        if (!prev) {
+          lfDedup.set(k, { artist: d.artist, album: d.album, plays: d.plays || 0, _bestPlays: d.plays || 0 });
+        } else {
+          prev.plays += (d.plays || 0);
+          if ((d.plays || 0) > prev._bestPlays) {
+            prev._bestPlays = d.plays || 0;
+            prev.artist = d.artist;
+            prev.album = d.album;
+          }
+        }
       });
-      const lfRows = [...lfDedup.values()].map(d => ({ artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: now }));
+      lastfmData = [...lfDedup.values()].map(({ artist, album, plays }) => ({ artist, album, plays }));
+      const lfRows = lastfmData.map(d => ({ artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: now }));
       await sbUpsert('lastfm_data', lfRows, 'artist,album');
     }
 
@@ -3016,11 +3033,9 @@ function renderAlbums() {
       isForSale ? '<span class="badge badge-stock" style="background:rgba(255,192,0,0.08);color:var(--amber);border-color:rgba(255,192,0,0.25)">💸 Vendre</span>' : '',
     ].filter(Boolean).join('');
 
-    const noteCell = isStock
-      ? `<div class="stars">${[1,2,3,4,5].map(i =>
-          `<button class="star ${(a.note||0)>=i?'on':''}" onclick="rateStock('${sid(a.id)}',${i});event.stopPropagation()">★</button>`
-        ).join('')}</div>`
-      : (a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`);
+    const noteCell = `<span onclick="event.stopPropagation();promptStockRating('${sid(a.id)}')" title="Modifier la note MusicBee" style="cursor:pointer;display:inline-flex;align-items:center">
+        ${a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}
+      </span>`;
     const playsW = Math.round((a.plays || 0) / maxPlays * 100);
 
     // Note RYM
@@ -3166,6 +3181,24 @@ function promptDiscogsRating(id) {
   }
   renderAlbums();
   if (typeof renderDiscographie === 'function') renderDiscographie();
+  saveToStorage();
+}
+
+function promptStockRating(id) {
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (!a) return;
+  const raw = prompt('Note MusicBee (0 à 5, demi-étoiles possibles) :', a.note || '');
+  if (raw === null) return;
+  const trimmed = raw.trim().replace(',', '.');
+  if (trimmed === '') { a.note = 0; }
+  else {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)'); return; }
+    a.note = Math.round(n * 2) / 2;
+  }
+  renderAlbums();
+  if (typeof renderStock === 'function') renderStock();
   saveToStorage();
 }
 
@@ -3370,10 +3403,25 @@ function computeMissing() {
   const owned = getOwnedKeysSet();
   // lastfmAliases déjà indexés dans getOwnedKeysSet via ownedKeys
   const ownedMbIds = _cache.ownedMbIds || new Set();
-  _cache.missing = lastfmData
+  // Filet de sécurité : fusionner les doublons de casse ("Luck In The Valley" vs
+  // "Luck in the Valley") avant affichage, même si le nettoyage Supabase n'a pas
+  // encore été lancé (bouton "🧹 Nettoyer les doublons last.fm" dans Import/Export).
+  const dedup = new Map();
+  lastfmData.forEach(d => {
+    if (!d.artist || !d.album) return;
+    if (typeof d.album !== 'string' || d.album === '[object Object]') return;
+    const k = normalizeKey(d.artist, d.album);
+    const prev = dedup.get(k);
+    if (!prev) {
+      dedup.set(k, { artist: d.artist, album: d.album, plays: d.plays || 0, mb_release_id: d.mb_release_id, _best: d.plays || 0 });
+    } else {
+      prev.plays += (d.plays || 0);
+      if ((d.plays || 0) > prev._best) { prev._best = d.plays || 0; prev.artist = d.artist; prev.album = d.album; }
+      if (!prev.mb_release_id && d.mb_release_id) prev.mb_release_id = d.mb_release_id;
+    }
+  });
+  _cache.missing = [...dedup.values()]
     .filter(d => {
-      if (!d.artist || !d.album) return false;
-      if (typeof d.album !== 'string' || d.album === '[object Object]') return false;
       if (owned.has(normalizeKey(d.artist, d.album))) return false;
       if (d.mb_release_id && ownedMbIds.has(d.mb_release_id)) return false;
       return true;
@@ -3388,6 +3436,7 @@ let _dataReady = false; // flag : données chargées depuis Supabase/localStorag
 function updateNavBadges() {
   clearTimeout(_navBadgeTimer);
   _navBadgeTimer = setTimeout(() => {
+    if (_dataReady) pruneWishlistOwned();
     document.getElementById('nav-albums-count').textContent = albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length;
     document.getElementById('nav-tracks-count').textContent = tracks.length;
     const wishBadge = document.getElementById('nav-wish-count');
@@ -3971,9 +4020,12 @@ function exportMissingTracksCSV() {
 function addToWishlistFromMissingTrack(idx) {
   const d = renderMissingTracks._cache?.[idx];
   if (!d) return;
-  // N'ajouter à la wishlist ALBUMS que si on a un vrai nom d'album.
-  // Sinon (morceau sans tag album), on l'ajoute à la wishlist MORCEAUX à la place.
-  if (d.album && d.album.trim()) {
+  // N'ajouter à la wishlist ALBUMS que si on a un vrai nom d'album distinct du morceau.
+  // Sinon (morceau sans tag album, ou single dont le tag Album == titre du morceau),
+  // on l'ajoute à la wishlist MORCEAUX à la place.
+  const albumIsRealAlbum = d.album && d.album.trim()
+    && normalizeKey('', d.album).replace('|||', '') !== normalizeKey('', d.track).replace('|||', '');
+  if (albumIsRealAlbum) {
     addToWishlist(d.artist, d.album, '', 'lastfm', d.plays, 0, `Morceau : ${d.track}`);
   } else {
     const key = normalizeKey(d.artist, d.track);
@@ -7174,12 +7226,61 @@ function showTracklistDiff(albumId) {
 let wishlist = []; // [{ id, artist, album, year, source, prio, plays, rymRating, notes, addedAt }]
 
 function wishlistOwnedSet() {
-  // Albums déjà possédés (numérique ou discogs) — à exclure de la wishlist auto
+  // Albums déjà possédés (numérique ou discogs) — à exclure de la wishlist auto.
+  // Indexé avec les variantes d'artiste (&, The, casse, feat...) pour ne pas rater
+  // une légère différence de tag entre la source wishlist et la collection.
   const s = new Set();
   albums.forEach(a => {
-    if (a.flac || a.mp3 || a.digital || a.cd) s.add(normalizeKey(a.artist, a.album));
+    if (!(a.flac || a.mp3 || a.digital || a.cd)) return;
+    s.add(normalizeKey(a.artist, a.album));
+    const albumNorm = normalizeKey('', a.album).replace('|||', '');
+    for (const av of artistVariants(a.artist)) s.add(av + '|||' + albumNorm);
   });
   return s;
+}
+
+// Retire de la wishlist les entrées déjà possédées (ex: après un réimport Discogs/MusicBee
+// qui vient d'ajouter un album qui était en wishlist). Appelé automatiquement — pas besoin
+// de cliquer manuellement sur ✓ pour chaque album retrouvé via un import.
+function pruneWishlistOwned() {
+  if (!wishlist.length) return 0;
+  const owned = wishlistOwnedSet();
+  const before = wishlist.length;
+  wishlist = wishlist.filter(w => {
+    const albumNorm = normalizeKey('', w.album).replace('|||', '');
+    if (owned.has(normalizeKey(w.artist, w.album))) return false;
+    for (const av of artistVariants(w.artist)) {
+      if (owned.has(av + '|||' + albumNorm)) return false;
+    }
+    return true;
+  });
+  const removed = before - wishlist.length;
+  if (removed) saveToStorage();
+  return removed;
+}
+
+// Migration/nettoyage : certaines entrées "album" de la wishlist sont en fait des singles
+// last.fm dont le tag Album est identique au titre du morceau (cas fréquent pour les singles
+// isolés) — elles ont été ajoutées par erreur à la wishlist albums au lieu de la wishlist
+// morceaux. On les détecte via leur note "Morceau : {titre}" et on les déplace.
+function migrateTrackLikeWishlistEntries() {
+  if (!wishlist.length) return 0;
+  let moved = 0;
+  wishlist = wishlist.filter(w => {
+    const m = /^Morceau\s*:\s*(.+)$/i.exec((w.notes || '').trim());
+    if (!m) return true;
+    const trackTitle = m[1].trim();
+    const sameAsAlbum = normalizeKey('', w.album).replace('|||', '') === normalizeKey('', trackTitle).replace('|||', '');
+    if (!sameAsAlbum) return true;
+    const key = normalizeKey(w.artist, trackTitle);
+    if (!trackWishlist.find(t => normalizeKey(t.artist, t.title) === key)) {
+      trackWishlist.push({ id: uid(), artist: w.artist, title: trackTitle, album: '', prio: w.prio || 'mid', addedAt: w.addedAt || Date.now() });
+      moved++;
+    }
+    return false;
+  });
+  if (moved) saveToStorage();
+  return moved;
 }
 
 function addToWishlist(artist, album, year, source, plays, rymRating, notes) {
@@ -7197,6 +7298,7 @@ function addToWishlist(artist, album, year, source, plays, rymRating, notes) {
   saveToStorage();
   toast(`Ajouté à la wishlist : ${artist} — ${album}`);
 }
+
 
 function openWishModal(id) {
   const w = id ? wishlist.find(x => x.id === id) : null;
@@ -7995,6 +8097,7 @@ function exportWishlistCSV() {
 }
 
 function renderWishlist() {
+  pruneWishlistOwned();
   const q    = document.getElementById('global-search').value.toLowerCase();
   const af   = (document.getElementById('filter-wish-artist')?.value || '').toLowerCase().trim();
   const albf = (document.getElementById('filter-wish-album')?.value  || '').toLowerCase().trim();
@@ -8613,8 +8716,9 @@ function openAssocModalReverse(albumId) {
     document.getElementById('assoc-cd-info').innerHTML =
       `<strong>Numérique :</strong> ${esc(a.album)} — ${esc(a.artist)} — chercher le CD correspondant`;
     const searchEl = document.getElementById('assoc-search');
-    // Pré-remplir avec le titre de l'album (plus fiable que l'artiste pour les artistes avec variantes)
-    searchEl.value = a.album || '';
+    // Recherche vide par défaut : un titre traduit ("Everything's Calm" vs "Tout est calme")
+    // ne matcherait jamais si on pré-remplissait avec le titre — on liste tout, trié par pertinence.
+    searchEl.value = '';
     searchEl.oninput = () => (_assocReverseNumKey ? renderAssocListReverse() : renderAssocList());
     renderAssocListReverse();
     document.getElementById('modal-assoc').classList.add('open');
@@ -8628,7 +8732,7 @@ function renderAssocListReverse() {
   const q = document.getElementById('assoc-search').value.toLowerCase().trim();
   const numAlbum = albumByKey(_assocReverseNumKey);
   const numAlbumNorm = normalizeKey('', numAlbum?.album || '').replace('|||','');
-  const candidates = albums
+  let candidates = albums
     .filter(a => a.cd || a.has_cd)
     .filter(a => {
       if (!q) return true;
@@ -8638,20 +8742,30 @@ function renderAssocListReverse() {
         a.album
       ].join(' ').toLowerCase();
       return terms.includes(q);
-    })
-    .sort((a, b) => {
+    });
+  // Recherche sans résultat (ex: titre traduit dans une langue différente) → retomber sur
+  // la liste complète plutôt que de laisser l'utilisateur bloqué sans aucun candidat.
+  let fallback = false;
+  if (q && !candidates.length) {
+    candidates = albums.filter(a => a.cd || a.has_cd);
+    fallback = true;
+  }
+  const el = document.getElementById('assoc-list');
+  if (!candidates.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:12px">Aucun CD trouvé</div>';
+    return;
+  }
+  const sorted = candidates.slice().sort((a, b) => {
       // Trier par similarité de titre album d'abord
       const aSim = normalizeKey('', a.album).replace('|||','') === numAlbumNorm ? 1 : 0;
       const bSim = normalizeKey('', b.album).replace('|||','') === numAlbumNorm ? 1 : 0;
       if (bSim !== aSim) return bSim - aSim;
       return cleanDiscogsArtist(a.artist).localeCompare(cleanDiscogsArtist(b.artist), 'fr');
     });
-  const el = document.getElementById('assoc-list');
-  if (!candidates.length) {
-    el.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:12px">Aucun CD trouvé</div>';
-    return;
-  }
-  el.innerHTML = candidates.map(a => {
+  const banner = fallback
+    ? `<div style="font-size:11px;color:var(--text3);padding:4px 2px 8px">Aucun résultat pour « ${esc(q)} » — voici tous les CD disponibles, cherche par titre traduit ou fais défiler.</div>`
+    : '';
+  el.innerHTML = banner + sorted.map(a => {
     const similar = normalizeKey('', a.album).replace('|||','') === numAlbumNorm;
     return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociationReverse('${sid(a.id)}')">
       <div style="flex:1">
@@ -8679,8 +8793,10 @@ function renderAssocList() {
   const q = document.getElementById('assoc-search').value.toLowerCase().trim();
   const cdAlbum = albumByKey(_assocTargetKey);
   const usedNumKeys = new Set(associations.map(a => a.numKey));
+  // Une même entrée numérique peut couvrir plusieurs CDs (ex: réédition regroupant deux
+  // albums en une seule sortie digitale) — on ne l'exclut plus, on l'indique juste par badge.
   const candidates = albums
-    .filter(a => (a.format || a.flac || a.mp3 || a.digital) && a.id !== _assocTargetKey && !usedNumKeys.has(a.id))
+    .filter(a => (a.format || a.flac || a.mp3 || a.digital) && a.id !== _assocTargetKey)
     .filter(a => {
       if (!q) return true;
       const terms = [
@@ -8716,6 +8832,7 @@ function renderAssocList() {
       (a.format==='mp3'||a.mp3)   ? '<span class="badge badge-mp3">MP3</span>'   : '',
       (a.format==='digital'||a.digital) ? '<span class="badge badge-digital">Digital</span>' : '',
     ].filter(Boolean).join('');
+    const alreadyLinked = usedNumKeys.has(a.id);
     return `<div style="background:${similar?'var(--accent-dim)':'var(--bg3)'};border:1px solid ${similar?'rgba(200,240,100,0.3)':'var(--border)'};border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="applyAssociation('${sid(a.id)}')">
       <div style="flex:1">
         <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(a.album)}</div>
@@ -8723,6 +8840,7 @@ function renderAssocList() {
       </div>
       <div style="display:flex;gap:4px">${numBadges}</div>
       ${similar?'<span style="font-size:10px;color:var(--accent);font-family:var(--mono)">≈ match</span>':''}
+      ${alreadyLinked?'<span style="font-size:10px;color:var(--text3);font-family:var(--mono)" title="Déjà lié à un autre CD — peut être partagé">🔗 déjà lié</span>':''}
     </div>`;
   }).join('');
 }
@@ -10237,6 +10355,85 @@ document.getElementById('modal-dup-finder').addEventListener('click', function(e
   if (e.target === this) closeDupFinderModal();
 });
 
+// ===================== NETTOYAGE DOUBLONS LAST.FM =====================
+// Fusionne les entrées last.fm (albums + morceaux) qui ne diffèrent que par la casse
+// ou la ponctuation ("Luck In The Valley" vs "Luck in the Valley") — ces doublons
+// s'accumulaient car Supabase upsertait sur le texte brut (sensible à la casse) au lieu
+// d'une clé normalisée. Fusionne en mémoire (écoutes additionnées) puis remplace
+// intégralement les tables côté Supabase pour purger les doublons déjà accumulés.
+async function cleanupLastfmDuplicates() {
+  if (!lastfmData.length && !Object.keys(_lastfmTrackCounts).length) {
+    toast('Aucune donnée last.fm à nettoyer'); return;
+  }
+
+  // --- Albums ---
+  const beforeAlbums = lastfmData.length;
+  const lfDedup = new Map();
+  lastfmData.forEach(d => {
+    if (!d.artist || !d.album) return;
+    const k = normalizeKey(d.artist, d.album);
+    const prev = lfDedup.get(k);
+    if (!prev) {
+      lfDedup.set(k, { artist: d.artist, album: d.album, plays: d.plays || 0, _best: d.plays || 0 });
+    } else {
+      prev.plays += (d.plays || 0);
+      if ((d.plays || 0) > prev._best) { prev._best = d.plays || 0; prev.artist = d.artist; prev.album = d.album; }
+    }
+  });
+  lastfmData = [...lfDedup.values()].map(({ artist, album, plays }) => ({ artist, album, plays }));
+  const removedAlbums = beforeAlbums - lastfmData.length;
+
+  // --- Morceaux ---
+  const beforeTracks = Object.keys(_lastfmTrackCounts).length;
+  const ltDedup = new Map();
+  Object.values(_lastfmTrackCounts).forEach(d => {
+    if (!d.artist || !d.track) return;
+    const k = normalizeKey(d.artist, d.track) + '|' + normalizeKey('', d.album || '');
+    const prev = ltDedup.get(k);
+    if (!prev) {
+      ltDedup.set(k, { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays || 0, _best: d.plays || 0 });
+    } else {
+      prev.plays += (d.plays || 0);
+      if ((d.plays || 0) > prev._best) { prev._best = d.plays || 0; prev.artist = d.artist; prev.track = d.track; prev.album = d.album; }
+    }
+  });
+  const newTrackCounts = {};
+  ltDedup.forEach((v, k) => { newTrackCounts[k] = { artist: v.artist, track: v.track, album: v.album, plays: v.plays }; });
+  _lastfmTrackCounts = newTrackCounts;
+  const removedTracks = beforeTracks - Object.keys(_lastfmTrackCounts).length;
+
+  invalidateCache();
+  renderMissing();
+  if (typeof renderMissingTracks === 'function') renderMissingTracks();
+  updateNavBadges();
+  saveToStorage();
+
+  if (!window._sb) {
+    toast(`✓ Nettoyé localement : ${removedAlbums} doublon(s) albums, ${removedTracks} doublon(s) morceaux fusionnés`);
+    return;
+  }
+
+  toast(`Nettoyage Supabase en cours… (${removedAlbums} albums, ${removedTracks} morceaux détectés)`);
+  try {
+    // Remplacement complet : purge la table puis réinsère la version fusionnée,
+    // sinon les anciennes lignes en double (autre casse) restent orphelines côté serveur.
+    await window._sb.from('lastfm_data').delete().neq('artist', '___never___');
+    if (lastfmData.length) {
+      await sbUpsert('lastfm_data', lastfmData.map(d => ({ artist: d.artist, album: d.album, plays: d.plays || 0 })), 'artist,album');
+    }
+    if (Object.keys(_lastfmTrackCounts).length) {
+      await window._sb.from('lastfm_tracks').delete().neq('artist', '___never___');
+      const trackRows = Object.values(_lastfmTrackCounts).map(d => ({ artist: d.artist, track: d.track, album: d.album || '', plays: d.plays || 0 }));
+      for (let i = 0; i < trackRows.length; i += 400) {
+        await window._sb.from('lastfm_tracks').upsert(trackRows.slice(i, i + 400), { onConflict: 'artist,track,album' });
+      }
+    }
+    toast(`✓ last.fm nettoyé : ${removedAlbums} doublon(s) albums, ${removedTracks} doublon(s) morceaux fusionnés`);
+  } catch (e) {
+    toast('Erreur nettoyage Supabase : ' + (e.message || e), 'error');
+  }
+}
+
 async function initApp() {
   loadLastfmTrackStatus();
   loadLovedTracks();
@@ -10247,6 +10444,11 @@ async function initApp() {
     saveToStorage();
   }
   _dataReady = true;
+  // Migration ponctuelle : déplacer vers la wishlist morceaux les entrées "album"
+  // qui sont en fait des singles (tag Album == titre du morceau) ajoutées par erreur.
+  const migrated = migrateTrackLikeWishlistEntries();
+  if (migrated) toast(`${migrated} entrée${migrated>1?'s':''} de la wishlist déplacée${migrated>1?'s':''} vers les morceaux ✓`);
+  pruneWishlistOwned();
   // Restaurer config last.fm et reconnecter automatiquement
   const lfmCfg = localStorage.getItem('lastfm_cfg');
   if (lfmCfg) {
