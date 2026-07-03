@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-8 — fix wishlist "[object Object]" + validation à l'ajout -->
+<!-- APP_VERSION: v2026.07.02-9 — fix doublons morceaux (multi-album) + 2e bug de casse (ListenBrainz) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-8</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-9</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -3748,7 +3748,7 @@ function computeMissingTracks() {
   }
 
   // 3. Filtrer les morceaux last.fm
-  const result = Object.values(_lastfmTrackCounts)
+  const filtered = Object.values(_lastfmTrackCounts)
     .filter(d => {
       if (!d.plays) return false;
       if (typeof d.artist !== 'string' || typeof d.track !== 'string') return false;
@@ -3765,7 +3765,31 @@ function computeMissingTracks() {
       // Dans musicbee_tracks / albumTracksCache
       if (isOwned(d.artist, d.track, ownedAlbumTracks)) return false;
       return true;
-    })
+    });
+
+  // Un même morceau peut avoir été scrobblé sous plusieurs tags Album différents
+  // (single + compilation, typos...) — on consolide par (artiste, titre) pour éviter
+  // d'afficher plusieurs fois "le même morceau manquant" avec des écoutes séparées.
+  const grouped = new Map();
+  filtered.forEach(d => {
+    const key = normalizeKey(d.artist, d.track);
+    // L'album peut être un objet brut de l'API last.fm ({ "#text": "...", mbid: "..." })
+    // si un ancien enregistrement corrompu traîne encore — ne jamais le laisser passer tel
+    // quel, sinon Set.add(objet) puis .join() produit littéralement le texte "[object Object]".
+    const albumText = typeof d.album === 'string' ? d.album.trim() : '';
+    const prev = grouped.get(key);
+    if (!prev) {
+      grouped.set(key, { artist: d.artist, track: d.track, plays: d.plays || 0,
+        recording_mbid: d.recording_mbid, _albums: new Set(albumText ? [albumText] : []) });
+    } else {
+      prev.plays += (d.plays || 0);
+      if (albumText) prev._albums.add(albumText);
+      if (!prev.recording_mbid && d.recording_mbid) prev.recording_mbid = d.recording_mbid;
+    }
+  });
+  const result = [...grouped.values()]
+    .map(d => ({ artist: d.artist, track: d.track, plays: d.plays, recording_mbid: d.recording_mbid,
+      album: [...d._albums].join(' / ') }))
     .sort((a, b) => b.plays - a.plays);
 
  if (canCache) _cache.missingTracks = result;
@@ -6185,13 +6209,22 @@ function _saveLbCheckpoint(maxTs, totalFetched) {
 async function _flushLbToSupabase(isFinal) {
   if (!window._sb) return;
   try {
-    // lastfm_data (albums)
+    // lastfm_data (albums) — dédoublonnage par clé NORMALISÉE (voir saveToSupabase),
+    // sinon ce flux réintroduit les mêmes doublons de casse qu'ailleurs.
     const dedupAlb = new Map();
     lastfmData.forEach(d => {
-      const k = d.artist + '|||' + d.album;
-      if (!dedupAlb.has(k) || (d.plays||0) > (dedupAlb.get(k).plays||0)) dedupAlb.set(k, d);
+      if (!d.artist || !d.album) return;
+      const k = normalizeKey(d.artist, d.album);
+      const prev = dedupAlb.get(k);
+      if (!prev) {
+        dedupAlb.set(k, { artist: d.artist, album: d.album, plays: d.plays || 0, _best: d.plays || 0 });
+      } else {
+        prev.plays += (d.plays || 0);
+        if ((d.plays || 0) > prev._best) { prev._best = d.plays || 0; prev.artist = d.artist; prev.album = d.album; }
+      }
     });
-    await sbUpsert('lastfm_data', [...dedupAlb.values()].map(d => ({
+    lastfmData = [...dedupAlb.values()].map(({ artist, album, plays }) => ({ artist, album, plays }));
+    await sbUpsert('lastfm_data', lastfmData.map(d => ({
       artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: new Date().toISOString()
     })), 'artist,album');
 
