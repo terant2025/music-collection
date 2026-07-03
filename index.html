@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-9 — fix doublons morceaux (multi-album) + 2e bug de casse (ListenBrainz) -->
+<!-- APP_VERSION: v2026.07.02-10 — fix nettoyage wishlist jamais exécuté (mauvais chemin de code) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-9</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-10</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2024,6 +2024,14 @@ async function connectSupabase(anonKey) {
     // Ne pas sauvegarder si la collection est vide (ex: après migration — évite de purger les associations)
     if (!loaded && albums.length > 0) await saveToSupabase();
     _dataReady = true;
+    // Maintenance wishlist (migration morceaux mal classés, purge entrées corrompues,
+    // purge entrées déjà possédées) — doit tourner ici, PAS seulement dans initApp(),
+    // car c'est ce chemin (reconnexion auto à Supabase) qui s'exécute à chaque ouverture normale.
+    const migrated = migrateTrackLikeWishlistEntries();
+    if (migrated) toast(`${migrated} entrée${migrated>1?'s':''} de la wishlist déplacée${migrated>1?'s':''} vers les morceaux ✓`);
+    const cleanedCorrupted = cleanupCorruptedWishlistEntries();
+    if (cleanedCorrupted) toast(`${cleanedCorrupted} entrée${cleanedCorrupted>1?'s':''} corrompue${cleanedCorrupted>1?'s':''} ("[object Object]") retirée${cleanedCorrupted>1?'s':''} de la wishlist ✓`);
+    pruneWishlistOwned();
     renderAlbums(); renderTracks(); updateNavBadges();
     setSaveIndicator('saved');
     toast(loaded ? '🟢 Supabase connecté' : '🟢 Supabase connecté — importe ton XML MusicBee pour peupler la collection');
