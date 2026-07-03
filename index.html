@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-12 — fix suppression groupée associations (variable window._assocRows vs let) -->
+<!-- APP_VERSION: v2026.07.02-14 — fix morceaux manquants redirigés à tort vers wishlist albums -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-12</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-14</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -4054,21 +4054,17 @@ function exportMissingTracksCSV() {
 function addToWishlistFromMissingTrack(idx) {
   const d = renderMissingTracks._cache?.[idx];
   if (!d) return;
-  // N'ajouter à la wishlist ALBUMS que si on a un vrai nom d'album distinct du morceau.
-  // Sinon (morceau sans tag album, ou single dont le tag Album == titre du morceau),
-  // on l'ajoute à la wishlist MORCEAUX à la place.
-  const albumIsRealAlbum = d.album && d.album.trim()
-    && normalizeKey('', d.album).replace('|||', '') !== normalizeKey('', d.track).replace('|||', '');
-  if (albumIsRealAlbum) {
-    addToWishlist(d.artist, d.album, '', 'lastfm', d.plays, 0, `Morceau : ${d.track}`);
-  } else {
-    const key = normalizeKey(d.artist, d.track);
-    if (trackWishlist.find(w => normalizeKey(w.artist, w.title) === key)) return;
-    trackWishlist.push({ id: uid(), artist: d.artist, title: d.track, album: '', prio: 'mid', addedAt: Date.now() });
-    updateNavBadges();
-    saveToStorage();
-    toast(`Ajouté à la wishlist morceaux : ${d.artist} — ${d.track}`);
+  // Toujours ajouter à la wishlist MORCEAUX : on est sur l'écran "last.fm — Morceaux",
+  // l'action 🎯 doit rester au niveau morceau, même si le morceau appartient à un album connu
+  // (le tag album reste consultable dans la colonne Album de la wishlist morceaux).
+  const key = normalizeKey(d.artist, d.track);
+  if (trackWishlist.find(w => normalizeKey(w.artist, w.title) === key)) {
+    toast('Déjà dans la wishlist morceaux', 'warn'); return;
   }
+  trackWishlist.push({ id: uid(), artist: d.artist, title: d.track, album: d.album || '', prio: 'mid', addedAt: Date.now() });
+  updateNavBadges();
+  saveToStorage();
+  toast(`Ajouté à la wishlist morceaux : ${d.artist} — ${d.track}`);
 }
 
 // Compat ancienne signature
@@ -7284,13 +7280,21 @@ function wishlistOwnedSet() {
 // Retire de la wishlist les entrées déjà possédées (ex: après un réimport Discogs/MusicBee
 // qui vient d'ajouter un album qui était en wishlist). Appelé automatiquement — pas besoin
 // de cliquer manuellement sur ✓ pour chaque album retrouvé via un import.
+// IMPORTANT : ne touche que les entrées ajoutées automatiquement (source last.fm/RYM,
+// "cet album me manque"). Les ajouts manuels/stock (source 'manual'/'stock', ex: "je veux
+// aussi le CD d'un album que j'ai déjà en numérique") ne sont JAMAIS auto-retirés, car
+// l'utilisateur les a ajoutés en sachant déjà qu'il possède l'album dans un autre format.
 function pruneWishlistOwned() {
   if (!wishlist.length) return 0;
   const owned = wishlistOwnedSet();
   const before = wishlist.length;
-  const toRemove = wishlist.filter(w => owned.has(normalizeKey(w.artist, w.album)));
+  const toRemove = wishlist.filter(w =>
+    (w.source === 'lastfm' || w.source === 'rym') && owned.has(normalizeKey(w.artist, w.album))
+  );
   if (toRemove.length) console.warn('pruneWishlistOwned: entrées retirées (déjà possédées)', toRemove.map(w => `${w.artist} — ${w.album}`));
-  wishlist = wishlist.filter(w => !owned.has(normalizeKey(w.artist, w.album)));
+  wishlist = wishlist.filter(w =>
+    !((w.source === 'lastfm' || w.source === 'rym') && owned.has(normalizeKey(w.artist, w.album)))
+  );
   const removed = before - wishlist.length;
   if (removed) saveToStorage();
   return removed;
