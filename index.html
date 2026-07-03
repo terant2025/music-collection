@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.02-14 — fix morceaux manquants redirigés à tort vers wishlist albums -->
+<!-- APP_VERSION: v2026.07.03-1 — fix okFolder/discographie figés dans folders[] lors du réimport XML -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.02-14</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-1</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -4918,8 +4918,12 @@ async function importMusicBeeXML(input) {
         if (g.artist && normalizeKey(g.artist, '') !== normalizeKey(existing.artist, '')) {
           if (!existing.discogsId) existing.artist = g.artist;
         }
-        // Folders : ajouter sans dupliquer
+        // Folders : 'ok' et 'discographie' sont purement dérivés du chemin physique du
+        // fichier dans le XML courant (pas de flag manuel équivalent à forSale) — on les
+        // retire avant de les réappliquer, sinon un album resterait bloqué dans 'ok' après
+        // avoir été déplacé sur le disque vers Discographie (folders[] ne faisait qu'ajouter).
         if (!existing.folders) existing.folders = [];
+        existing.folders = existing.folders.filter(f => f !== 'ok' && f !== 'discographie');
         newFolders.forEach(f => { if (!existing.folders.includes(f)) existing.folders.push(f); });
 		existing.okFolder = existing.folders.includes('ok');
         // Ne pas écraser forSale s'il a été positionné manuellement
