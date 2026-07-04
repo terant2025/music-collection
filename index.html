@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-7 — bitrate des CD Discogs enrichi depuis l'album numérique associé (🔗) -->
+<!-- APP_VERSION: v2026.07.03-8 — nouvel outil "Suggestions d'association CD ↔ numérique" sur Discographie -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-7</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-8</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -902,6 +902,7 @@ input[type="file"] { display: none; }
           <option value="plays">Tri : Écoutes</option>
         </select>
         <button class="btn btn-sm" onclick="nav('albums');document.getElementById('modal-album').classList.add('open');openAlbumModal()">＋ Ajouter CD</button>
+        <button class="btn btn-sm btn-accent" onclick="openCdAssocFinderModal()">🔗 Suggestions d'association</button>
         <button class="btn btn-sm" onclick="exportDiscoCSV()">↓ CSV</button>
       </div>
 
@@ -1881,6 +1882,19 @@ input[type="file"] { display: none; }
     <div id="dup-finder-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeDupFinderModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal suggestions d'association CD ↔ numérique -->
+<div class="modal-overlay" id="modal-cdassoc-finder">
+  <div class="modal" style="width:720px;max-width:92vw">
+    <h2>🔗 Suggestions d'association CD ↔ numérique</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">CD Discogs sans backup numérique détecté, avec un candidat probable trouvé dans votre bibliothèque numérique (même artiste, titre très proche). Vérifiez avant d'associer : certains albums homonymes ou éditions différentes sont légitimement distincts.</p>
+    <div id="cdassoc-finder-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div id="cdassoc-finder-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeCdAssocFinderModal()">Fermer</button>
     </div>
   </div>
 </div>
@@ -10514,6 +10528,154 @@ function dupFinderMerge(idA, idB) {
 
 document.getElementById('modal-dup-finder').addEventListener('click', function(e) {
   if (e.target === this) closeDupFinderModal();
+});
+
+// ===================== SUGGESTIONS D'ASSOCIATION CD ↔ NUMÉRIQUE =====================
+// Repère les CD Discogs sans backup numérique (_cache.cdsWithoutBackup) qui ont un titre
+// très proche d'un album numérique du même artiste, mais jamais formellement associés
+// (bouton 🔗 sur Discographie) — réutilise le même scoring que le détecteur de doublons.
+const CDASSOC_IGNORE_KEY = 'discotheque_cdassoc_ignored';
+
+function _cdAssocIgnoredSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(CDASSOC_IGNORE_KEY) || '[]')); }
+  catch(e) { return new Set(); }
+}
+function _cdAssocIgnoreAdd(pairKey) {
+  const s = _cdAssocIgnoredSet();
+  s.add(pairKey);
+  localStorage.setItem(CDASSOC_IGNORE_KEY, JSON.stringify([...s]));
+}
+
+function computeCdAssocCandidates() {
+  const ignored = _cdAssocIgnoredSet();
+  const candidates = [];
+  const alreadyLinkedNumKeys = new Set(associations.map(a => a.numKey));
+
+  const cds = albums.filter(a => a.cd && !hasDigitalBackup(a));
+  if (!cds.length) return candidates;
+
+  // Regroupe les albums numériques par artiste normalisé (variantes incluses)
+  const digitalByArtist = new Map();
+  albums.filter(b => (b.flac || b.mp3 || b.digital) && !alreadyLinkedNumKeys.has(b.id)).forEach(b => {
+    for (const av of artistVariants(cleanDiscogsArtist(b.artist))) {
+      if (!digitalByArtist.has(av)) digitalByArtist.set(av, []);
+      digitalByArtist.get(av).push(b);
+    }
+  });
+
+  cds.forEach(a => {
+    const avSet = artistVariants(cleanDiscogsArtist(a.artist));
+    const seenIds = new Set();
+    const pool = [];
+    avSet.forEach(av => {
+      (digitalByArtist.get(av) || []).forEach(b => {
+        if (!seenIds.has(b.id)) { seenIds.add(b.id); pool.push(b); }
+      });
+    });
+    if (!pool.length) return;
+
+    const cleanA = _dupCleanTitle(a.album);
+    if (!cleanA) return;
+
+    let best = null;
+    pool.forEach(b => {
+      const cleanB = _dupCleanTitle(b.album);
+      if (!cleanB) return;
+      let score = 0, reason = '';
+      if (cleanA === cleanB) { score = 10; reason = 'titre identique une fois nettoyé'; }
+      else if (cleanA.startsWith(cleanB) || cleanB.startsWith(cleanA)) { score = 7; reason = 'un titre préfixe de l\'autre'; }
+      else {
+        const dice = _dupDiceScore(_dupTitleTokens(a.album), _dupTitleTokens(b.album));
+        if (dice >= 0.6) { score = 5; reason = 'mots du titre très proches'; }
+      }
+      if (score > 0 && (!best || score > best.score)) best = { b, score, reason };
+    });
+    if (!best) return;
+
+    const pairKey = _dupPairKey(String(a.id), String(best.b.id));
+    if (ignored.has(pairKey)) return;
+    candidates.push({ a, b: best.b, score: best.score, reason: best.reason, pairKey });
+  });
+
+  return candidates.sort((x, y) => y.score - x.score);
+}
+
+function openCdAssocFinderModal() {
+  renderCdAssocFinderList();
+  document.getElementById('modal-cdassoc-finder').classList.add('open');
+}
+
+function closeCdAssocFinderModal() {
+  document.getElementById('modal-cdassoc-finder').classList.remove('open');
+}
+
+function renderCdAssocFinderList() {
+  const candidates = computeCdAssocCandidates();
+  document.getElementById('cdassoc-finder-counter').textContent =
+    candidates.length ? `${candidates.length} suggestion${candidates.length > 1 ? 's' : ''}` : '';
+
+  const el = document.getElementById('cdassoc-finder-list');
+  if (!candidates.length) {
+    el.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">✅</div>Aucune suggestion — tous les CD sans backup n\'ont pas de candidat numérique évident.</div>';
+    return;
+  }
+
+  const fmtBadges = a => [
+    a.cd      ? '<span class="badge badge-cd">💿 CD</span>' : '',
+    a.flac    ? '<span class="badge badge-flac">FLAC</span>' : '',
+    a.mp3     ? '<span class="badge badge-mp3">MP3</span>' : '',
+    a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
+  ].filter(Boolean).join('');
+
+  el.innerHTML = candidates.map(({ a, b, score, reason, pairKey }) => {
+    const matchLabel = score >= 10 ? '✅ match fort' : score >= 7 ? '≈ match probable' : '~ similaire';
+    const matchColor = score >= 10 ? 'var(--accent)' : score >= 7 ? 'var(--amber)' : 'var(--text3)';
+    return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:11px;color:${matchColor};font-family:var(--mono)">${matchLabel} — ${esc(reason)}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${esc(a.artist)}${a.year ? ' · ' + a.year : ''}</div>
+          <div style="margin-top:4px">${fmtBadges(a) || '<span style="font-size:10px;color:var(--text3)">–</span>'}</div>
+        </div>
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.album)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${esc(b.artist)}${b.year ? ' · ' + b.year : ''}</div>
+          <div style="margin-top:4px">${fmtBadges(b) || '<span style="font-size:10px;color:var(--text3)">–</span>'}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end">
+        <button class="btn btn-sm" onclick="cdAssocFinderIgnore('${pairKey}')">Ignorer</button>
+        <button class="btn btn-sm btn-accent" onclick="cdAssocFinderConfirm('${sid(a.id)}','${sid(b.id)}')">🔗 Associer</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function cdAssocFinderIgnore(pairKey) {
+  _cdAssocIgnoreAdd(pairKey);
+  renderCdAssocFinderList();
+}
+
+function cdAssocFinderConfirm(cdId, numId) {
+  const realCd = unsid(cdId), realNum = unsid(numId);
+  const cdAlbum = albums.find(x => x.id === realCd);
+  const numAlbum = albums.find(x => x.id === realNum);
+  if (!cdAlbum || !numAlbum) return;
+  associations.push({ cdKey: cdAlbum.id, numKey: numAlbum.id });
+  invalidateCache();
+  renderDiscographie();
+  renderAlbums();
+  updateNavBadges();
+  saveToStorage();
+  renderCdAssocFinderList();
+  toast(`Association créée : ${cdAlbum.artist} — ${cdAlbum.album} ↔ ${numAlbum.album}`);
+}
+
+document.getElementById('modal-cdassoc-finder').addEventListener('click', function(e) {
+  if (e.target === this) closeCdAssocFinderModal();
 });
 
 // ===================== NETTOYAGE DOUBLONS LAST.FM =====================
