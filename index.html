@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-6 — fix bitrate perdu pour les morceaux isolés (import XML + sauvegarde/chargement Supabase) -->
+<!-- APP_VERSION: v2026.07.03-7 — bitrate des CD Discogs enrichi depuis l'album numérique associé (🔗) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -620,7 +620,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-6</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-7</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -7652,7 +7652,26 @@ function buildAllTracksList() {
   albums.forEach(a => {
     const atracks = albumTracksCache[a.id] || [];
     const mbTracks = atracks.filter(t => t.source === 'musicbee');
-    const useTracks = mbTracks.length ? mbTracks : atracks.filter(t => t.source === 'discogs');
+    let useTracks = mbTracks.length ? mbTracks : atracks.filter(t => t.source === 'discogs');
+    // Un CD Discogs sans pistes MusicBee propres peut être associé (🔗 sur la page
+    // Discographie) à une version numérique enregistrée sous un AUTRE id d'album — dans ce
+    // cas le bitrate existe bien quelque part, juste pas rattaché à cet id-ci. On l'injecte
+    // dans le tracklist Discogs en matchant par titre normalisé, au lieu d'afficher "–".
+    if (!mbTracks.length && useTracks.length) {
+      const linkedKeys = getLinkedNumKeys(String(a.id));
+      for (const lk of linkedKeys) {
+        const linkedAlbum = albumByKey(lk);
+        if (!linkedAlbum) continue;
+        const linkedMbTracks = (albumTracksCache[linkedAlbum.id] || []).filter(t => t.source === 'musicbee');
+        if (!linkedMbTracks.length) continue;
+        const byTitle = new Map(linkedMbTracks.map(t => [normalizeKey('', t.title).replace('|||', ''), t]));
+        useTracks = useTracks.map(t => {
+          const m = byTitle.get(normalizeKey('', t.title).replace('|||', ''));
+          return m ? { ...t, bitrate: m.bitrate || t.bitrate } : t;
+        });
+        break;
+      }
+    }
     useTracks.forEach(t => {
       result.push({ title: t.title, artist: a.artist, album: a.album, albumId: a.id,
         source: t.source, bitrate: t.bitrate, duration: t.duration, play_count: t.play_count,
