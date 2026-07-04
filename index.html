@@ -4,10 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.03-8 — nouvel outil "Suggestions d'association CD ↔ numérique" sur Discographie -->
+<!-- APP_VERSION: v2026.07.04-1 — écran RYM : retrait du chargement (déjà dans Import/Export) + export XLS des manquants -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root {
   --bg: #0e0e0f;
@@ -620,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.03-8</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.04-1</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1083,27 +1084,18 @@ input[type="file"] { display: none; }
     <!-- ==================== RYM ==================== -->
     <div class="section" id="sec-rym">
 
-      <!-- Import card -->
-      <div class="import-card" style="margin-bottom:20px">
-        <div class="source-logo">⭐</div>
-        <h3>RateYourMusic — Import CSV</h3>
-        <p>Sur RYM : votre profil → <strong>Collection → Export your data</strong>. Téléchargez le fichier <strong>ratings.csv</strong> et chargez-le ici.</p>
-        <div class="format-hint">
-          <strong>Colonnes utilisées :</strong><br>
-          RYM Rating, Title, First Name, Last Name,<br>
-          Release_Date, Genres (colonnes export natif RYM)
+      <!-- Barre d'options (le chargement RYM se fait depuis l'onglet Import / Export) -->
+      <div class="toolbar" style="margin-bottom:20px">
+        <span style="font-size:12px;color:var(--text3)">⭐ Croisement collection & ratings RYM</span>
+        <select id="rym-threshold" style="font-size:13px">
+          <option value="3.5">Note RYM ≥ 3.5</option>
+          <option value="3">Note RYM ≥ 3.0</option>
+          <option value="4">Note RYM ≥ 4.0</option>
+          <option value="4.5">Note RYM ≥ 4.5</option>
+        </select>
+        <div class="toolbar-right">
+          <span style="font-size:11px;color:var(--text3)">Chargement des données RYM → onglet Import / Export</span>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-accent" onclick="document.getElementById('file-rym').click()">📂 Charger page(s) HTML RYM</button>
-          <input type="file" id="file-rym" accept=".htm,.html" multiple onchange="importRYMHtml(this)">
-          <select id="rym-threshold" style="font-size:13px">
-            <option value="3.5">Note RYM ≥ 3.5</option>
-            <option value="3">Note RYM ≥ 3.0</option>
-            <option value="4">Note RYM ≥ 4.0</option>
-            <option value="4.5">Note RYM ≥ 4.5</option>
-          </select>
-        </div>
-        <div class="status" id="status-rym"></div>
       </div>
 
       <!-- Two columns -->
@@ -1113,7 +1105,10 @@ input[type="file"] { display: none; }
         <div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
             <div style="font-size:13px;font-weight:500;color:var(--text)">Notés sur RYM — absents de la collection</div>
-            <span class="nav-badge warn" id="rym-missing-count">0</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button class="btn btn-sm" onclick="exportRYMMissingXLS()" title="Exporter en XLS">⬇ XLS</button>
+              <span class="nav-badge warn" id="rym-missing-count">0</span>
+            </div>
           </div>
           <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Albums avec note RYM ≥ seuil non présents en CD ou fichier numérique.</p>
           <div id="rym-missing-list"></div>
@@ -9718,6 +9713,19 @@ function _csvDownload(filename, rows) {
     const s = String(v ?? '');
     return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }).join(',')).join('\n'), 'text/csv;charset=utf-8');
+}
+
+// Notés sur RYM — absents de la collection (colonne de gauche de l'écran RYM)
+function exportRYMMissingXLS() {
+  const list = (_rymMissingCache && _rymMissingCache.length) ? _rymMissingCache : computeRYMMissing();
+  const rows = [['Artiste', 'Album', 'Année', 'Note RYM', 'Genre']];
+  list.forEach(r => rows.push([r.artist, r.album, r.year || '', r.rating || '', r.genre || '']));
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 28 }, { wch: 36 }, { wch: 8 }, { wch: 10 }, { wch: 20 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'RYM manquants');
+  XLSX.writeFile(wb, `rym_manquants_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  toast(`${list.length} albums exportés ✓`);
 }
 
 function _rymRating(artist, album) {
