@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-7 — barre d'outils Import/Export rationalisée (doublons/last.fm/snapshot manuel déplacés dans les modales), fix RLS collection_snapshots -->
+<!-- APP_VERSION: v2026.07.05-8 — recherche Qobuz + ouverture lecteur web sur morceaux/albums manquants (last.fm), nécessite ajout côté Edge Function -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-7</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-8</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1456,7 +1456,22 @@ input[type="file"] { display: none; }
           <div class="status" id="status-tracklists"></div>
         </div>
 
-        <!-- MUSICBEE -->
+        <!-- QOBUZ -->
+        <div class="import-card">
+          <div class="source-logo">🎧</div>
+          <h3>Qobuz</h3>
+          <p>Permet un bouton "▶️ Écouter sur Qobuz" sur les morceaux/albums manquants (last.fm) : recherche le titre exact via l'API Qobuz puis ouvre le lecteur web Qobuz sur ce titre (pas de lecture intégrée dans l'app — Qobuz gère la lecture chez eux).</p>
+          <div class="format-hint">
+            ⚠️ Nécessite une Edge Function Supabase à jour (voir doc) — recherche uniquement, aucun identifiant Qobuz n'est jamais écrit dans ce fichier.
+          </div>
+          <div style="margin-bottom:8px;display:flex;flex-direction:column;gap:6px">
+            <input type="text" id="qobuz-appid" placeholder="Qobuz app_id (si tu en as un)" style="font-family:var(--mono);font-size:11px;width:100%" oninput="localStorage.setItem('qobuz_appid',this.value)">
+            <input type="password" id="qobuz-token" placeholder="Qobuz user token" style="font-family:var(--mono);font-size:11px;width:100%" oninput="localStorage.setItem('qobuz_token',this.value)">
+          </div>
+          <div class="status" id="status-qobuz"></div>
+        </div>
+
+
         <div class="import-card">
           <div class="source-logo">🎧</div>
           <h3>MusicBee</h3>
@@ -1889,6 +1904,18 @@ input[type="file"] { display: none; }
     <div id="cdassoc-finder-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeCdAssocFinderModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal recherche Qobuz -->
+<div class="modal-overlay" id="modal-qobuz">
+  <div class="modal" style="width:560px;max-width:92vw">
+    <h2>🎧 Résultats Qobuz</h2>
+    <div id="qobuz-search-label" style="font-size:12px;color:var(--text2);margin-bottom:12px"></div>
+    <div id="qobuz-results-list" style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeQobuzModal()">Fermer</button>
     </div>
   </div>
 </div>
@@ -3684,6 +3711,7 @@ function renderMissing() {
           <button class="btn btn-sm ${st==='to_listen'?'btn-accent':''}" data-idx="${idx}" data-action="to_listen" title="À écouter">👂</button>
           <button class="btn btn-sm ${st==='wishlist'?'btn-accent':''}" data-idx="${idx}" data-action="wishlist" title="Wishlist">🎯</button>
           <button class="btn btn-sm btn-accent" data-idx="${idx}" data-action="add">＋</button>
+          <button class="btn btn-sm" data-idx="${idx}" data-action="qobuz" title="Chercher sur Qobuz">🎧</button>
         </div>`;
       frag.appendChild(div);
     }
@@ -3959,6 +3987,7 @@ function renderMissingTracks() {
       <button class="btn btn-sm ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
       <button class="btn btn-sm ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
       <button class="btn btn-sm btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋</button>
+      <button class="btn btn-sm" onclick="openQobuzModal(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'), 'track')" title="Chercher sur Qobuz">🎧</button>
     </td>
   </tr>`;
   }).join('') + (list.length > 200 ? `<tr><td colspan="5" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
@@ -10955,6 +10984,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (action === 'assoc')          associateFromMissingIdx(idx);
     else if (action === 'add')       { const m = _missingListCache[idx]; if(m) addFromMissing(encodeURIComponent(m.artist), encodeURIComponent(m.album)); }
     else if (action === 'wishlist')  setLastfmStatusWishlist(idx);
+    else if (action === 'qobuz')     { const m = _missingListCache[idx]; if(m) openQobuzModal(m.artist, m.album, 'album'); }
     else                             setLastfmStatusFromMissing(idx, action);
   });
 });
@@ -11423,6 +11453,68 @@ async function deleteSnapshot(id) {
     toast('Erreur suppression snapshot : ' + (e.message || e), 'error');
   }
 }
+
+// ===================== QOBUZ (recherche + ouverture lecteur web) =====================
+// Pas d'API d'embed publique chez Qobuz (contrairement à Spotify) — l'accès officiel est
+// réservé aux partenaires matériel/logiciel (contact api@qobuz.com pour app_id/app_secret).
+// Ici on utilise le token personnel de l'utilisateur, jamais stocké en dur dans ce fichier
+// (localStorage uniquement, même principe que le token Discogs). La recherche passe par la
+// même Edge Function Supabase que Discogs/MusicBrainz (source='qobuz' à ajouter côté
+// Edge Function — voir doc). Une fois le bon titre identifié, on ouvre le lecteur web Qobuz
+// (play.qobuz.com) sur ce titre précis plutôt que de rejouer l'audio nous-mêmes : Qobuz reste
+// responsable de la lecture et des droits, on ne fait qu'une recherche + deep-link fiable.
+function getQobuzAppId() {
+  return (document.getElementById('qobuz-appid')?.value || localStorage.getItem('qobuz_appid') || '').trim();
+}
+function getQobuzToken() {
+  return (document.getElementById('qobuz-token')?.value || localStorage.getItem('qobuz_token') || '').trim();
+}
+
+async function searchQobuz(query, type) {
+  const token = getQobuzToken();
+  if (!token) throw new Error("Token Qobuz manquant — renseigne-le dans Import/Export");
+  const data = await callEdgeFn({
+    source: 'qobuz', type, query,
+    qobuz_app_id: getQobuzAppId(),
+    qobuz_token: token,
+  });
+  return data.results || [];
+}
+
+async function openQobuzModal(artist, titleOrAlbum, type) {
+  document.getElementById('qobuz-search-label').textContent = `Recherche : ${artist} — ${titleOrAlbum} (${type === 'track' ? 'morceau' : 'album'})`;
+  const listEl = document.getElementById('qobuz-results-list');
+  listEl.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">Recherche en cours…</div>';
+  document.getElementById('modal-qobuz').classList.add('open');
+  try {
+    const results = await searchQobuz(`${artist} ${titleOrAlbum}`, type);
+    if (!results.length) {
+      listEl.innerHTML = '<div class="empty" style="padding:24px">Aucun résultat Qobuz pour cette recherche.</div>';
+      return;
+    }
+    listEl.innerHTML = results.slice(0, 15).map(r => {
+      const label = type === 'track'
+        ? `${esc(r.title)} — ${esc(r.artist)}${r.album ? ' · ' + esc(r.album) : ''}`
+        : `${esc(r.title)} — ${esc(r.artist)}${r.year ? ' (' + r.year + ')' : ''}`;
+      const playUrl = `https://play.qobuz.com/${type}/${r.id}`;
+      return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
+        <a class="btn btn-sm btn-accent" href="${playUrl}" target="_blank" rel="noopener">▶️ Écouter</a>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    console.error('openQobuzModal error', e);
+    listEl.innerHTML = `<div class="empty" style="padding:24px">Erreur : ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function closeQobuzModal() {
+  document.getElementById('modal-qobuz').classList.remove('open');
+}
+document.getElementById('modal-qobuz').addEventListener('click', function(e) {
+  if (e.target === this) closeQobuzModal();
+});
+
 </script>
 </body>
 </html>
