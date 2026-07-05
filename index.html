@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-11 — export offline Android (fichier HTML autonome, albums uniquement, croisement Discogs/MB/RYM/last.fm) -->
+<!-- APP_VERSION: v2026.07.05-12 — FIX CRITIQUE : deduplicateAlbums fusionnait les homonymes distincts (discogsId/mb_release_id/année différents), perte de données possible -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-11</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-12</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2127,22 +2127,40 @@ async function sbUpsert(table, rows, onConflict) {
 
 // Dédoublonner le tableau albums en mémoire
 // Utilise artistVariants pour fusionner ex. "Various" et "Various Artists", "EELS" et "Eels"
+// GARDE-FOU HOMONYMES : deux albums peuvent partager le même artiste+titre normalisé sans
+// être le même album (ex: "Weezer" — Weezer, l'album bleu de 1994 ET l'album vert de 2001).
+// On ne fusionne QUE si rien ne prouve qu'il s'agit de deux albums distincts : si les deux
+// ont un discogsId différent, un mb_release_id différent, ou une année différente (quand les
+// deux sont renseignées), on les laisse séparés même si le titre est identique.
+function albumsLookLikeHomonyms(a, b) {
+  if (a.discogsId && b.discogsId && a.discogsId !== b.discogsId) return true;
+  if (a.mb_release_id && b.mb_release_id && a.mb_release_id !== b.mb_release_id) return true;
+  if (a.year && b.year && a.year.slice(0,4) !== b.year.slice(0,4)) return true;
+  return false;
+}
+
 function deduplicateAlbums() {
-  const seen = new Map(); // clé normalisée → entrée retenue
+  const seen = new Map();    // clé normalisée (variante) → entrée retenue
+  const dropped = new Set(); // albums fusionnés, à retirer explicitement à la fin
   const before = albums.length;
+  let homonymsSkipped = 0;
 
   albums.forEach(a => {
+    if (dropped.has(a)) return; // déjà absorbé par un doublon traité plus tôt dans cette passe
     const albumNorm = normalizeKey('', a.album).replace('|||', '');
-    // Clé canonique : variante normalisée la plus courte (stable)
-    let canonKey = null;
+    let merged = false;
+
     for (const av of artistVariants(a.artist)) {
       const k = av + '|||' + albumNorm;
-      if (!canonKey) canonKey = k;
-      // Si une entrée existe déjà pour cette variante, fusionner
       const prev = seen.get(k);
-      if (prev) {
-        // Garder l'entrée avec l'id le plus élevé (la plus récente) mais fusionner les formats
-        const [keep, drop] = a.id > prev.id ? [a, prev] : [prev, a];
+      if (prev && prev !== a) {
+        if (albumsLookLikeHomonyms(prev, a)) {
+          homonymsSkipped++;
+          continue; // cette variante précise est bloquée — essayer les autres variantes d'artiste
+        }
+        // Fusionner : garder l'id le plus élevé (le plus récent), fusionner les formats
+        const keep = a.id > prev.id ? a : prev;
+        const drop = keep === a ? prev : a;
         keep.cd      = keep.cd      || drop.cd;
         keep.flac    = keep.flac    || drop.flac;
         keep.mp3     = keep.mp3     || drop.mp3;
@@ -2151,22 +2169,33 @@ function deduplicateAlbums() {
         if (!keep.year  && drop.year)  keep.year  = drop.year;
         if (!keep.genre && drop.genre) keep.genre = drop.genre;
         if (!keep.note  && drop.note)  keep.note  = drop.note;
-        // Mettre à jour toutes les variantes pour pointer vers keep
+        // Repointer les associations qui référençaient la fiche supprimée, pour éviter de
+        // laisser des associations CD↔numérique / RYM orphelines après la fusion
+        associations.forEach(x => {
+          if (x.cdKey === drop.id) x.cdKey = keep.id;
+          if (x.numKey === drop.id) x.numKey = keep.id;
+        });
+        rymAssociations.forEach(x => { if (x.albumKey === drop.id) x.albumKey = keep.id; });
+        dropped.add(drop);
+        // Réindexer toutes les variantes de keep pour que les albums suivants le retrouvent
         for (const av2 of artistVariants(keep.artist)) seen.set(av2 + '|||' + albumNorm, keep);
-        for (const av2 of artistVariants(drop.artist)) seen.set(av2 + '|||' + albumNorm, keep);
-        canonKey = null; // déjà indexé
+        merged = true;
         break;
       }
     }
-    if (canonKey !== null) {
-      // Nouvelle entrée : indexer toutes ses variantes
-      for (const av of artistVariants(a.artist)) seen.set(av + '|||' + albumNorm, a);
+
+    if (!merged) {
+      // Nouvelle entrée (ou homonyme volontairement distinct) : n'indexer que les variantes
+      // encore libres, sans jamais écraser une entrée homonyme déjà indexée
+      for (const av of artistVariants(a.artist)) {
+        const k = av + '|||' + albumNorm;
+        if (!seen.has(k)) seen.set(k, a);
+      }
     }
   });
 
-  // Reconstruire albums[] sans doublons (valeurs uniques du Map)
-  const unique = [...new Set(seen.values())];
-  albums = unique;
+  albums = albums.filter(a => !dropped.has(a));
+  if (homonymsSkipped) console.log(`Dédoublonnage : ${homonymsSkipped} homonyme(s) distinct(s) préservé(s) (discogsId/mb_release_id/année différents)`);
   if (albums.length < before) console.log(`Dédoublonnage : ${before - albums.length} doublons supprimés`);
 }
 
