@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-2 — fix timeout sync Last.fm (Map au lieu de find en boucle) + exclusion pistes "top titres" du comptage albums non matchés -->
+<!-- APP_VERSION: v2026.07.05-3 — fix décodage URL de Location (top%20titres non détecté) + timeout Last.fm + exclusion top titres du comptage -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-2</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-3</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -6774,7 +6774,12 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   const byKey = {}; // normalizeKey(artist, album) → { artist, album, tracks[], folder }
 
   trackDicts.forEach(d => {
-    const location = str(d, 'Location');
+    const locationRaw = str(d, 'Location');
+    // Location est une URL encodée (ex: "top%20titres") — la décoder avant tout test
+    // de regex/inclusion, sinon "top%20titres" ne matche jamais "/top.?ti/i" (écart de 3
+    // caractères pour %20, la regex n'en autorise qu'un seul), et le dossier reste 'album'.
+    let location = locationRaw;
+    try { location = decodeURIComponent(locationRaw); } catch(e) { /* URI malformée, garder brut */ }
     const locationLow = location.toLowerCase();
     if (locationLow.includes('blind-test') || locationLow.includes('blind_test')) return;
 
