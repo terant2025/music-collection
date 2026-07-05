@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-3 — fix décodage URL de Location (top%20titres non détecté) + timeout Last.fm + exclusion top titres du comptage -->
+<!-- APP_VERSION: v2026.07.05-4 — ajout diagnostic d'intégrité (doublons id, associations orphelines, wishlist corrompue, folders vides, notes hors plage) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-3</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-4</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1566,6 +1566,7 @@ input[type="file"] { display: none; }
           <button class="btn" onclick="runDeduplication()">🔧 Fusionner les doublons</button>
           <button class="btn btn-accent" onclick="openDupFinderModal()">🔍 Détecter les doublons potentiels</button>
           <button class="btn" onclick="cleanupLastfmDuplicates()">🧹 Nettoyer les doublons last.fm</button>
+          <button class="btn btn-accent" onclick="openIntegrityModal()">🩺 Vérifier l'intégrité</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
@@ -1890,6 +1891,20 @@ input[type="file"] { display: none; }
     <div id="cdassoc-finder-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeCdAssocFinderModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal diagnostic d'intégrité -->
+<div class="modal-overlay" id="modal-integrity">
+  <div class="modal" style="width:760px;max-width:92vw">
+    <h2>🩺 Diagnostic d'intégrité</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Recherche d'incohérences internes (doublons non liés, associations orphelines, wishlist corrompue, dossiers manquants…) qui ne devraient jamais arriver mais qui se sont déjà produites suite à des bugs d'import/fusion.</p>
+    <div id="integrity-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div id="integrity-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="renderIntegrityList()">↻ Relancer le scan</button>
+      <button class="btn" onclick="closeIntegrityModal()">Fermer</button>
     </div>
   </div>
 </div>
@@ -10925,6 +10940,352 @@ document.addEventListener('DOMContentLoaded', () => {
     else                             setLastfmStatusFromMissing(idx, action);
   });
 });
+
+// ===================== DIAGNOSTIC D'INTÉGRITÉ =====================
+// Scanne l'état en mémoire (albums, tracks, wishlist, associations) à la recherche
+// d'incohérences qui ne devraient jamais arriver mais qui se sont déjà produites par le
+// passé suite à des bugs d'import/fusion (doublons non liés, associations orphelines,
+// wishlist corrompue, etc.). Chaque catégorie expose soit une correction automatique sûre
+// (bouton "Corriger"), soit un simple signalement quand la correction nécessite un
+// arbitrage humain (ex: fusionner deux fiches — géré par l'outil de fusion existant).
+function computeIntegrityReport() {
+  const issues = [];
+
+  // 1) IDs d'albums strictement dupliqués — ne devrait jamais arriver : un upsert Supabase
+  //    sur onConflict:'id' écraserait silencieusement l'une des deux fiches.
+  {
+    const seen = new Set();
+    const dupIds = new Set();
+    albums.forEach(a => { if (seen.has(a.id)) dupIds.add(a.id); seen.add(a.id); });
+    if (dupIds.size) {
+      issues.push({
+        key: 'dup_id', severity: 'critique',
+        label: `${dupIds.size} id d'album strictement dupliqué(s)`,
+        detail: "Deux fiches partagent le même identifiant interne — un upsert Supabase écraserait silencieusement l'une des deux.",
+        sample: [...dupIds].slice(0, 5).map(id => {
+          const rows = albums.filter(a => a.id === id);
+          return `${rows[0].artist} — ${rows[0].album} (×${rows.length})`;
+        }),
+        fix: 'fixDupIds'
+      });
+    }
+  }
+
+  // 2) Doublons "exacts" non liés : même clé artiste+album, id différents, sans lien
+  //    CD↔numérique ni mergedAliases pour justifier légitimement deux fiches séparées.
+  {
+    const byKey = new Map();
+    albums.forEach(a => {
+      const k = normalizeKey(a.artist, a.album);
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(a);
+    });
+    const pairs = [];
+    byKey.forEach(group => {
+      if (group.length < 2) return;
+      for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          const a = group[i], b = group[j];
+          if (a.id === b.id) continue;
+          const linkedTogether = associations.some(as =>
+            (as.cdKey === a.id && as.numKey === b.id) || (as.cdKey === b.id && as.numKey === a.id));
+          const aliasLinked = (a.mergedAliases || []).some(al => normalizeKey(al.artist, al.album) === normalizeKey(b.artist, b.album))
+            || (b.mergedAliases || []).some(al => normalizeKey(al.artist, al.album) === normalizeKey(a.artist, a.album));
+          if (!linkedTogether && !aliasLinked) pairs.push([a, b]);
+        }
+      }
+    });
+    if (pairs.length) {
+      issues.push({
+        key: 'dup_exact', severity: 'avertissement',
+        label: `${pairs.length} doublon(s) exact(s) non lié(s)`,
+        detail: "Même artiste + titre exact sur plusieurs fiches, sans lien CD↔numérique ni fusion enregistrée. Probablement un vrai doublon à fusionner manuellement.",
+        sample: pairs.slice(0, 5).map(([a, b]) => `${a.artist} — ${a.album}`),
+        fix: null,
+        fixLabel: 'Ouvrir le détecteur de doublons',
+        fixAction: "closeIntegrityModal();openDupFinderModal()"
+      });
+    }
+  }
+
+  // 3) Associations CD↔numérique orphelines (référencent un album supprimé/fusionné)
+  {
+    const albumIds = new Set(albums.map(a => a.id));
+    const orphans = associations.filter(as => !albumIds.has(as.cdKey) || !albumIds.has(as.numKey));
+    if (orphans.length) {
+      issues.push({
+        key: 'orphan_cdassoc', severity: 'avertissement',
+        label: `${orphans.length} association(s) CD↔numérique orpheline(s)`,
+        detail: "Référence un album supprimé ou fusionné — sans effet visible mais pollue la table associations.",
+        sample: orphans.slice(0, 5).map(as => `cd:${as.cdKey} ↔ num:${as.numKey}`),
+        fix: 'fixOrphanCdAssoc'
+      });
+    }
+  }
+
+  // 4) Associations RYM orphelines (albumKey ne pointe plus vers un album existant)
+  {
+    const albumIds = new Set(albums.map(a => a.id));
+    const orphans = rymAssociations.filter(as => !albumIds.has(as.albumKey));
+    if (orphans.length) {
+      issues.push({
+        key: 'orphan_rymassoc', severity: 'avertissement',
+        label: `${orphans.length} association(s) RYM orpheline(s)`,
+        detail: "Référence un album supprimé ou fusionné.",
+        sample: orphans.slice(0, 5).map(as => `rym:${as.rymKey} → album:${as.albumKey}`),
+        fix: 'fixOrphanRymAssoc'
+      });
+    }
+  }
+
+  // 5) Wishlist : doublons internes (même artiste+album en double dans la wishlist)
+  {
+    const byKey = new Map();
+    wishlist.forEach(w => {
+      const k = normalizeKey(w.artist, w.album);
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(w);
+    });
+    const dupGroups = [...byKey.values()].filter(g => g.length > 1);
+    if (dupGroups.length) {
+      issues.push({
+        key: 'wishlist_dup', severity: 'avertissement',
+        label: `${dupGroups.length} doublon(s) dans la wishlist`,
+        detail: "Le même artiste + album apparaît plusieurs fois dans la wishlist.",
+        sample: dupGroups.slice(0, 5).map(g => `${g[0].artist} — ${g[0].album} (×${g.length})`),
+        fix: 'fixWishlistDup'
+      });
+    }
+  }
+
+  // 6) Wishlist : entrées déjà possédées mais ajoutées manuellement — pas auto-nettoyées
+  //    par design (voir pruneWishlistOwned), simple signalement pour vérification manuelle.
+  {
+    const owned = wishlistOwnedSet();
+    const manualOwned = wishlist.filter(w =>
+      w.source !== 'lastfm' && w.source !== 'rym' && owned.has(normalizeKey(w.artist, w.album))
+    );
+    if (manualOwned.length) {
+      issues.push({
+        key: 'wishlist_manual_owned', severity: 'info',
+        label: `${manualOwned.length} entrée(s) wishlist déjà possédée(s) (ajout manuel)`,
+        detail: "Non auto-supprimées par design (ex: CD souhaité pour un album déjà possédé en numérique). À vérifier si toujours pertinent.",
+        sample: manualOwned.slice(0, 5).map(w => `${w.artist} — ${w.album}`),
+        fix: null
+      });
+    }
+  }
+
+  // 7) Wishlist corrompue ([object Object], champs vides — bug historique last.fm)
+  {
+    const corrupted = wishlist.filter(w =>
+      typeof w.artist !== 'string' || typeof w.album !== 'string'
+      || !w.artist.trim() || !w.album.trim()
+      || w.artist === '[object Object]' || w.album === '[object Object]'
+    );
+    if (corrupted.length) {
+      issues.push({
+        key: 'wishlist_corrupted', severity: 'critique',
+        label: `${corrupted.length} entrée(s) wishlist corrompue(s)`,
+        detail: "Champ artiste ou album manquant/corrompu.",
+        sample: corrupted.slice(0, 5).map(w => `${w.artist} — ${w.album}`),
+        fix: 'fixWishlistCorrupted'
+      });
+    }
+  }
+
+  // 8) Albums sans folders (jamais censé arriver — tout le rendu par onglet s'appuie dessus)
+  {
+    const empty = albums.filter(a => !a.folders || !a.folders.length);
+    if (empty.length) {
+      issues.push({
+        key: 'empty_folders', severity: 'critique',
+        label: `${empty.length} album(s) sans dossier (folders vide)`,
+        detail: "Un album sans folders[] peut disparaître silencieusement de toutes les vues filtrées par dossier.",
+        sample: empty.slice(0, 5).map(a => `${a.artist} — ${a.album}`),
+        fix: 'fixEmptyFolders'
+      });
+    }
+  }
+
+  // 9) Morceaux isolés incomplets (artiste ou titre vide)
+  {
+    const bad = tracks.filter(t => !t.artist?.trim() || !t.title?.trim());
+    if (bad.length) {
+      issues.push({
+        key: 'bad_tracks', severity: 'avertissement',
+        label: `${bad.length} morceau(x) isolé(s) incomplet(s)`,
+        detail: "Artiste ou titre manquant — probablement issu d'un tag XML mal renseigné.",
+        sample: bad.slice(0, 5).map(t => `${t.artist || '?'} — ${t.title || '?'}`),
+        fix: 'fixBadTracks'
+      });
+    }
+  }
+
+  // 10) Notes hors plage 0–5 sur albums ou morceaux (ex: échelle /10 importée telle quelle)
+  {
+    const isBadNote = n => n !== undefined && n !== null && n !== 0 && (isNaN(n) || n < 0 || n > 5);
+    const badAlbums = albums.filter(a => isBadNote(a.note));
+    const badTracks = tracks.filter(t => isBadNote(t.note));
+    const total = badAlbums.length + badTracks.length;
+    if (total) {
+      issues.push({
+        key: 'bad_notes', severity: 'avertissement',
+        label: `${total} note(s) hors plage (0–5)`,
+        detail: "Provient probablement d'une échelle mal convertie (ex: note /10 ou /100 importée telle quelle).",
+        sample: [...badAlbums, ...badTracks].slice(0, 5).map(x => `${x.artist} — ${x.album || x.title} : ${x.note}`),
+        fix: 'fixBadNotes'
+      });
+    }
+  }
+
+  return issues;
+}
+
+function openIntegrityModal() {
+  renderIntegrityList();
+  document.getElementById('modal-integrity').classList.add('open');
+}
+
+function closeIntegrityModal() {
+  document.getElementById('modal-integrity').classList.remove('open');
+}
+
+document.getElementById('modal-integrity').addEventListener('click', function(e) {
+  if (e.target === this) closeIntegrityModal();
+});
+
+const INTEGRITY_SEVERITY_COLOR = { critique: 'var(--red, #e5484d)', avertissement: 'var(--amber)', info: 'var(--text3)' };
+const INTEGRITY_SEVERITY_ICON  = { critique: '🔴', avertissement: '🟡', info: 'ℹ️' };
+
+function renderIntegrityList() {
+  const issues = computeIntegrityReport();
+  const counter = document.getElementById('integrity-counter');
+  const nCrit = issues.filter(i => i.severity === 'critique').length;
+  const nWarn = issues.filter(i => i.severity === 'avertissement').length;
+  const nInfo = issues.filter(i => i.severity === 'info').length;
+  counter.textContent = issues.length
+    ? `${nCrit} critique(s) · ${nWarn} avertissement(s) · ${nInfo} info` : '';
+
+  const el = document.getElementById('integrity-list');
+  if (!issues.length) {
+    el.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">✅</div>Aucune incohérence détectée !</div>';
+    return;
+  }
+
+  el.innerHTML = issues.map(issue => {
+    const color = INTEGRITY_SEVERITY_COLOR[issue.severity];
+    const icon  = INTEGRITY_SEVERITY_ICON[issue.severity];
+    const sampleHtml = (issue.sample || []).map(s => `<div style="font-size:11px;color:var(--text2);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">• ${esc(s)}</div>`).join('');
+    const actionBtn = issue.fix
+      ? `<button class="btn btn-sm btn-accent" onclick="${issue.fix}()">🔧 Corriger automatiquement</button>`
+      : (issue.fixAction ? `<button class="btn btn-sm btn-accent" onclick="${issue.fixAction}">${esc(issue.fixLabel || 'Traiter')}</button>` : '');
+    return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+        <div>
+          <span style="font-size:13px;font-weight:500">${icon} ${esc(issue.label)}</span>
+          <div style="font-size:11px;color:${color};margin-top:2px">${issue.severity}</div>
+        </div>
+        ${actionBtn}
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px">${esc(issue.detail)}</div>
+      ${sampleHtml}
+    </div>`;
+  }).join('');
+}
+
+// ── Corrections automatiques (sûres — ne s'appliquent qu'aux catégories sans arbitrage humain) ──
+
+function fixDupIds() {
+  const albById = new Map();
+  let removed = 0;
+  albums.forEach(a => {
+    const prev = albById.get(a.id);
+    if (!prev) { albById.set(a.id, a); return; }
+    // Même logique de fusion que la dédup post-import XML : garder la version la plus complète
+    if (!prev.discogsId && a.discogsId) prev.discogsId = a.discogsId;
+    if (!prev.year && a.year) prev.year = a.year;
+    if (!prev.genre && a.genre) prev.genre = a.genre;
+    if (!prev.note && a.note) prev.note = a.note;
+    if (!prev.cover_url && a.cover_url) prev.cover_url = a.cover_url;
+    prev.has_cd = prev.has_cd || a.has_cd;
+    prev.cd = prev.cd || a.cd;
+    if (!prev.format && a.format) prev.format = a.format;
+    (a.folders || []).forEach(f => { if (!prev.folders) prev.folders = []; if (!prev.folders.includes(f)) prev.folders.push(f); });
+    removed++;
+  });
+  albums = [...albById.values()];
+  invalidateCache();
+  renderAlbums(); updateNavBadges(); saveToStorage();
+  toast(`${removed} doublon(s) d'id fusionné(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixOrphanCdAssoc() {
+  const albumIds = new Set(albums.map(a => a.id));
+  const before = associations.length;
+  associations = associations.filter(as => albumIds.has(as.cdKey) && albumIds.has(as.numKey));
+  saveToStorage();
+  toast(`${before - associations.length} association(s) orpheline(s) supprimée(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixOrphanRymAssoc() {
+  const albumIds = new Set(albums.map(a => a.id));
+  const before = rymAssociations.length;
+  rymAssociations = rymAssociations.filter(as => albumIds.has(as.albumKey));
+  saveToStorage();
+  toast(`${before - rymAssociations.length} association(s) RYM orpheline(s) supprimée(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixWishlistDup() {
+  const seen = new Set();
+  const before = wishlist.length;
+  wishlist = wishlist.filter(w => {
+    const k = normalizeKey(w.artist, w.album);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  saveToStorage();
+  toast(`${before - wishlist.length} doublon(s) wishlist supprimé(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixWishlistCorrupted() {
+  const removed = cleanupCorruptedWishlistEntries();
+  saveToStorage();
+  toast(`${removed} entrée(s) wishlist corrompue(s) supprimée(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixEmptyFolders() {
+  let fixed = 0;
+  albums.forEach(a => { if (!a.folders || !a.folders.length) { a.folders = ['album']; fixed++; } });
+  invalidateCache();
+  renderAlbums(); updateNavBadges(); saveToStorage();
+  toast(`${fixed} album(s) recatégorisé(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixBadTracks() {
+  const before = tracks.length;
+  tracks = tracks.filter(t => t.artist?.trim() && t.title?.trim());
+  renderTracks(); updateNavBadges(); saveToStorage();
+  toast(`${before - tracks.length} morceau(x) incomplet(s) supprimé(s) ✓`);
+  renderIntegrityList();
+}
+
+function fixBadNotes() {
+  const isBadNote = n => n !== undefined && n !== null && n !== 0 && (isNaN(n) || n < 0 || n > 5);
+  let fixed = 0;
+  albums.forEach(a => { if (isBadNote(a.note)) { a.note = 0; fixed++; } });
+  tracks.forEach(t => { if (isBadNote(t.note)) { t.note = 0; fixed++; } });
+  renderAlbums(); renderTracks(); saveToStorage();
+  toast(`${fixed} note(s) réinitialisée(s) ✓`);
+  renderIntegrityList();
+}
 </script>
 </body>
 </html>
