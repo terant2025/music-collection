@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-6 — snapshots Supabase manuels + auto avant purge massive, avec restauration (table collection_snapshots à créer) -->
+<!-- APP_VERSION: v2026.07.05-7 — barre d'outils Import/Export rationalisée (doublons/last.fm/snapshot manuel déplacés dans les modales), fix RLS collection_snapshots -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-6</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-7</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1563,11 +1563,7 @@ input[type="file"] { display: none; }
           <input type="file" id="file-reimport-json" accept=".json" onchange="reimportJSON(this)">
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
-          <button class="btn" onclick="runDeduplication()">🔧 Fusionner les doublons</button>
-          <button class="btn btn-accent" onclick="openDupFinderModal()">🔍 Détecter les doublons potentiels</button>
-          <button class="btn" onclick="cleanupLastfmDuplicates()">🧹 Nettoyer les doublons last.fm</button>
           <button class="btn btn-accent" onclick="openIntegrityModal()">🩺 Vérifier l'intégrité</button>
-          <button class="btn" onclick="manualSnapshot()">📸 Créer un snapshot</button>
           <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Snapshots Supabase</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
@@ -1918,6 +1914,7 @@ input[type="file"] { display: none; }
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
       <button class="btn btn-sm" onclick="closeIntegrityModal();runDeduplication()">🔧 Fusionner les doublons</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openDupFinderModal()">🔍 Doublons potentiels</button>
+      <button class="btn btn-sm" onclick="cleanupLastfmDuplicates()">🧹 Doublons last.fm</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();nav('assocreview');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
     </div>
     <div id="integrity-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
