@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.04-1 — écran RYM : retrait du chargement (déjà dans Import/Export) + export XLS des manquants -->
+<!-- APP_VERSION: v2026.07.05-2 — fix timeout sync Last.fm (Map au lieu de find en boucle) + exclusion pistes "top titres" du comptage albums non matchés -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.04-1</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-2</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2758,6 +2758,16 @@ function artistVariants(artist) {
 
 // Version "souple" : tente plusieurs variantes de normalisation pour matcher
 // Retourne true si au moins une variante de keyA correspond à une variante de keyB
+// Applique les plays lastfm aux albums via une Map (O(n+m)) au lieu de albums.find() en boucle (O(n*m))
+// qui provoquait un "Script terminated by timeout" avec de gros volumes de données.
+function applyLastfmPlaysToAlbums(data) {
+  const idx = new Map(albums.map(x => [normalizeKey(x.artist, x.album), x]));
+  data.forEach(d => {
+    const a = idx.get(normalizeKey(d.artist, d.album));
+    if (a) a.plays = d.plays;
+  });
+}
+
 function normalizeKeyLoose(artist, title) {
   const base = normalizeKey(artist, title);
   const variants = new Set([base]);
@@ -5562,10 +5572,7 @@ async function fetchLastfmIncrementalSilent(fromTs) {
 
   // Mettre à jour lastfmData
   lastfmData = Object.values(_lastfmCounts);
-  lastfmData.forEach(d => {
-    const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
-    if (a) a.plays = d.plays;
-  });
+  applyLastfmPlaysToAlbums(lastfmData);
 
   if (latestTs > fromTs) {
     localStorage.setItem(LASTFM_SYNC_KEY, String(latestTs));
@@ -5908,10 +5915,7 @@ async function fetchLastfmIncremental(fromTs) {
 
   // Finaliser
   lastfmData = Object.values(_lastfmCounts);
-  lastfmData.forEach(d => {
-    const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
-    if (a) a.plays = d.plays;
-  });
+  applyLastfmPlaysToAlbums(lastfmData);
 
   if (latestTs > fromTs) {
     localStorage.setItem(LASTFM_SYNC_KEY, String(latestTs));
@@ -6470,10 +6474,7 @@ async function fetchLastfmPage(page) {
       // Checkpoint albums + tracks toutes les 10 pages
       if (currentPage % 10 === 0) {
         lastfmData = Object.values(_lastfmCounts);
-        lastfmData.forEach(d => {
-          const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
-          if (a) a.plays = d.plays;
-        });
+        applyLastfmPlaysToAlbums(lastfmData);
         saveLastfmCheckpoint(currentPage + 1, _lastfmTotalPages);
         updateNavBadges();
       }
@@ -6500,10 +6501,7 @@ async function fetchLastfmPage(page) {
 
   // Terminé ou pause
   lastfmData = Object.values(_lastfmCounts);
-  lastfmData.forEach(d => {
-    const a = albums.find(x => normalizeKey(x.artist, x.album) === normalizeKey(d.artist, d.album));
-    if (a) a.plays = d.plays;
-  });
+  applyLastfmPlaysToAlbums(lastfmData);
 
   if (_lastfmAbort) {
     saveLastfmCheckpoint(currentPage, _lastfmTotalPages);
@@ -6898,6 +6896,10 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
   const unmatchedSample = [];
   Object.values(byKey).forEach(g => {
     if (!g.album || g.album.startsWith('__isolated__')) return;
+    // Pistes "top titres" (singles téléchargés) : ont souvent un tag Album rempli
+    // (ex: "21" pour "Rolling in the Deep") mais ne représentent pas un album possédé —
+    // les compter comme "non matchés" n'a pas de sens et pollue le log.
+    if (g.folder === 'isolated') return;
     const albumNorm = normalizeKey('', g.album).replace('|||', '');
     let albumObj = albumIndex.get(normalizeKey(g.artist, g.album));
     if (!albumObj) {
