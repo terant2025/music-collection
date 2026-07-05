@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-5 — diagnostic intégrité rationalisé (retire les doublons avec Fusionner/Détecter doublons/Associations), wishlist basée sur possession CD uniquement, historique + annulation des corrections -->
+<!-- APP_VERSION: v2026.07.05-6 — snapshots Supabase manuels + auto avant purge massive, avec restauration (table collection_snapshots à créer) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-5</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-6</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1567,6 +1567,8 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="openDupFinderModal()">🔍 Détecter les doublons potentiels</button>
           <button class="btn" onclick="cleanupLastfmDuplicates()">🧹 Nettoyer les doublons last.fm</button>
           <button class="btn btn-accent" onclick="openIntegrityModal()">🩺 Vérifier l'intégrité</button>
+          <button class="btn" onclick="manualSnapshot()">📸 Créer un snapshot</button>
+          <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Snapshots Supabase</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
@@ -1895,6 +1897,19 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
+<!-- Modal snapshots Supabase -->
+<div class="modal-overlay" id="modal-snapshots">
+  <div class="modal" style="width:720px;max-width:92vw">
+    <h2>🕐 Snapshots Supabase</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Sauvegardes complètes de la collection (albums, morceaux isolés, wishlist, associations), stockées côté Supabase — disponibles même après un rechargement ou depuis un autre appareil. Un snapshot automatique est aussi pris juste avant toute suppression massive d'albums lors d'une synchronisation.</p>
+    <div id="snapshots-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="manualSnapshot().then(renderSnapshotsList)">📸 Nouveau snapshot</button>
+      <button class="btn" onclick="closeSnapshotsModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal diagnostic d'intégrité -->
 <div class="modal-overlay" id="modal-integrity">
   <div class="modal" style="width:760px;max-width:92vw">
@@ -2200,6 +2215,7 @@ async function saveToSupabase() {
       if (batch.length < 1000) break; rp++;
     }
     const toDelete = remoteIds.filter(id => !localIds.has(id));
+    await autoSnapshotBeforeDelete(toDelete.length);
     for (let i = 0; i < toDelete.length; i += 200) {
       await window._sb.from('albums').delete().in('id', toDelete.slice(i, i + 200));
     }
@@ -11216,6 +11232,199 @@ function fixBadNotes() {
   renderAlbums(); renderTracks(); saveToStorage();
   toast(`${fixed} note(s) réinitialisée(s) ✓`);
   renderIntegrityList();
+}
+
+// ===================== SNAPSHOTS SUPABASE (sauvegarde / restauration) =====================
+// Contrairement à l'historique du diagnostic d'intégrité (localStorage, portée limitée aux
+// corrections automatiques de cet outil), ces snapshots couvrent TOUTE la collection et sont
+// stockés côté Supabase — donc disponibles même après un rechargement ou depuis un autre
+// appareil. Deux origines :
+//  - manuel  : pris à la demande (bouton "📸 Créer un snapshot"), recommandé avant un gros
+//              réimport XML/CSV ou une session de fusions.
+//  - auto    : pris automatiquement juste avant que saveToSupabase() ne supprime un nombre
+//              anormalement élevé d'albums côté Supabase — garde-fou si l'état local est
+//              corrompu/vidé par erreur juste avant une synchronisation.
+//
+// Migration Supabase à exécuter une fois (SQL editor) :
+//   create table if not exists collection_snapshots (
+//     id bigserial primary key,
+//     created_at timestamptz default now(),
+//     label text,
+//     data jsonb
+//   );
+const SNAPSHOT_KEEP = 10;           // nombre de snapshots conservés (les plus anciens sont purgés)
+const SNAPSHOT_AUTO_THRESHOLD = 5;  // déclenche un snapshot auto si une sync s'apprête à supprimer plus de X albums
+
+// Convertit une ligne Supabase brute (snake_case) en album au format local (camelCase) —
+// version allégée de la logique de loadFromSupabase, utilisée uniquement pour l'inspection/
+// restauration d'un snapshot de sécurité automatique (pas besoin des heuristiques de
+// migration historiques ici, seulement de récupérer les données fidèlement).
+function _rowToLocalAlbum(a) {
+  let folders = [];
+  try { folders = JSON.parse(a.folders || '[]'); } catch(e) {}
+  return {
+    id: a.id, artist: a.artist, album: a.album, year: a.year || '', genre: a.genre || '',
+    folders, has_cd: !!a.has_cd, format: a.format || '', note: a.note || 0, plays: a.plays || 0,
+    notes: a.notes || '', discogsId: a.discogs_id || undefined, discogsRating: a.discogs_rating || undefined,
+    mb_release_id: a.mb_release_id || undefined, cover_url: a.cover_url || undefined,
+    lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
+    mergedAliases: a.merged_aliases ? JSON.parse(a.merged_aliases) : undefined,
+    label: a.label || undefined, catno: a.catno || undefined, isCompilation: !!a.is_compilation,
+    primaryFolder: a.primary_folder || 'album',
+    cd: !!a.has_cd, flac: a.format === 'flac', mp3: a.format === 'mp3', digital: a.format === 'digital',
+    okFolder: folders.includes('ok'), forSale: folders.includes('forsale'),
+  };
+}
+
+async function createSnapshot(label, payload) {
+  if (!window._sb) { toast("Supabase non connecté — snapshot impossible", 'error'); return false; }
+  try {
+    const { error } = await window._sb.from('collection_snapshots').insert({
+      label: label || 'Snapshot',
+      data: payload || { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist },
+    });
+    if (error) throw error;
+    await pruneOldSnapshots();
+    return true;
+  } catch(e) {
+    console.error('createSnapshot error', e);
+    // Table probablement absente — message explicite plutôt qu'une erreur muette
+    const msg = /relation .* does not exist|not found/i.test(e.message || '')
+      ? "Table collection_snapshots absente — voir la migration SQL en commentaire du code"
+      : (e.message || String(e));
+    toast('Erreur snapshot : ' + msg, 'error');
+    return false;
+  }
+}
+
+async function pruneOldSnapshots() {
+  try {
+    const { data } = await window._sb.from('collection_snapshots')
+      .select('id').order('created_at', { ascending: false });
+    if (!data || data.length <= SNAPSHOT_KEEP) return;
+    const toDelete = data.slice(SNAPSHOT_KEEP).map(r => r.id);
+    if (toDelete.length) await window._sb.from('collection_snapshots').delete().in('id', toDelete);
+  } catch(e) { console.warn('pruneOldSnapshots error', e); }
+}
+
+async function manualSnapshot() {
+  const label = prompt('Nom du snapshot (optionnel) :', `Manuel — ${new Date().toLocaleString('fr-FR')}`);
+  if (label === null) return; // annulé
+  toast('Création du snapshot…');
+  const ok = await createSnapshot(label, { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist });
+  if (ok) toast('📸 Snapshot créé ✓');
+}
+
+// Snapshot de sécurité automatique — capture l'état REMOTE des albums (pas l'état local, qui
+// est justement la cause du risque de purge massive) juste avant qu'une synchronisation ne
+// supprime un nombre anormal de lignes côté Supabase.
+async function autoSnapshotBeforeDelete(deleteCount) {
+  if (deleteCount < SNAPSHOT_AUTO_THRESHOLD) return;
+  console.warn(`[snapshot auto] ${deleteCount} suppression(s) Supabase détectée(s) — snapshot de sécurité avant purge`);
+  try {
+    let remoteAlbums = [], rp = 0;
+    while (true) {
+      const { data: batch } = await window._sb.from('albums').select('*').range(rp * 1000, (rp + 1) * 1000 - 1);
+      if (!batch || !batch.length) break;
+      remoteAlbums = remoteAlbums.concat(batch);
+      if (batch.length < 1000) break; rp++;
+    }
+    await createSnapshot(`Auto — avant suppression de ${deleteCount} album(s)`, {
+      _remoteFormat: true, albums: remoteAlbums, tracks: [], associations: [], rymAssociations: [], wishlist: [], trackWishlist: [],
+    });
+  } catch(e) { console.warn('autoSnapshotBeforeDelete error', e); }
+}
+
+async function openSnapshotsModal() {
+  document.getElementById('modal-snapshots').classList.add('open');
+  await renderSnapshotsList();
+}
+function closeSnapshotsModal() {
+  document.getElementById('modal-snapshots').classList.remove('open');
+}
+document.getElementById('modal-snapshots').addEventListener('click', function(e) {
+  if (e.target === this) closeSnapshotsModal();
+});
+
+async function renderSnapshotsList() {
+  const el = document.getElementById('snapshots-list');
+  el.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">Chargement…</div>';
+  if (!window._sb) { el.innerHTML = '<div class="empty" style="padding:24px">Supabase non connecté</div>'; return; }
+  try {
+    const { data, error } = await window._sb.from('collection_snapshots')
+      .select('id, created_at, label, data').order('created_at', { ascending: false });
+    if (error) throw error;
+    if (!data || !data.length) { el.innerHTML = '<div class="empty" style="padding:24px">Aucun snapshot pour l\'instant — utilise "📸 Nouveau snapshot" avant un import ou une fusion importante.</div>'; return; }
+    el.innerHTML = data.map(row => {
+      const d = row.data || {};
+      const nAlbums = (d.albums || []).length;
+      const counts = d._remoteFormat
+        ? `${nAlbums} albums (snapshot de sécurité — albums uniquement)`
+        : `${nAlbums} albums · ${(d.tracks || []).length} morceaux · ${(d.wishlist || []).length} wishlist`;
+      return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:500">${esc(row.label || 'Snapshot')}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${new Date(row.created_at).toLocaleString('fr-FR')} — ${counts}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-sm btn-danger" onclick="restoreSnapshot(${row.id})">↩ Restaurer</button>
+          <button class="btn btn-sm" onclick="deleteSnapshot(${row.id})">🗑</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    console.error('renderSnapshotsList error', e);
+    const msg = /relation .* does not exist|not found/i.test(e.message || '')
+      ? "Table collection_snapshots absente — voir la migration SQL en commentaire du code (fonction createSnapshot)"
+      : (e.message || String(e));
+    el.innerHTML = `<div class="empty" style="padding:24px">Erreur de chargement : ${esc(msg)}</div>`;
+  }
+}
+
+async function restoreSnapshot(id) {
+  if (!confirm("Restaurer ce snapshot va REMPLACER la collection actuelle par son contenu, puis resynchroniser vers Supabase.\n\nUn snapshot de l'état actuel sera créé automatiquement avant, par sécurité.\n\nContinuer ?")) return;
+  try {
+    toast("Snapshot de sécurité de l'état actuel…");
+    await createSnapshot(`Auto — avant restauration du snapshot #${id}`, { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist });
+
+    const { data, error } = await window._sb.from('collection_snapshots').select('data').eq('id', id).single();
+    if (error) throw error;
+    const d = data.data || {};
+
+    if (d._remoteFormat) {
+      // Snapshot de sécurité auto : ne contient que les albums (état remote au moment du
+      // risque) — on ne touche pas tracks/wishlist/associations, non concernés par ce risque.
+      albums = (d.albums || []).map(_rowToLocalAlbum);
+    } else {
+      albums          = d.albums || [];
+      tracks          = d.tracks || [];
+      associations    = d.associations || [];
+      rymAssociations = d.rymAssociations || [];
+      wishlist        = d.wishlist || [];
+      trackWishlist   = d.trackWishlist || [];
+    }
+
+    invalidateCache();
+    renderAlbums(); renderTracks(); updateNavBadges();
+    toast('Restauration en cours — synchronisation Supabase…');
+    await saveToSupabase();
+    saveToStorage();
+    closeSnapshotsModal();
+    toast('✓ Collection restaurée depuis le snapshot');
+  } catch(e) {
+    console.error('restoreSnapshot error', e);
+    toast('Erreur lors de la restauration : ' + (e.message || e), 'error');
+  }
+}
+
+async function deleteSnapshot(id) {
+  if (!confirm('Supprimer définitivement ce snapshot ?')) return;
+  try {
+    await window._sb.from('collection_snapshots').delete().eq('id', id);
+    await renderSnapshotsList();
+  } catch(e) {
+    toast('Erreur suppression snapshot : ' + (e.message || e), 'error');
+  }
 }
 </script>
 </body>
