@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-10 — Qobuz simplifié en simple lien de recherche (pas d'API/identifiants, aucun app_id légitime disponible) -->
+<!-- APP_VERSION: v2026.07.05-11 — export offline Android (fichier HTML autonome, albums uniquement, croisement Discogs/MB/RYM/last.fm) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-10</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-11</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1566,6 +1566,7 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="exportCSV()">↓ Exporter collection (CSV)</button>
           <button class="btn" onclick="exportTracksCSV()">↓ Exporter morceaux isolés (CSV)</button>
           <button class="btn" onclick="exportJSON()">↓ Exporter tout (JSON)</button>
+          <button class="btn btn-accent" onclick="exportOfflineAndroid()">📱 Export offline Android</button>
           <button class="btn btn-accent" onclick="document.getElementById('file-reimport-json').click()">📂 Restaurer depuis JSON</button>
           <input type="file" id="file-reimport-json" accept=".json" onchange="reimportJSON(this)">
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
@@ -10064,6 +10065,118 @@ async function reimportJSON(input) {
     status.className = 'status err';
   }
   input.value = '';
+}
+
+// ===================== EXPORT OFFLINE ANDROID =====================
+// Génère un fichier HTML autonome (données JSON embarquées, vanilla JS, aucune dépendance
+// réseau/CDN) consultable dans Chrome Android sans connexion. Contient uniquement les
+// albums (pas les morceaux isolés ni les scrobbles bruts last.fm) mais avec les notes
+// croisées Discogs/MusicBrainz/RYM/last.fm déjà résolues dans l'app.
+function exportOfflineAndroid() {
+  const list = albums.map(a => ({
+    artist: a.artist, album: a.album,
+    year: a.year || '', genre: a.genre || '',
+    folders: a.folders || [],
+    format: a.format || (a.flac ? 'flac' : a.mp3 ? 'mp3' : a.digital ? 'digital' : ''),
+    cd: !!(a.cd || a.has_cd),
+    noteMB: a.note || 0,
+    noteDiscogs: a.discogsRating || 0,
+    noteRYM: _rymRating(a.artist, a.album) || '',
+    plays: a.plays || 0,
+    label: a.label || '', catno: a.catno || '',
+    isCompilation: !!a.isCompilation,
+  }));
+  const html = buildOfflineHtml(list);
+  download(`collection-offline-${new Date().toISOString().slice(0,10)}.html`, html, 'text/html');
+  toast(`📱 Export offline créé — ${list.length} albums (${Math.round(html.length/1024)} Ko)`);
+}
+
+function buildOfflineHtml(list) {
+  const genDate = new Date().toLocaleString('fr-FR');
+  const dataJson = JSON.stringify(list);
+  const lines = [
+    '<!DOCTYPE html>',
+    '<html lang="fr">',
+    '<head>',
+    '<meta charset="UTF-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<title>Ma collection (hors ligne)</title>',
+    '<style>',
+    ':root{--bg:#111214;--bg2:#1a1b1e;--bg3:#222327;--text:#eee;--text2:#aaa;--text3:#777;--accent:#8b5cf6;--border:#333;--amber:#f5b642}',
+    '*{box-sizing:border-box}',
+    'body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif}',
+    'header{position:sticky;top:0;background:var(--bg2);padding:10px 12px;border-bottom:1px solid var(--border);z-index:10}',
+    'h1{font-size:14px;margin:0 0 8px;font-weight:600}',
+    '.row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}',
+    'input,select{background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:13px}',
+    'input[type=text]{flex:1;min-width:140px}',
+    '#counter{font-size:11px;color:var(--text3);margin-top:4px}',
+    '#list{padding:8px}',
+    '.card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:7px}',
+    '.title{font-size:14px;font-weight:600}',
+    '.sub{font-size:12px;color:var(--text2);margin-top:2px}',
+    '.badges{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}',
+    '.badge{font-size:10px;padding:2px 6px;border-radius:4px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)}',
+    '.empty{text-align:center;color:var(--text3);padding:40px 10px;font-size:13px}',
+    '</style>',
+    '</head>',
+    '<body>',
+    '<header>',
+    '<h1>🎵 Ma collection — hors ligne (généré le ' + esc(genDate) + ')</h1>',
+    '<div class="row"><input type="text" id="q" placeholder="Rechercher artiste / album…"></div>',
+    '<div class="row">',
+    '<select id="f-folder"><option value="">Tous dossiers</option><option value="discographie">Discographie</option><option value="ok">Ok</option><option value="stock">Stock</option><option value="forsale">Vendre</option></select>',
+    '<select id="f-format"><option value="">Tous formats</option><option value="cd">CD</option><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="digital">Digital</option></select>',
+    '<select id="sort"><option value="artist">Tri : Artiste</option><option value="year">Tri : Année</option><option value="note">Tri : Note MB</option><option value="plays">Tri : Écoutes</option></select>',
+    '</div>',
+    '<div id="counter"></div>',
+    '</header>',
+    '<div id="list"></div>',
+    '<script>',
+    'const DATA = ' + dataJson + ';',
+    "const q=document.getElementById('q'), fFolder=document.getElementById('f-folder'), fFormat=document.getElementById('f-format'), sortSel=document.getElementById('sort'), listEl=document.getElementById('list'), counter=document.getElementById('counter');",
+    "function norm(s){return (s||'').toString().toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');}",
+    "function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}",
+    'function render(){',
+    '  const query=norm(q.value.trim());',
+    '  const folder=fFolder.value, format=fFormat.value, sort=sortSel.value;',
+    '  let rows=DATA.filter(function(a){',
+    "    if(query && norm(a.artist+' '+a.album).indexOf(query)===-1) return false;",
+    '    if(folder && (a.folders||[]).indexOf(folder)===-1) return false;',
+    "    if(format==='cd' && !a.cd) return false;",
+    "    if(format && format!=='cd' && a.format!==format) return false;",
+    '    return true;',
+    '  });',
+    "  if(sort==='year') rows.sort(function(a,b){return (b.year||'').localeCompare(a.year||'');});",
+    "  else if(sort==='note') rows.sort(function(a,b){return (b.noteMB||0)-(a.noteMB||0);});",
+    "  else if(sort==='plays') rows.sort(function(a,b){return (b.plays||0)-(a.plays||0);});",
+    "  else rows.sort(function(a,b){return a.artist.localeCompare(b.artist,'fr')||a.album.localeCompare(b.album,'fr');});",
+    "  counter.textContent = rows.length.toLocaleString('fr-FR') + ' / ' + DATA.length.toLocaleString('fr-FR') + ' albums';",
+    '  const slice=rows.slice(0,300);',
+    "  if(!slice.length){ listEl.innerHTML='<div class=\"empty\">Aucun résultat</div>'; return; }",
+    '  listEl.innerHTML = slice.map(function(a){',
+    '    const badges=[];',
+    "    if(a.cd) badges.push('<span class=\"badge\">💿 CD</span>');",
+    "    if(a.format==='flac') badges.push('<span class=\"badge\">FLAC</span>');",
+    "    if(a.format==='mp3') badges.push('<span class=\"badge\">MP3</span>');",
+    "    if(a.format==='digital') badges.push('<span class=\"badge\">Digital</span>');",
+    "    if(a.noteMB) badges.push('<span class=\"badge\">MB '+a.noteMB+'★</span>');",
+    "    if(a.noteRYM) badges.push('<span class=\"badge\">RYM '+a.noteRYM+'</span>');",
+    "    if(a.noteDiscogs) badges.push('<span class=\"badge\">Discogs '+a.noteDiscogs+'</span>');",
+    "    if(a.plays) badges.push('<span class=\"badge\">'+a.plays.toLocaleString('fr-FR')+' écoutes</span>');",
+    "    return '<div class=\"card\"><div class=\"title\">'+esc(a.album)+'</div><div class=\"sub\">'+esc(a.artist)+(a.year?' · '+esc(a.year):'')+(a.genre?' · '+esc(a.genre):'')+'</div><div class=\"badges\">'+badges.join('')+'</div></div>';",
+    "  }).join('') + (rows.length>300 ? '<div class=\"empty\">… '+(rows.length-300).toLocaleString('fr-FR')+' de plus — affine la recherche</div>' : '');",
+    '}',
+    "q.addEventListener('input', render);",
+    "fFolder.addEventListener('change', render);",
+    "fFormat.addEventListener('change', render);",
+    "sortSel.addEventListener('change', render);",
+    'render();',
+    '<' + '/script>',
+    '</body>',
+    '</html>',
+  ];
+  return lines.join('\n');
 }
 
 function download(filename, content, type) {
