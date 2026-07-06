@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-2 — RYM : témoin "déjà dans la wishlist" sur la liste des absents ; nouvel outil d'audit ownership (🔍 Vérifier tout) listant chaque entrée avec ownership et sa correspondance réelle dans la collection -->
+<!-- APP_VERSION: v2026.07.06-3 — RYM : audit ownership avec actions directes (🔗 Associer / ＋ Ajouter) sur les entrées sans correspondance -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-2</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-3</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -9530,8 +9530,11 @@ function closeRYMOwnershipAuditModal() {
   document.getElementById('modal-rym-ownership-audit').classList.remove('open');
 }
 
+let _rymOwnershipAuditCache = [];
+
 function renderRYMOwnershipAuditList() {
   const rows = computeRYMOwnershipAudit();
+  _rymOwnershipAuditCache = rows;
   const nMatched = rows.filter(x => x.assocAlbum || x.auto).length;
   const nNone = rows.length - nMatched;
   document.getElementById('rym-ownership-audit-counter').textContent =
@@ -9543,8 +9546,9 @@ function renderRYMOwnershipAuditList() {
     return;
   }
 
-  el.innerHTML = rows.map(({ r, assocAlbum, auto }) => {
+  el.innerHTML = rows.map(({ r, assocAlbum, auto }, idx) => {
     let statusHtml;
+    let actionsHtml = '';
     if (assocAlbum) {
       statusHtml = `<span style="color:var(--accent);font-size:12px">🔗 Lié manuellement à : <strong>${esc(assocAlbum.artist)} — ${esc(assocAlbum.album)}</strong></span>`;
     } else if (auto) {
@@ -9552,6 +9556,11 @@ function renderRYMOwnershipAuditList() {
       statusHtml = `<span style="color:var(--green,#4caf50);font-size:12px">✓ Correspondance auto : <strong>${esc(auto.item.artist)} — ${esc(auto.item.album)}</strong>${label}</span>`;
     } else {
       statusHtml = `<span style="color:var(--warn,#e0a030);font-size:12px">❌ Aucune correspondance trouvée dans la collection ou le stock</span>`;
+      actionsHtml = `
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn btn-sm" onclick="openRYMOwnershipAuditAssocIdx(${idx})" title="Associer à un album de la collection">🔗 Associer</button>
+          <button class="btn btn-sm btn-accent" onclick="addFromRYMOwnershipAuditIdx(${idx})">＋ Ajouter</button>
+        </div>`;
     }
     const own = `<span class="badge badge-cd" style="font-size:10px">${esc(r.ownership)}</span>`;
     return `
@@ -9566,8 +9575,25 @@ function renderRYMOwnershipAuditList() {
           ${r.rating ? rymStars(r.rating) : '<span style="color:var(--text3);font-size:11px">Non noté</span>'}
         </div>
         <div>${statusHtml}</div>
+        ${actionsHtml}
       </div>`;
   }).join('');
+}
+
+function openRYMOwnershipAuditAssocIdx(idx) {
+  const row = _rymOwnershipAuditCache[idx];
+  if (!row) return;
+  const { r } = row;
+  closeRYMOwnershipAuditModal();
+  openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
+}
+
+function addFromRYMOwnershipAuditIdx(idx) {
+  const row = _rymOwnershipAuditCache[idx];
+  if (!row) return;
+  const { r } = row;
+  closeRYMOwnershipAuditModal();
+  addFromRYM(r.artist, r.album, r.year || '', r.genre || '');
 }
 
 function rymStars(rating) {
