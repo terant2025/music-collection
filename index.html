@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-3 — RYM : audit ownership avec actions directes (🔗 Associer / ＋ Ajouter) sur les entrées sans correspondance -->
+<!-- APP_VERSION: v2026.07.06-4 — FIX : audit ownership RYM lisait assoc.albumId au lieu de assoc.albumKey (une association appliquée ne se reflétait jamais dans l'audit) ; filtre par défaut sur les non-rattachées + retour auto à l'audit après association -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-3</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-4</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1883,7 +1883,13 @@ input[type="file"] { display: none; }
   <div class="modal" style="width:760px;max-width:92vw">
     <h2>🔍 Audit ownership RYM</h2>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Toutes les entrées RYM avec un ownership renseigné (CD, etc.), et à quelle fiche de la collection chacune est effectivement rattachée. Permet de vérifier une à une les correspondances automatiques plutôt que de faire confiance au compteur.</p>
-    <div id="rym-ownership-audit-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div id="rym-ownership-audit-counter" style="font-size:12px;color:var(--text3)"></div>
+      <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="rym-ownership-audit-showall" onchange="renderRYMOwnershipAuditList()">
+        Afficher aussi les entrées déjà rattachées
+      </label>
+    </div>
     <div id="rym-ownership-audit-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeRYMOwnershipAuditModal()">Fermer</button>
@@ -9210,6 +9216,7 @@ function openRYMAssocModal(rymKey, artist, album, rating) {
 function closeRYMAssocModal() {
   document.getElementById('modal-rym-assoc').classList.remove('open');
   _rymAssocTarget = null;
+  _rymAuditReturnAfterAssoc = false;
 }
 
 function renderRYMAssocList() {
@@ -9269,10 +9276,14 @@ function applyRYMAssociation(albumId) {
   rymAssociations = rymAssociations.filter(a => a.rymKey !== _rymAssocTarget);
   rymAssociations.push({ rymKey: _rymAssocTarget, albumKey });
   invalidateCache();
+  const shouldReturnToAudit = _rymAuditReturnAfterAssoc;
   closeRYMAssocModal();
   renderRYM();
   saveToStorage();
   toast('Association RYM créée ✓');
+  if (shouldReturnToAudit) {
+    openRYMOwnershipAuditModal();
+  }
 }
 
 function removeRYMAssociation(rymKey) {
@@ -9514,7 +9525,7 @@ function computeRYMOwnershipAudit() {
     .map(r => {
       const rymKey = normalizeKey(r.artist, r.album);
       const assoc = associatedByKey.get(rymKey);
-      const assocAlbum = assoc ? albums.find(a => a.id === assoc.albumId) : null;
+      const assocAlbum = assoc ? albums.find(a => a.id === assoc.albumKey) : null;
       const auto = (!assocAlbum) ? findOwnedMatchForRym(r) : null;
       return { r, assocAlbum, auto };
     })
@@ -9531,18 +9542,24 @@ function closeRYMOwnershipAuditModal() {
 }
 
 let _rymOwnershipAuditCache = [];
+let _rymAuditReturnAfterAssoc = false;
 
 function renderRYMOwnershipAuditList() {
-  const rows = computeRYMOwnershipAudit();
-  _rymOwnershipAuditCache = rows;
-  const nMatched = rows.filter(x => x.assocAlbum || x.auto).length;
-  const nNone = rows.length - nMatched;
+  const allRows = computeRYMOwnershipAudit();
+  const nMatched = allRows.filter(x => x.assocAlbum || x.auto).length;
+  const nNone = allRows.length - nMatched;
   document.getElementById('rym-ownership-audit-counter').textContent =
-    `${rows.length} entrée${rows.length > 1 ? 's' : ''} avec ownership · ${nMatched} rattachée${nMatched > 1 ? 's' : ''} · ${nNone} sans correspondance`;
+    `${allRows.length} entrée${allRows.length > 1 ? 's' : ''} avec ownership · ${nMatched} rattachée${nMatched > 1 ? 's' : ''} · ${nNone} sans correspondance`;
+
+  const showAll = document.getElementById('rym-ownership-audit-showall').checked;
+  const rows = showAll ? allRows : allRows.filter(x => !x.assocAlbum && !x.auto);
+  _rymOwnershipAuditCache = rows;
 
   const el = document.getElementById('rym-ownership-audit-list');
   if (!rows.length) {
-    el.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">⭐</div>Aucune entrée RYM avec ownership renseigné.</div>';
+    el.innerHTML = showAll
+      ? '<div class="empty" style="padding:24px"><div class="empty-icon">⭐</div>Aucune entrée RYM avec ownership renseigné.</div>'
+      : '<div class="empty" style="padding:24px"><div class="empty-icon">✅</div>Toutes les entrées avec ownership sont rattachées !</div>';
     return;
   }
 
@@ -9584,6 +9601,7 @@ function openRYMOwnershipAuditAssocIdx(idx) {
   const row = _rymOwnershipAuditCache[idx];
   if (!row) return;
   const { r } = row;
+  _rymAuditReturnAfterAssoc = true;
   closeRYMOwnershipAuditModal();
   openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
 }
@@ -9633,7 +9651,7 @@ function renderRYM() {
     missingEl.innerHTML = missing.map(r => {
       const rymKey = normalizeKey(r.artist, r.album);
       const assoc = rymAssociations.find(a => a.rymKey === rymKey);
-      const assocAlbum = assoc ? albums.find(a => a.id === assoc.albumId) : null;
+      const assocAlbum = assoc ? albums.find(a => a.id === assoc.albumKey) : null;
       const inWishlist = wishlist.some(w => normalizeKey(w.artist, w.album) === rymKey);
       const wishBtn = inWishlist
         ? `<span class="btn btn-sm" style="opacity:0.7;cursor:default;color:var(--accent);border-color:var(--accent)" title="Déjà dans la wishlist">🎯 Wishlist</span>`
