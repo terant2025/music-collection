@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-7 — FIX Qobuz : l'URL de recherche pointait vers www.qobuz.com/search?q= (404), corrigée en play.qobuz.com/search?searchEntry=. Ajout d'un lien Qobuz DIRECT quand MusicBrainz a une relation "streaming page" vers qobuz.com sur la release (via Edge Fn, inc=url-rels) — repli sur la recherche sinon. Bouton 🎧 ajouté sur chaque ligne de la Collection -->
+<!-- APP_VERSION: v2026.07.06-8 — FIX Qobuz : la recherche texte ne trouvait pas les morceaux car artiste+titre étaient envoyés bruts (suffixes Discogs "(2)", "(feat. X)", "(Remastered)", année entre parenthèses...). Nettoyage réutilisant cleanDiscogsArtist + nouvelle fonction cleanForQobuzSearch avant d'construire la requête -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-7</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-8</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -11850,8 +11850,23 @@ async function deleteSnapshot(id) {
 // et sans dépendance à une Edge Function.
 // FIX v2026.07.06-7 : l'ancienne URL www.qobuz.com/search?q= renvoie un 404 — le web player
 // vit désormais sur play.qobuz.com et attend le paramètre searchEntry.
+// Retire les annotations qui cassent la recherche Qobuz (parenthèses type feat./live/
+// remaster/année) — même logique de nettoyage que normalizeKey, mais en conservant le
+// texte lisible (pas réduit à une clé) pour rester une requête de recherche correcte.
+function cleanForQobuzSearch(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/\s*[\(\[](feat\.?|ft\.?|featuring|live|radio\s*edit|single\s*edit|remaster(?:ed)?|bonus\s*track|demo|instrumental|acoustic|extended|album\s*version|original\s*mix)[^\)\]]*[\)\]]/gi, '')
+    .replace(/\s+(feat\.?|ft\.?|featuring)\s+.+$/i, '')
+    .replace(/\s*[\(\[]\d{4}[\)\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function openQobuzSearch(artist, titleOrAlbum) {
-  const q = `${artist} ${titleOrAlbum}`.trim();
+  const cleanArtist = cleanForQobuzSearch(cleanDiscogsArtist(artist));
+  const cleanTitle  = cleanForQobuzSearch(titleOrAlbum);
+  const q = `${cleanArtist} ${cleanTitle}`.trim();
   window.open(`https://play.qobuz.com/search?searchEntry=${encodeURIComponent(q)}`, '_blank', 'noopener');
 }
 
