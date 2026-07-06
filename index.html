@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-1 — RYM : témoin "déjà dans la wishlist" sur la liste des absents ; nouvel outil d'audit ownership (🔍 Vérifier tout) listant chaque entrée avec ownership et sa correspondance réelle dans la collection -->
+<!-- APP_VERSION: v2026.07.06-2 — RYM : témoin "déjà dans la wishlist" sur la liste des absents ; nouvel outil d'audit ownership (🔍 Vérifier tout) listant chaque entrée avec ownership et sa correspondance réelle dans la collection -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-1</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-2</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -9472,23 +9472,35 @@ function computeRYMUnlinked() {
   return _cache.rymUnlinked;
 }
 
+// Index inverse de getOwnedRymKeys : mêmes clés, mais on garde aussi la fiche
+// source (album ou stock) pour pouvoir l'afficher dans l'audit ownership.
+function getOwnedRymIndex() {
+  if (_cache.ownedRymIndex) return _cache.ownedRymIndex;
+  const idx = new Map();
+  const indexEntry = (type, item, artist, album) => {
+    const albumNorm = normalizeKey('', album).replace('|||', '');
+    for (const av of artistVariants(artist)) {
+      const key = av + '|||' + albumNorm;
+      if (!idx.has(key)) idx.set(key, { type, item });
+    }
+  };
+  albums.forEach(a => {
+    if (a.cd || a.flac || a.mp3 || a.digital || a.okFolder || a.forSale) indexEntry('album', a, a.artist, a.album);
+  });
+  stockItems.forEach(s => indexEntry('stock', s, s.artist, s.album));
+  _cache.ownedRymIndex = idx;
+  return idx;
+}
+
 // Retrouve la fiche réelle (album ou stock) qui a fait matcher automatiquement
 // une entrée RYM comme "possédée", pour pouvoir vérifier la correspondance à l'œil
 // plutôt que de se fier au simple booléen ownedKeys.has(...).
 function findOwnedMatchForRym(r) {
+  const idx = getOwnedRymIndex();
   const albumNorm = normalizeKey('', r.album).replace('|||', '');
   for (const av of artistVariants(r.artist)) {
-    const foundAlbum = albums.find(a =>
-      (a.cd || a.flac || a.mp3 || a.digital || a.okFolder || a.forSale) &&
-      artistVariants(a.artist).some(v => v === av) &&
-      normalizeKey('', a.album).replace('|||', '') === albumNorm
-    );
-    if (foundAlbum) return { type: 'album', item: foundAlbum };
-    const foundStock = stockItems.find(s =>
-      artistVariants(s.artist).some(v => v === av) &&
-      normalizeKey('', s.album).replace('|||', '') === albumNorm
-    );
-    if (foundStock) return { type: 'stock', item: foundStock };
+    const hit = idx.get(av + '|||' + albumNorm);
+    if (hit) return hit;
   }
   return null;
 }
