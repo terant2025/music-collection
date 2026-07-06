@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-12 — FIX CRITIQUE : deduplicateAlbums fusionnait les homonymes distincts (discogsId/mb_release_id/année différents), perte de données possible -->
+<!-- APP_VERSION: v2026.07.05-13 — FIX : import Discogs ne réécrivait jamais l'année sur une fiche existante ; import MusicBee ne devine plus arbitrairement entre homonymes ambigus -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-12</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-13</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -4542,6 +4542,11 @@ async function importDiscogs(input) {
       if (existing) {
         if (isCd) existing.cd = true;
         if (rating) existing.discogsRating = Math.min(5, rating);
+        // Toujours réécrire l'année depuis le CSV Discogs (source faisant autorité pour un
+        // discogsId donné) — sans ça, une année stockée par erreur (ex: héritée d'une
+        // fusion homonyme incorrecte) ne pouvait jamais être corrigée par un réimport,
+        // contrairement à l'import MusicBee XML qui, lui, réécrit toujours depuis le tag.
+        if (year) existing.year = year.slice(0, 4);
         if (discogsId && !existing.discogsId) {
           existing.discogsId = discogsId;
           // Si d'autres albums ont le même normalizeKey, s'assurer que cet existing a un ID unique
@@ -5004,7 +5009,19 @@ async function importMusicBeeXML(input) {
           const byYear = validCandidates.find(a => a.year && a.year.slice(0,4) === g.year.slice(0,4));
           if (byYear) existing = byYear;
         }
-        if (!existing) existing = validCandidates[0] || null;
+        // Si un seul candidat, aucune ambiguïté : on le prend. S'il en reste plusieurs et
+        // qu'aucun n'a pu être départagé par année, NE PAS deviner arbitrairement (l'ancien
+        // comportement prenait validCandidates[0] au hasard, ce qui pouvait écraser
+        // silencieusement l'année/les données d'un homonyme complètement différent — c'est
+        // exactement ce qui a corrompu l'année de "Weezer — Weezer" Green Album). Mieux vaut
+        // créer une nouvelle fiche (visible, fusionnable manuellement) qu'une corruption
+        // silencieuse invisible.
+        if (!existing) {
+          if (validCandidates.length === 1) existing = validCandidates[0];
+          else if (validCandidates.length > 1) {
+            console.log(`[homonyme] "${g.artist} — ${g.album}" (${g.year}) → ambigu, ${validCandidates.length} candidats non désambiguïsés par année — nouvelle fiche créée plutôt qu'un choix arbitraire`);
+          }
+        }
       }
       const newFolders = [];
       if (g.okFolder)      newFolders.push('ok');
@@ -5062,7 +5079,12 @@ async function importMusicBeeXML(input) {
         }
         albumsUpdated++;
       } else {
-        const newId = stableAlbumId(g.artist, g.album, g.mbReleaseId);
+        // Si un homonyme existe déjà sous l'id de base (cas ambigu ci-dessus, aucune
+        // association fiable trouvée), il faut un id distinct pour ne pas écraser cet autre
+        // album au push — utiliser le MBID comme suffixe si disponible.
+        const baseId = stableAlbumId(g.artist, g.album, g.mbReleaseId);
+        const idCollision = albums.some(a => a.id === baseId);
+        const newId = (idCollision && g.mbReleaseId) ? baseId + '|||mb:' + g.mbReleaseId : baseId;
         const newAlbum = {
           id:            newId,
           artist:        g.artist,
