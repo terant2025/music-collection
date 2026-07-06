@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-5 — Fiabilité tags MB : année de première parution (release-group) affichée en complément de `year` si différente ("orig. XXXX"), genre auto-rempli depuis les genres MusicBrainz du release-group quand absent. Nécessite le déploiement de la nouvelle Edge Function get-release-info + migration SQL (colonne mb_original_year) -->
+<!-- APP_VERSION: v2026.07.06-6 — Ajout bouton 🗓 Rafraîchir année/genre MB (Import/Export) : recontacte MusicBrainz pour tout album ayant déjà un mb_release_id sans retoucher les tracklists, pour backfiller mb_original_year/genre sur l'historique déjà enrichi avant ce champ -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-5</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-6</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1452,11 +1452,13 @@ input[type="file"] { display: none; }
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 Charger CSV Discogs</button>
             <button class="btn btn-sm" onclick="fetchAllTracklists()" id="btn-fetch-tracklists">🎵 Charger tracklists</button>
+            <button class="btn btn-sm" onclick="refreshMbYearGenres()" id="btn-refresh-mb-year-genre" title="Recontacte MusicBrainz pour chaque album ayant déjà un ID MB, sans retoucher les tracklists — met à jour uniquement l'année d'origine et le genre">🗓 Rafraîchir année/genre MB</button>
             <button class="btn btn-sm" onclick="_coverFetchRunning ? stopCoverFetch() : fetchMissingCovers()" id="btn-auto-covers">🖼 Pochettes auto</button>
           </div>
           <input type="file" id="file-discogs" accept=".csv" onchange="importDiscogs(this)">
           <div class="status" id="status-discogs"></div>
           <div class="status" id="status-tracklists"></div>
+          <div class="status" id="status-mb-year-genre"></div>
         </div>
 
         <!-- QOBUZ -->
@@ -6803,6 +6805,48 @@ function applyMbEnrichment(album, rel) {
     changed = true;
   }
   if (changed) saveToStorage();
+}
+
+// Rafraîchir uniquement année d'origine + genre pour tous les albums ayant déjà un
+// mb_release_id — sans toucher aux tracklists déjà en cache (contrairement à
+// fetchAllTracklists qui, lui, saute les albums déjà traités via onlyMissing).
+// Utile en backfill après ajout du champ mb_original_year sur des albums déjà enrichis.
+async function refreshMbYearGenres() {
+  const btn    = document.getElementById('btn-refresh-mb-year-genre');
+  const status = document.getElementById('status-mb-year-genre');
+  const targets = albums.filter(a => a.mb_release_id);
+
+  if (!status) return;
+  if (!targets.length) {
+    status.textContent = 'Aucun album avec un ID MusicBrainz.';
+    status.className = 'status ok';
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  status.className = 'status';
+  let done = 0, updated = 0, errors = 0;
+
+  for (const album of targets) {
+    status.textContent = `MusicBrainz ${done}/${targets.length} — ${album.artist} — ${album.album}`;
+    try {
+      await new Promise(r => setTimeout(r, 1200)); // MusicBrainz rate limit 1/s + marge Edge Fn
+      const rel = await fetchMusicBrainzRelease(album.mb_release_id);
+      const beforeYear  = album.mb_original_year;
+      const beforeGenre = album.genre;
+      applyMbEnrichment(album, rel);
+      if (album.mb_original_year !== beforeYear || album.genre !== beforeGenre) updated++;
+      done++;
+    } catch(e) {
+      console.warn(`Rafraîchissement MB ${album.mb_release_id}:`, e.message);
+      errors++;
+    }
+  }
+
+  if (btn) btn.disabled = false;
+  status.textContent = `Terminé : ${updated} album(s) mis à jour sur ${targets.length}${errors ? `, ${errors} erreur(s)` : ''}.`;
+  status.className = errors ? 'status err' : 'status ok';
+  renderAlbums(); renderDiscographie();
 }
 
 // Charger toutes les tracklists (Discogs + MusicBrainz) via Edge Function
