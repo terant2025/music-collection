@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.05-13 — FIX : import Discogs ne réécrivait jamais l'année sur une fiche existante ; import MusicBee ne devine plus arbitrairement entre homonymes ambigus -->
+<!-- APP_VERSION: v2026.07.06-1 — RYM : témoin "déjà dans la wishlist" sur la liste des absents ; nouvel outil d'audit ownership (🔍 Vérifier tout) listant chaque entrée avec ownership et sa correspondance réelle dans la collection -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.05-13</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-1</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1127,7 +1127,10 @@ input[type="file"] { display: none; }
           <!-- 2. Ownership renseigné mais introuvable -->
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;border-top:1px solid var(--border);padding-top:16px">
             <div style="font-size:13px;font-weight:500;color:var(--text)">Ownership renseigné — introuvable</div>
-            <span class="nav-badge warn" id="rym-orphan-count">0</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button class="btn btn-sm" onclick="openRYMOwnershipAuditModal()" title="Vérifier une à une toutes les entrées RYM avec ownership renseigné, et à quelle fiche de la collection elles sont rattachées">🔍 Vérifier tout</button>
+              <span class="nav-badge warn" id="rym-orphan-count">0</span>
+            </div>
           </div>
           <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Entrées RYM avec ownership non retrouvées dans Discogs ou Discographie.</p>
           <div id="rym-orphan-list"></div>
@@ -1871,6 +1874,19 @@ input[type="file"] { display: none; }
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="rfc-unlink-btn" onclick="unlinkRYMFromCollection()" style="margin-right:auto;display:none">🗑 Supprimer l'association</button>
       <button class="btn" onclick="document.getElementById('modal-rym-from-collection').classList.remove('open')">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal audit ownership RYM -->
+<div class="modal-overlay" id="modal-rym-ownership-audit">
+  <div class="modal" style="width:760px;max-width:92vw">
+    <h2>🔍 Audit ownership RYM</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Toutes les entrées RYM avec un ownership renseigné (CD, etc.), et à quelle fiche de la collection chacune est effectivement rattachée. Permet de vérifier une à une les correspondances automatiques plutôt que de faire confiance au compteur.</p>
+    <div id="rym-ownership-audit-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div id="rym-ownership-audit-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeRYMOwnershipAuditModal()">Fermer</button>
     </div>
   </div>
 </div>
@@ -8334,6 +8350,7 @@ function addToWishlistFromRYMIdx(idx) {
   if (!r) return;
   const plays = (lastfmData.find(d => normalizeKey(d.artist, d.album) === normalizeKey(r.artist, r.album)) || {}).plays || 0;
   addToWishlist(r.artist, r.album, r.year || '', 'rym', plays, r.rating || 0, '');
+  renderRYM();
 }
 function addToWishlistFromAlbumId(albumId) {
   const realId = unsid(albumId);
@@ -9455,6 +9472,92 @@ function computeRYMUnlinked() {
   return _cache.rymUnlinked;
 }
 
+// Retrouve la fiche réelle (album ou stock) qui a fait matcher automatiquement
+// une entrée RYM comme "possédée", pour pouvoir vérifier la correspondance à l'œil
+// plutôt que de se fier au simple booléen ownedKeys.has(...).
+function findOwnedMatchForRym(r) {
+  const albumNorm = normalizeKey('', r.album).replace('|||', '');
+  for (const av of artistVariants(r.artist)) {
+    const foundAlbum = albums.find(a =>
+      (a.cd || a.flac || a.mp3 || a.digital || a.okFolder || a.forSale) &&
+      artistVariants(a.artist).some(v => v === av) &&
+      normalizeKey('', a.album).replace('|||', '') === albumNorm
+    );
+    if (foundAlbum) return { type: 'album', item: foundAlbum };
+    const foundStock = stockItems.find(s =>
+      artistVariants(s.artist).some(v => v === av) &&
+      normalizeKey('', s.album).replace('|||', '') === albumNorm
+    );
+    if (foundStock) return { type: 'stock', item: foundStock };
+  }
+  return null;
+}
+
+// Audit complet : chaque entrée RYM avec ownership renseigné, avec le détail de
+// à quelle fiche de la collection elle est rattachée (manuelle, auto, ou aucune).
+function computeRYMOwnershipAudit() {
+  const associatedByKey = new Map(rymAssociations.map(a => [a.rymKey, a]));
+  return rymData
+    .filter(r => (r.ownership || '').trim())
+    .map(r => {
+      const rymKey = normalizeKey(r.artist, r.album);
+      const assoc = associatedByKey.get(rymKey);
+      const assocAlbum = assoc ? albums.find(a => a.id === assoc.albumId) : null;
+      const auto = (!assocAlbum) ? findOwnedMatchForRym(r) : null;
+      return { r, assocAlbum, auto };
+    })
+    .sort((a, b) => (a.r.artist + a.r.album).localeCompare(b.r.artist + b.r.album, 'fr'));
+}
+
+function openRYMOwnershipAuditModal() {
+  renderRYMOwnershipAuditList();
+  document.getElementById('modal-rym-ownership-audit').classList.add('open');
+}
+
+function closeRYMOwnershipAuditModal() {
+  document.getElementById('modal-rym-ownership-audit').classList.remove('open');
+}
+
+function renderRYMOwnershipAuditList() {
+  const rows = computeRYMOwnershipAudit();
+  const nMatched = rows.filter(x => x.assocAlbum || x.auto).length;
+  const nNone = rows.length - nMatched;
+  document.getElementById('rym-ownership-audit-counter').textContent =
+    `${rows.length} entrée${rows.length > 1 ? 's' : ''} avec ownership · ${nMatched} rattachée${nMatched > 1 ? 's' : ''} · ${nNone} sans correspondance`;
+
+  const el = document.getElementById('rym-ownership-audit-list');
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">⭐</div>Aucune entrée RYM avec ownership renseigné.</div>';
+    return;
+  }
+
+  el.innerHTML = rows.map(({ r, assocAlbum, auto }) => {
+    let statusHtml;
+    if (assocAlbum) {
+      statusHtml = `<span style="color:var(--accent);font-size:12px">🔗 Lié manuellement à : <strong>${esc(assocAlbum.artist)} — ${esc(assocAlbum.album)}</strong></span>`;
+    } else if (auto) {
+      const label = auto.type === 'stock' ? ' (stock)' : '';
+      statusHtml = `<span style="color:var(--green,#4caf50);font-size:12px">✓ Correspondance auto : <strong>${esc(auto.item.artist)} — ${esc(auto.item.album)}</strong>${label}</span>`;
+    } else {
+      statusHtml = `<span style="color:var(--warn,#e0a030);font-size:12px">❌ Aucune correspondance trouvée dans la collection ou le stock</span>`;
+    }
+    const own = `<span class="badge badge-cd" style="font-size:10px">${esc(r.ownership)}</span>`;
+    return `
+      <div class="missing-card" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 14px">
+        <div style="display:flex;align-items:center;gap:8px;width:100%">
+          <div style="flex:1">
+            <div class="missing-info" style="margin:0">
+              <div class="title" style="font-size:13px">${esc(r.album)}</div>
+              <div class="sub" style="font-size:11px">${esc(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
+            </div>
+          </div>
+          ${r.rating ? rymStars(r.rating) : '<span style="color:var(--text3);font-size:11px">Non noté</span>'}
+        </div>
+        <div>${statusHtml}</div>
+      </div>`;
+  }).join('');
+}
+
 function rymStars(rating) {
   // RYM note sur 5 avec demi-étoiles
   const full = Math.floor(rating);
@@ -9493,6 +9596,10 @@ function renderRYM() {
       const rymKey = normalizeKey(r.artist, r.album);
       const assoc = rymAssociations.find(a => a.rymKey === rymKey);
       const assocAlbum = assoc ? albums.find(a => a.id === assoc.albumId) : null;
+      const inWishlist = wishlist.some(w => normalizeKey(w.artist, w.album) === rymKey);
+      const wishBtn = inWishlist
+        ? `<span class="btn btn-sm" style="opacity:0.7;cursor:default;color:var(--accent);border-color:var(--accent)" title="Déjà dans la wishlist">🎯 Wishlist</span>`
+        : `<button class="btn btn-sm" onclick="addToWishlistFromRYMIdx(${missing.indexOf(r)})" title="Ajouter à la wishlist">🎯</button>`;
       return `
       <div class="missing-card" style="flex-direction:column;align-items:flex-start;gap:6px">
         <div style="display:flex;align-items:center;gap:10px;width:100%">
@@ -9504,7 +9611,7 @@ function renderRYM() {
           </div>
           ${rymStars(r.rating)}
           <button class="btn btn-sm" onclick="openRYMAssocModalIdx(${missing.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
-          <button class="btn btn-sm" onclick="addToWishlistFromRYMIdx(${missing.indexOf(r)})" title="Ajouter à la wishlist">🎯</button>
+          ${wishBtn}
           <button class="btn btn-sm" onclick="addFromRYMIdx(${missing.indexOf(r)})">＋ Ajouter</button>
         </div>
         ${r.genre ? `<div style="font-size:11px;color:var(--text3)">${esc(r.genre)}</div>` : ''}
