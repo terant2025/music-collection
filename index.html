@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-6 — Ajout bouton 🗓 Rafraîchir année/genre MB (Import/Export) : recontacte MusicBrainz pour tout album ayant déjà un mb_release_id sans retoucher les tracklists, pour backfiller mb_original_year/genre sur l'historique déjà enrichi avant ce champ -->
+<!-- APP_VERSION: v2026.07.06-7 — FIX Qobuz : l'URL de recherche pointait vers www.qobuz.com/search?q= (404), corrigée en play.qobuz.com/search?searchEntry=. Ajout d'un lien Qobuz DIRECT quand MusicBrainz a une relation "streaming page" vers qobuz.com sur la release (via Edge Fn, inc=url-rels) — repli sur la recherche sinon. Bouton 🎧 ajouté sur chaque ligne de la Collection -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-6</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-7</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1996,7 +1996,7 @@ input[type="file"] { display: none; }
 
 <script>
 // ===================== STATE =====================
-let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_original_year, cover_url, lastfmAliases, label, catno, isCompilation }
+let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_original_year, qobuz_url, cover_url, lastfmAliases, label, catno, isCompilation }
 // mb_original_year : année de première parution (release-group MusicBrainz), distincte de `year`
 // qui peut refléter une réédition/remaster précise — jamais utilisé pour écraser `year` automatiquement.
 let tracks = [];   // morceaux isolés { artistNorm, titleNorm, artist, title, album, format, duration, note, mb_recording_id }
@@ -2254,6 +2254,7 @@ async function saveToSupabase() {
       discogs_rating: a.discogsRating || null,
       mb_release_id:  a.mb_release_id || null,
       mb_original_year: a.mb_original_year || null,
+      qobuz_url:      a.qobuz_url || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
       merged_aliases: a.mergedAliases?.length ? JSON.stringify(a.mergedAliases) : null,
@@ -2429,6 +2430,7 @@ async function loadFromSupabase() {
         discogsRating: a.discogs_rating || undefined,
         mb_release_id: a.mb_release_id || undefined,
         mb_original_year: a.mb_original_year || undefined,
+        qobuz_url:     a.qobuz_url || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
         mergedAliases: a.merged_aliases ? JSON.parse(a.merged_aliases) : undefined,
@@ -3206,6 +3208,8 @@ function renderAlbums() {
       ? `<button class="btn btn-sm" onclick="addToWishlistFromAlbumId('${sid(a.id)}');event.stopPropagation()" title="Ajouter à la wishlist">🎯</button>`
       : '';
 
+    const qobuzBtn = `<button class="btn btn-sm" onclick="openQobuzForAlbumId('${sid(a.id)}');event.stopPropagation()" title="${a.qobuz_url ? 'Écouter sur Qobuz (lien direct MusicBrainz)' : 'Chercher sur Qobuz'}">🎧</button>`;
+
     // Fusion manuelle — seulement pour les fiches "normales" (pas stock)
     const mergeBtn = !isStock
       ? `<button class="btn btn-sm" onclick="openMergeAlbumModal('${sid(a.id)}');event.stopPropagation()" title="Fusionner avec une autre fiche (ex: CD + numérique séparés)">🔗</button>`
@@ -3235,7 +3239,7 @@ function renderAlbums() {
           <span class="plays-num">${a.plays||0}</span>
         </div>
       </td>
-      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${mergeBtn}${actionBtn}</td>
+      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${qobuzBtn}${mergeBtn}${actionBtn}</td>
     </tr>`;
   }).join('');
 
@@ -6738,6 +6742,7 @@ async function fetchMusicBrainzRelease(mbId) {
     release_date: data.release_date || '',
     first_release_date: data.first_release_date || '', // année d'origine (release-group MB)
     genres: data.genres || [],                          // genres du release-group, triés par pertinence
+    qobuz_url: data.qobuz_url || '',                     // lien direct si un éditeur MB l'a renseigné
     cover_url: data.cover_url || '',
     label: data.label || '',
     country: data.country || '',
@@ -6804,6 +6809,10 @@ function applyMbEnrichment(album, rel) {
     album.genre = rel.genres[0];
     changed = true;
   }
+  if (rel.qobuz_url && album.qobuz_url !== rel.qobuz_url) {
+    album.qobuz_url = rel.qobuz_url;
+    changed = true;
+  }
   if (changed) saveToStorage();
 }
 
@@ -6834,8 +6843,9 @@ async function refreshMbYearGenres() {
       const rel = await fetchMusicBrainzRelease(album.mb_release_id);
       const beforeYear  = album.mb_original_year;
       const beforeGenre = album.genre;
+      const beforeQobuz = album.qobuz_url;
       applyMbEnrichment(album, rel);
-      if (album.mb_original_year !== beforeYear || album.genre !== beforeGenre) updated++;
+      if (album.mb_original_year !== beforeYear || album.genre !== beforeGenre || album.qobuz_url !== beforeQobuz) updated++;
       done++;
     } catch(e) {
       console.warn(`Rafraîchissement MB ${album.mb_release_id}:`, e.message);
@@ -11838,9 +11848,28 @@ async function deleteSnapshot(id) {
 // Solution retenue : ouvrir directement la recherche Qobuz avec la requête pré-remplie, dans
 // un nouvel onglet. Pas de résultat "matché" automatiquement, mais fonctionne sans identifiants
 // et sans dépendance à une Edge Function.
+// FIX v2026.07.06-7 : l'ancienne URL www.qobuz.com/search?q= renvoie un 404 — le web player
+// vit désormais sur play.qobuz.com et attend le paramètre searchEntry.
 function openQobuzSearch(artist, titleOrAlbum) {
   const q = `${artist} ${titleOrAlbum}`.trim();
-  window.open(`https://www.qobuz.com/search?q=${encodeURIComponent(q)}`, '_blank', 'noopener');
+  window.open(`https://play.qobuz.com/search?searchEntry=${encodeURIComponent(q)}`, '_blank', 'noopener');
+}
+
+// Ouvrir Qobuz pour un album : priorité au lien direct MusicBrainz (relation "streaming
+// page" posée par un éditeur MB vers qobuz.com, récupérée via fetchMusicBrainzRelease),
+// sinon repli sur la recherche texte ci-dessus.
+function openQobuzForAlbum(album) {
+  if (album?.qobuz_url) {
+    window.open(album.qobuz_url, '_blank', 'noopener');
+  } else {
+    openQobuzSearch(album?.artist || '', album?.album || '');
+  }
+}
+
+function openQobuzForAlbumId(id) {
+  const realId = unsid(id);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (a) openQobuzForAlbum(a);
 }
 
 </script>
