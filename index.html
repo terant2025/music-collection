@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-4 — FIX : audit ownership RYM lisait assoc.albumId au lieu de assoc.albumKey (une association appliquée ne se reflétait jamais dans l'audit) ; filtre par défaut sur les non-rattachées + retour auto à l'audit après association -->
+<!-- APP_VERSION: v2026.07.06-5 — Fiabilité tags MB : année de première parution (release-group) affichée en complément de `year` si différente ("orig. XXXX"), genre auto-rempli depuis les genres MusicBrainz du release-group quand absent. Nécessite le déploiement de la nouvelle Edge Function get-release-info + migration SQL (colonne mb_original_year) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -621,7 +621,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-4</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-5</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1994,7 +1994,9 @@ input[type="file"] { display: none; }
 
 <script>
 // ===================== STATE =====================
-let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, cover_url, lastfmAliases, label, catno, isCompilation }
+let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_original_year, cover_url, lastfmAliases, label, catno, isCompilation }
+// mb_original_year : année de première parution (release-group MusicBrainz), distincte de `year`
+// qui peut refléter une réédition/remaster précise — jamais utilisé pour écraser `year` automatiquement.
 let tracks = [];   // morceaux isolés { artistNorm, titleNorm, artist, title, album, format, duration, note, mb_recording_id }
 let stockItems = []; // DEPRECATED — conservé pour compat rendering, peuplé depuis albums[folder='stock']
 let lastfmData = [];
@@ -2249,6 +2251,7 @@ async function saveToSupabase() {
       discogs_id:     a.discogsId || null,
       discogs_rating: a.discogsRating || null,
       mb_release_id:  a.mb_release_id || null,
+      mb_original_year: a.mb_original_year || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
       merged_aliases: a.mergedAliases?.length ? JSON.stringify(a.mergedAliases) : null,
@@ -2423,6 +2426,7 @@ async function loadFromSupabase() {
         discogsId:     a.discogs_id || undefined,
         discogsRating: a.discogs_rating || undefined,
         mb_release_id: a.mb_release_id || undefined,
+        mb_original_year: a.mb_original_year || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
         mergedAliases: a.merged_aliases ? JSON.parse(a.merged_aliases) : undefined,
@@ -3215,7 +3219,7 @@ function renderAlbums() {
           </div>
         </div>
       </td>
-      <td class="mono">${a.year || '–'}</td>
+      <td class="mono">${a.year || '–'}${a.mb_original_year && String(a.mb_original_year) !== String(a.year) ? ` <span title="Année de première parution selon MusicBrainz : ${a.mb_original_year}" style="font-size:10px;color:var(--text3);cursor:help">(orig. ${a.mb_original_year})</span>` : ''}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
         <td>${noteCell}</td>
@@ -6730,6 +6734,8 @@ async function fetchMusicBrainzRelease(mbId) {
   return {
     tracklist: (data.tracklist || []).map(t => ({ ...t, source: 'musicbrainz' })),
     release_date: data.release_date || '',
+    first_release_date: data.first_release_date || '', // année d'origine (release-group MB)
+    genres: data.genres || [],                          // genres du release-group, triés par pertinence
     cover_url: data.cover_url || '',
     label: data.label || '',
     country: data.country || '',
@@ -6779,6 +6785,24 @@ async function saveTracklist(albumId, tracks_) {
   }
   albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
     .filter(t => t.source !== source).concat(tracks_);
+}
+
+// Appliquer l'enrichissement MusicBrainz (année d'origine + genre) à un album,
+// sans jamais écraser `year` — mb_original_year reste une info de référence à côté.
+function applyMbEnrichment(album, rel) {
+  let changed = false;
+  if (rel.first_release_date) {
+    const origYear = rel.first_release_date.slice(0, 4);
+    if (origYear && String(album.mb_original_year || '') !== origYear) {
+      album.mb_original_year = origYear;
+      changed = true;
+    }
+  }
+  if (!album.genre && rel.genres?.length) {
+    album.genre = rel.genres[0];
+    changed = true;
+  }
+  if (changed) saveToStorage();
 }
 
 // Charger toutes les tracklists (Discogs + MusicBrainz) via Edge Function
@@ -6847,6 +6871,7 @@ async function fetchAllTracklists(onlyMissing = true) {
         }
         if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; saveToStorage(); }
         if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive')) { album.cover_url = rel.cover_url; saveToStorage(); }
+        applyMbEnrichment(album, rel);
       } else {
         // Recherche — nettoyer le nom Discogs avant MusicBrainz
         const cleanArtist = cleanDiscogsArtist(album.artist);
@@ -6865,6 +6890,7 @@ async function fetchAllTracklists(onlyMissing = true) {
               .filter(t => t.source !== 'musicbrainz').concat(rel.tracklist);
             await saveTracklist(album.id, rel.tracklist);
           }
+          applyMbEnrichment(album, rel);
         }
       }
       done++;
@@ -8926,7 +8952,7 @@ function renderDiscographie() {
           </div>
         </div>
       </td>
-      <td class="mono">${a.year || '–'}</td>
+      <td class="mono">${a.year || '–'}${a.mb_original_year && String(a.mb_original_year) !== String(a.year) ? ` <span title="Année de première parution selon MusicBrainz : ${a.mb_original_year}" style="font-size:10px;color:var(--text3);cursor:help">(orig. ${a.mb_original_year})</span>` : ''}</td>
       <td>${statusBadge}</td>
            <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td>${noteCell}</td>
