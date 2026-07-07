@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-10 — Fix : sur "last.fm — Morceaux", un morceau marqué 🚫 Ignoré (ou 🔗 Associé) disparaissait complètement et devenait inaccessible — computeMissingTracks() les excluait du calcul brut avant même que le filtre de statut n'existe, donc le sélecteur "🚫 Ignorés" cherchait dans une liste qui ne les contenait déjà plus. Le filtrage par statut se fait maintenant dans renderMissingTracks (comme pour les albums), qui masque ignorés/associés par défaut mais les rend consultables via les filtres dédiés. Corrige au passage l'export CSV, qui les excluait aussi silencieusement -->
+<!-- APP_VERSION: v2026.07.07-11 — Fix matching : les morceaux de compilation ("Various Artists") sont maintenant aussi indexés sous leur trackArtist réel (tag Artist), en plus de l'artiste de regroupement de l'album — sinon un morceau de compil scrobblé sur last.fm sous son vrai artiste (ex: "Harry Nilsson" sur la BO Forrest Gump groupée "Various Artists") ne pouvait jamais matcher et restait indéfiniment dans last.fm — Morceaux -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -708,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-10</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-11</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -4099,6 +4099,18 @@ function computeMissingTracks() {
       const noThe = (a.artist||'').replace(/^The\s+/i,'').replace(/^A\s+/i,'');
       for (const art of [a.artist, clean, noThe]) {
         for (const k of normalizeKeyLoose(art, t.title)) ownedAlbumTracks.add(k);
+      }
+      // Compilations ("Various Artists") : l'album est groupé sous un artiste générique,
+      // mais last.fm scrobble sous l'artiste RÉEL du morceau (tag Artist, stocké à part
+      // dans trackArtist car ≠ Album Artist). Sans ça, aucun morceau de compilation
+      // scrobblé sous son vrai artiste ne pouvait jamais matcher (ex: "Various Artists" vs
+      // "Harry Nilsson" pour un morceau de la BO Forrest Gump).
+      if (t.trackArtist && t.trackArtist !== a.artist) {
+        const tClean = cleanDiscogsArtist(t.trackArtist);
+        const tNoThe = t.trackArtist.replace(/^The\s+/i,'').replace(/^A\s+/i,'');
+        for (const art of [t.trackArtist, tClean, tNoThe]) {
+          for (const k of normalizeKeyLoose(art, t.title)) ownedAlbumTracks.add(k);
+        }
       }
     });
   });
