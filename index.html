@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-1 — Galerie de pochettes (nav "🖼 Pochettes") : grille filtrable Sans pochette / Basse résolution / Toutes, détection basse résolution par scan asynchrone (naturalWidth/Height < 300px, mis en cache en session), modale de choix de pochette avec propositions Discogs + Last.fm côte à côte + saisie manuelle d'URL, badge de comptage dans la sidebar -->
+<!-- APP_VERSION: v2026.07.07-2 — Galerie de pochettes enrichie : filtres dossier (Discographie/Ok/Stock/Vendre), genre, plage d'années, tri (artiste/album/année/genre), bouton réinitialiser. Chaque vignette affiche désormais l'icône du/des dossier(s) et année · genre pour distinguer d'un coup d'œil la Discographie du reste -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -660,7 +660,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-1</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-2</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1632,6 +1632,27 @@ input[type="file"] { display: none; }
         <div style="flex:1"></div>
         <input type="text" id="covers-search" placeholder="Filtrer artiste/album…" oninput="coverGalleryPage=1;renderCoversGallery()" style="width:220px;font-size:12px">
         <button class="btn btn-sm" onclick="scanCoverResolutions()" id="btn-scan-lowres">🔍 Scanner résolution</button>
+      </div>
+      <div class="covers-toolbar" style="margin-top:-6px">
+        <select id="covers-filter-folder" onchange="coverGalleryPage=1;renderCoversGallery()">
+          <option value="">Tous dossiers</option>
+          <option value="discographie">🎵 Discographie</option>
+          <option value="stock">📦 Stock</option>
+          <option value="ok">✅ Ok</option>
+          <option value="forsale">💸 À vendre</option>
+        </select>
+        <select id="covers-filter-genre" onchange="coverGalleryPage=1;renderCoversGallery()">
+          <option value="">Tous genres</option>
+        </select>
+        <input type="number" id="covers-filter-year-min" placeholder="Année min" style="width:100px;font-size:12px" oninput="coverGalleryPage=1;renderCoversGallery()">
+        <input type="number" id="covers-filter-year-max" placeholder="Année max" style="width:100px;font-size:12px" oninput="coverGalleryPage=1;renderCoversGallery()">
+        <select id="covers-sort" onchange="renderCoversGallery()">
+          <option value="artist">Trier : Artiste</option>
+          <option value="album">Trier : Album</option>
+          <option value="year">Trier : Année</option>
+          <option value="genre">Trier : Genre</option>
+        </select>
+        <button class="btn btn-sm" onclick="resetCoversFilters()">↺ Réinitialiser</button>
       </div>
       <div id="covers-scan-progress" style="font-size:12px;color:var(--text3);margin-bottom:10px;display:none"></div>
       <div id="covers-counter" style="font-size:12px;color:var(--text3);margin-bottom:14px"></div>
@@ -4514,16 +4535,52 @@ function setCoverFilter(f) {
   renderCoversGallery();
 }
 
+function updateCoversGenreFilter() {
+  const sel = document.getElementById('covers-filter-genre');
+  if (!sel) return;
+  const cur = sel.value;
+  const genres = genreList();
+  sel.innerHTML = '<option value="">Tous genres</option>' + genres.map(g => `<option value="${esc(g)}" ${g===cur?'selected':''}>${esc(g)}</option>`).join('');
+}
+
+function resetCoversFilters() {
+  document.getElementById('covers-search').value = '';
+  document.getElementById('covers-filter-folder').value = '';
+  document.getElementById('covers-filter-genre').value = '';
+  document.getElementById('covers-filter-year-min').value = '';
+  document.getElementById('covers-filter-year-max').value = '';
+  document.getElementById('covers-sort').value = 'artist';
+  coverGalleryPage = 1;
+  renderCoversGallery();
+}
+
 function renderCoversGallery() {
+  updateCoversGenreFilter();
   const q = (document.getElementById('covers-search')?.value || '').toLowerCase().trim();
+  const folderF = document.getElementById('covers-filter-folder')?.value || '';
+  const genreF = document.getElementById('covers-filter-genre')?.value || '';
+  const yearMin = parseInt(document.getElementById('covers-filter-year-min')?.value, 10);
+  const yearMax = parseInt(document.getElementById('covers-filter-year-max')?.value, 10);
+  const sortBy = document.getElementById('covers-sort')?.value || 'artist';
+
   let list = ownedAlbumsForCovers();
   if (q) list = list.filter(a => a.artist.toLowerCase().includes(q) || a.album.toLowerCase().includes(q));
+  if (folderF) list = list.filter(a => (a.folders || []).includes(folderF));
+  if (genreF) list = list.filter(a => a.genre === genreF);
+  if (!isNaN(yearMin)) list = list.filter(a => parseInt(a.year, 10) >= yearMin);
+  if (!isNaN(yearMax)) list = list.filter(a => parseInt(a.year, 10) <= yearMax);
 
   if (coverFilter === 'missing') list = list.filter(a => !a.cover_url);
   else if (coverFilter === 'lowres') list = list.filter(a => a.cover_url && _cache.lowResCovers?.has(a.id));
   // 'all' : pas de filtre supplémentaire
 
-  list.sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album));
+  const sorters = {
+    artist: (a, b) => (a.artist + a.album).localeCompare(b.artist + b.album),
+    album:  (a, b) => (a.album + a.artist).localeCompare(b.album + b.artist),
+    year:   (a, b) => (parseInt(a.year, 10) || 0) - (parseInt(b.year, 10) || 0) || a.artist.localeCompare(b.artist),
+    genre:  (a, b) => (a.genre || '').localeCompare(b.genre || '') || a.artist.localeCompare(b.artist),
+  };
+  list.sort(sorters[sortBy] || sorters.artist);
 
   const counter = document.getElementById('covers-counter');
   const labels = { missing: 'sans pochette', lowres: 'en basse résolution', all: 'au total' };
@@ -4541,15 +4598,21 @@ function renderCoversGallery() {
   moreBtn.style.display = list.length > shown.length ? 'inline-block' : 'none';
 }
 
+const FOLDER_ICONS = { discographie: '🎵', stock: '📦', ok: '✅', forsale: '💸' };
+
 function renderCoverCard(a) {
   const flag = !a.cover_url
     ? '<span class="cover-flag missing">Sans pochette</span>'
     : (_cache.lowResCovers?.has(a.id) ? '<span class="cover-flag lowres">Basse rés.</span>' : '');
+  const folderIcons = (a.folders || []).map(f => FOLDER_ICONS[f]).filter(Boolean).join(' ');
+  const meta = [a.year, a.genre].filter(Boolean).join(' · ');
   return `<div class="cover-card" data-cover-id="${sid(a.id)}" onclick="openCoverChoiceModal('${sid(a.id)}')">
     ${flag}
+    ${folderIcons ? `<span class="cover-flag" style="left:auto;right:6px;background:rgba(0,0,0,0.5)">${folderIcons}</span>` : ''}
     <div class="cover-thumb">${albumAvatar(a)}</div>
     <div class="name">${esc(a.album)}</div>
     <div class="sub">${esc(a.artist)}</div>
+    ${meta ? `<div class="sub" style="opacity:0.7">${esc(meta)}</div>` : ''}
   </div>`;
 }
 
