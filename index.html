@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-11 — Fix matching : les morceaux de compilation ("Various Artists") sont maintenant aussi indexés sous leur trackArtist réel (tag Artist), en plus de l'artiste de regroupement de l'album — sinon un morceau de compil scrobblé sur last.fm sous son vrai artiste (ex: "Harry Nilsson" sur la BO Forrest Gump groupée "Various Artists") ne pouvait jamais matcher et restait indéfiniment dans last.fm — Morceaux -->
+<!-- APP_VERSION: v2026.07.07-12 — Score de confiance visible : dans le détail album, nouveau panneau montrant comment MusicBrainz (score de recherche floue, auto-accepté si ≥90%, avec bouton "✕ Réinitialiser") et RYM (exact / variante d'artiste à vérifier / association manuelle) ont matché l'album. Le score MB est désormais conservé (albums.mb_match_score, migration SQL requise) au lieu d'être une décision silencieuse jetée après coup -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -708,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-11</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-12</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1815,6 +1815,10 @@ input[type="file"] { display: none; }
       </div>
     </div>
     <div class="form-row" style="grid-column:1/-1">
+      <label>Confiance du matching automatique</label>
+      <div id="modal-match-confidence" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
+    </div>
+    <div class="form-row" style="grid-column:1/-1">
       <label>Pochette</label>
       <div style="display:flex;gap:8px;align-items:center">
         <input type="text" id="f-cover-url" placeholder="URL pochette…" style="flex:1;font-size:12px">
@@ -2187,7 +2191,7 @@ input[type="file"] { display: none; }
 
 <script>
 // ===================== STATE =====================
-let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_original_year, mb_refreshed_at, youtube_url, cover_url, lastfmAliases, label, catno, isCompilation }
+let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_match_score, mb_original_year, mb_refreshed_at, youtube_url, cover_url, lastfmAliases, label, catno, isCompilation }
 // mb_original_year : année de première parution (release-group MusicBrainz), distincte de `year`
 // qui peut refléter une réédition/remaster précise — jamais utilisé pour écraser `year` automatiquement.
 let tracks = [];   // morceaux isolés { artistNorm, titleNorm, artist, title, album, format, duration, note, mb_recording_id }
@@ -2456,6 +2460,7 @@ async function saveToSupabase() {
       discogs_id:     a.discogsId || null,
       discogs_rating: a.discogsRating || null,
       mb_release_id:  a.mb_release_id || null,
+      mb_match_score: a.mb_match_score ?? null,
       mb_original_year: a.mb_original_year || null,
       mb_refreshed_at: a.mb_refreshed_at || null,
       youtube_url:    a.youtube_url || null,
@@ -2637,6 +2642,7 @@ async function loadFromSupabase() {
         discogsId:     a.discogs_id || undefined,
         discogsRating: a.discogs_rating || undefined,
         mb_release_id: a.mb_release_id || undefined,
+        mb_match_score: a.mb_match_score ?? undefined,
         mb_original_year: a.mb_original_year || undefined,
         mb_refreshed_at: a.mb_refreshed_at || undefined,
         youtube_url:   a.youtube_url || undefined,
@@ -3244,6 +3250,28 @@ function lookupRym(artist, album, albumId) {
     if (assoc) return rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey);
   }
   return undefined;
+}
+
+// Variante de lookupRym qui expose aussi COMMENT la correspondance a été trouvée
+// (exact / variante d'artiste / association manuelle) — utilisée pour le score de confiance
+// visible dans le détail album, pour distinguer une note fiable d'une note à revalider.
+function lookupRymWithMeta(artist, album, albumId) {
+  const { exact, fuzzy } = getRymIndex();
+  const exactHit = exact.get(normalizeKey(artist, album));
+  if (exactHit) return { entry: exactHit, matchType: 'exact' };
+  const albumNorm = normalizeKey('', album).replace('|||', '');
+  for (const av of artistVariants(artist)) {
+    const hit = fuzzy.get(av + '|||' + albumNorm);
+    if (hit && hit !== '__ambiguous__') return { entry: hit, matchType: 'fuzzy' };
+  }
+  if (albumId) {
+    const assoc = rymAssociations.find(a => a.albumKey === albumId);
+    if (assoc) {
+      const entry = rymData.find(r => normalizeKey(r.artist, r.album) === assoc.rymKey);
+      if (entry) return { entry, matchType: 'manual' };
+    }
+  }
+  return { entry: undefined, matchType: null };
 }
 
 // Évalue un filtre note inline [op, val] contre une valeur réelle
@@ -4556,6 +4584,7 @@ function editAlbum(id) {
   updateDiscogsLink();
   setModalNote(a.note || 0);
   renderAlbumTracklistPanel(realId);
+  renderMatchConfidencePanel(realId);
   document.getElementById('modal-album').classList.add('open');
 }
 
@@ -7465,6 +7494,7 @@ async function fetchAllTracklists(onlyMissing = true) {
         const best = results[0];
         if (best && best.score >= 90) {
           album.mb_release_id = best.mb_release_id;
+          album.mb_match_score = best.score; // conservé pour revalidation ultérieure (score de confiance visible)
           if (!album.release_date && best.release_date) album.release_date = best.release_date;
           if (!album.cover_url && best.cover_url && !best.cover_url.includes('coverartarchive')) album.cover_url = best.cover_url;
           saveToStorage();
@@ -12742,6 +12772,65 @@ function rateAlbumTrack(albumIdSid, titleSid, value) {
   if (newVal && album) queueNoteToReport('track', { artist: album.artist, title }, newVal);
   saveToStorage();
   renderAlbumTracklistPanel(albumId);
+}
+
+// ===================== SCORE DE CONFIANCE VISIBLE (matching MB / RYM) =====================
+// Le matching MusicBrainz par recherche floue (searchMusicBrainz, auto-accepté si score>=90)
+// et le matching RYM par variante d'artiste prenaient des décisions silencieuses, sans aucune
+// trace consultable — impossible de revalider un cas limite sans deviner. Ce panneau, affiché
+// dans le détail album, rend ces décisions visibles et actionnables.
+function renderMatchConfidencePanel(albumId) {
+  const wrap = document.getElementById('modal-match-confidence');
+  if (!wrap) return;
+  const a = albums.find(x => x.id === albumId);
+  if (!a) { wrap.innerHTML = ''; return; }
+  const rows = [];
+
+  // ── MusicBrainz ──
+  if (a.mb_release_id) {
+    const mbUrl = `https://musicbrainz.org/release/${a.mb_release_id}`;
+    if (a.mb_match_score != null) {
+      const scoreColor = a.mb_match_score >= 98 ? 'var(--accent)' : a.mb_match_score >= 90 ? 'var(--amber)' : 'var(--red)';
+      rows.push(`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>🔎 MusicBrainz : matché automatiquement par recherche — <span style="color:${scoreColor};font-family:var(--mono)">${a.mb_match_score}% confiance</span></span>
+        <a href="${mbUrl}" target="_blank" style="color:var(--text3)">Vérifier ↗</a>
+        <button class="btn btn-sm" onclick="resetMbMatch('${sid(albumId)}')" title="Effacer ce matching (à corriger manuellement ou relancer une recherche)">✕ Réinitialiser</button>
+      </div>`);
+    } else {
+      rows.push(`<div>🔎 MusicBrainz : lié via le tag MBID du fichier ou l'ID Discogs (fiable) — <a href="${mbUrl}" target="_blank" style="color:var(--text3)">voir ↗</a></div>`);
+    }
+  } else {
+    rows.push('<div style="opacity:0.55">🔎 MusicBrainz : pas encore lié</div>');
+  }
+
+  // ── RYM ──
+  const rymRes = lookupRymWithMeta(a.artist, a.album, a.id);
+  if (rymRes.entry) {
+    const labelByType = { exact: 'correspondance exacte', fuzzy: "variante d'artiste — à vérifier", manual: 'association manuelle' };
+    const colorByType = { exact: 'var(--accent)', fuzzy: 'var(--amber)', manual: 'var(--accent)' };
+    rows.push(`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>⭐ RYM : ${rymRes.entry.rating.toFixed(2)}★ — <span style="color:${colorByType[rymRes.matchType]}">${labelByType[rymRes.matchType]}</span></span>
+      ${rymRes.matchType === 'fuzzy' ? `<button class="btn btn-sm" onclick="openRYMAssocFromCollection('${sid(albumId)}')" title="Vérifier/corriger l'association RYM">Vérifier</button>` : ''}
+    </div>`);
+  } else {
+    rows.push('<div style="opacity:0.55">⭐ RYM : pas de note trouvée</div>');
+  }
+
+  wrap.innerHTML = rows.join('');
+}
+
+function resetMbMatch(albumIdSid) {
+  const albumId = unsid(albumIdSid);
+  const a = albums.find(x => x.id === albumId);
+  if (!a) return;
+  if (!confirm('Effacer le lien MusicBrainz de cet album ? La tracklist MusicBrainz associée sera aussi retirée (les autres sources restent intactes).')) return;
+  a.mb_release_id = undefined;
+  a.mb_match_score = undefined;
+  albumTracksCache[albumId] = (albumTracksCache[albumId] || []).filter(t => t.source !== 'musicbrainz');
+  invalidateCache();
+  saveToStorage();
+  renderMatchConfidencePanel(albumId);
+  toast('Lien MusicBrainz effacé — un nouveau matching pourra être relancé');
 }
 
 </script>
