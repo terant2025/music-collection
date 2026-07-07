@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-5 — Nouvelle vue "🎯 Session notation" : écran dédié un album non noté à la fois (grosse pochette, étoiles, écoute YouTube Music), file priorisée par écoutes last.fm décroissantes, suggestion RYM affichée en point de départ (jamais posée automatiquement), raccourcis clavier 1-5 pour noter + S pour passer, barre de progression "X / Y albums notés", badge sidebar -->
+<!-- APP_VERSION: v2026.07.07-6 — Session notation étendue aux morceaux isolés : sélecteur "🎵 Albums / 🎧 Morceaux isolés" en haut de l'écran, file morceaux priorisée par écoutes last.fm, mêmes raccourcis clavier 1-5/S, barre de progression et badge sidebar cumulant les deux files -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -697,7 +697,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-5</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-6</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1687,6 +1687,10 @@ input[type="file"] { display: none; }
 
     <!-- SESSION DE NOTATION -->
     <div class="section" id="sec-ratesession">
+      <div class="covers-toolbar" style="justify-content:center;margin-bottom:20px">
+        <button class="covers-filter-btn active" id="rs-mode-btn-albums" onclick="setRatingSessionMode('albums')">🎵 Albums</button>
+        <button class="covers-filter-btn" id="rs-mode-btn-tracks" onclick="setRatingSessionMode('tracks')">🎧 Morceaux isolés</button>
+      </div>
       <div class="rate-session-progress-wrap">
         <div class="rate-session-progress-bar"><div class="rate-session-progress-fill" id="rs-progress-fill" style="width:0%"></div></div>
         <div id="rs-progress-label" style="font-size:12px;color:var(--text3);margin-top:6px">0 / 0 albums notés</div>
@@ -3088,7 +3092,7 @@ function nav(id) {
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
     rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
     covers: 'Galerie & résolution des pochettes',
-    ratesession: 'Un album non noté à la fois, priorisé par écoutes last.fm',
+    ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
     import: 'Sources externes & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
@@ -3772,7 +3776,7 @@ function updateNavBadges() {
     const coversBadge = document.getElementById('nav-covers-count');
     if (coversBadge) coversBadge.textContent = ownedAlbumsForCovers().filter(a => !a.cover_url).length;
     const rsBadge = document.getElementById('nav-ratesession-count');
-    if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length;
+    if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length + tracks.filter(t => !t.note).length;
     // Calculs coûteux uniquement si données chargées
     if (_dataReady) {
       document.getElementById('nav-missing-count').textContent = computeMissing().length;
@@ -12319,9 +12323,13 @@ function openYouTubeMusicForAlbumId(id) {
 }
 
 // ===================== SESSION DE NOTATION =====================
-// Écran dédié : un album non noté à la fois (grosse pochette, étoiles, raccourcis clavier),
-// plutôt que de chasser les lignes vides dans le tableau Collection. File d'attente priorisée
-// par écoutes last.fm décroissantes (le plus écouté et jamais noté remonte en premier).
+// Écran dédié : un album ou un morceau isolé non noté à la fois (grosse pochette/avatar,
+// étoiles, raccourcis clavier), plutôt que de chasser les lignes vides dans un tableau de
+// 2500+ entrées. Deux files séparées (albums / morceaux isolés), chacune priorisée par
+// écoutes last.fm décroissantes (le plus écouté et jamais noté remonte en premier).
+let ratingSessionMode = 'albums'; // 'albums' | 'tracks'
+let ratingQueueTracks = [];
+
 function buildRatingQueue() {
   return ownedAlbumsForCovers()
     .filter(a => !a.note)
@@ -12329,88 +12337,148 @@ function buildRatingQueue() {
     .map(a => a.id);
 }
 
+function buildRatingQueueTracks() {
+  const lfExact = getLfExactMap();
+  return tracks
+    .filter(t => !t.note)
+    .sort((a, b) => (lfExact.get(normalizeKey(b.artist, b.title)) || 0) - (lfExact.get(normalizeKey(a.artist, a.title)) || 0))
+    .map(t => t.id);
+}
+
 function initRatingSession() {
   ratingQueue = buildRatingQueue();
+  ratingQueueTracks = buildRatingQueueTracks();
+  renderRatingSession();
+}
+
+function setRatingSessionMode(mode) {
+  ratingSessionMode = mode;
+  const btnA = document.getElementById('rs-mode-btn-albums');
+  const btnT = document.getElementById('rs-mode-btn-tracks');
+  if (btnA) btnA.classList.toggle('active', mode === 'albums');
+  if (btnT) btnT.classList.toggle('active', mode === 'tracks');
   renderRatingSession();
 }
 
 function renderRatingSession() {
-  // Retirer de la file les albums notés/supprimés entretemps ailleurs dans l'app
+  const isTracks = ratingSessionMode === 'tracks';
+
+  // Retirer des files les entrées notées/supprimées entretemps ailleurs dans l'app
   ratingQueue = ratingQueue.filter(id => {
     const a = albums.find(x => x.id === id);
     return a && !a.note;
   });
+  ratingQueueTracks = ratingQueueTracks.filter(id => {
+    const t = tracks.find(x => x.id === id);
+    return t && !t.note;
+  });
 
-  const totalOwned = ownedAlbumsForCovers().length;
-  const ratedCount = ownedAlbumsForCovers().filter(a => a.note).length;
+  const totalOwned = isTracks ? tracks.length : ownedAlbumsForCovers().length;
+  const ratedCount = isTracks ? tracks.filter(t => t.note).length : ownedAlbumsForCovers().filter(a => a.note).length;
   const pct = totalOwned ? Math.round((ratedCount / totalOwned) * 100) : 0;
   const fillEl = document.getElementById('rs-progress-fill');
   const labelEl = document.getElementById('rs-progress-label');
   if (fillEl) fillEl.style.width = pct + '%';
-  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} albums notés`;
+  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} ${isTracks ? 'morceaux notés' : 'albums notés'}`;
 
+  const queue = isTracks ? ratingQueueTracks : ratingQueue;
   const emptyEl = document.getElementById('rs-empty');
   const cardEl = document.getElementById('rs-card-wrap');
-  if (!ratingQueue.length) {
-    if (emptyEl) emptyEl.style.display = 'block';
+  if (!queue.length) {
+    if (emptyEl) {
+      emptyEl.style.display = 'block';
+      const msg = emptyEl.querySelector('div:last-child');
+      if (msg) msg.textContent = isTracks ? 'Tous les morceaux isolés sont notés !' : 'Tous les albums possédés sont notés !';
+    }
     if (cardEl) cardEl.style.display = 'none';
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';
   if (cardEl) cardEl.style.display = 'block';
 
-  const a = albums.find(x => x.id === ratingQueue[0]);
-  if (!a) { ratingQueue.shift(); renderRatingSession(); return; }
-
-  document.getElementById('rs-cover').innerHTML = albumAvatar(a);
-  document.getElementById('rs-title').textContent = a.album;
-  document.getElementById('rs-artist').textContent = a.artist;
-  document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
-  document.getElementById('rs-plays').textContent = a.plays
-    ? `${a.plays} écoute(s) last.fm`
-    : 'Pas d’écoutes last.fm connues';
-
-  // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso
-  const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
+  const starsHtml = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   const sugEl = document.getElementById('rs-rym-suggestion');
-  if (rymEntry?.rating) {
-    sugEl.style.display = 'block';
-    sugEl.innerHTML = `<div style="font-size:12px;color:var(--amber);margin-bottom:10px">Suggestion RYM : ${rymEntry.rating.toFixed(2)}★ <span style="color:var(--text3)">(point de départ, jamais posée automatiquement)</span></div>`;
+
+  if (isTracks) {
+    const t = tracks.find(x => x.id === queue[0]);
+    if (!t) { ratingQueueTracks.shift(); renderRatingSession(); return; }
+    const lfExact = getLfExactMap();
+    const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
+
+    document.getElementById('rs-cover').innerHTML = initials(t.artist || '?');
+    document.getElementById('rs-title').textContent = t.title;
+    document.getElementById('rs-artist').textContent = t.artist;
+    document.getElementById('rs-meta').textContent = [t.album, (t.format || '').toUpperCase()].filter(Boolean).join(' · ');
+    document.getElementById('rs-plays').textContent = plays ? `${plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
+    if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
   } else {
-    sugEl.style.display = 'none';
-    sugEl.innerHTML = '';
+    const a = albums.find(x => x.id === queue[0]);
+    if (!a) { ratingQueue.shift(); renderRatingSession(); return; }
+
+    document.getElementById('rs-cover').innerHTML = albumAvatar(a);
+    document.getElementById('rs-title').textContent = a.album;
+    document.getElementById('rs-artist').textContent = a.artist;
+    document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
+    document.getElementById('rs-plays').textContent = a.plays ? `${a.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
+
+    // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso
+    const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
+    if (sugEl) {
+      if (rymEntry?.rating) {
+        sugEl.style.display = 'block';
+        sugEl.innerHTML = `<div style="font-size:12px;color:var(--amber);margin-bottom:10px">Suggestion RYM : ${rymEntry.rating.toFixed(2)}★ <span style="color:var(--text3)">(point de départ, jamais posée automatiquement)</span></div>`;
+      } else {
+        sugEl.style.display = 'none';
+        sugEl.innerHTML = '';
+      }
+    }
   }
 
-  document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5]
-    .map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`)
-    .join('');
+  document.getElementById('rs-stars').innerHTML = starsHtml;
 }
 
 function rsRateCurrent(note) {
-  const id = ratingQueue[0];
-  if (!id) return;
-  const a = albums.find(x => x.id === id);
-  if (!a) return;
-  a.note = note;
-  saveToStorage();
-  ratingQueue.shift();
-  toast(`${a.album} noté ${note}★`);
+  if (ratingSessionMode === 'tracks') {
+    const id = ratingQueueTracks[0];
+    if (!id) return;
+    const t = tracks.find(x => x.id === id);
+    if (!t) return;
+    t.note = note;
+    saveToStorage();
+    ratingQueueTracks.shift();
+    toast(`${t.title} noté ${note}★`);
+  } else {
+    const id = ratingQueue[0];
+    if (!id) return;
+    const a = albums.find(x => x.id === id);
+    if (!a) return;
+    a.note = note;
+    saveToStorage();
+    ratingQueue.shift();
+    toast(`${a.album} noté ${note}★`);
+  }
   renderRatingSession();
 }
 
 function rsSkipCurrent() {
-  if (ratingQueue.length < 2) return;
-  ratingQueue.push(ratingQueue.shift());
+  const queue = ratingSessionMode === 'tracks' ? ratingQueueTracks : ratingQueue;
+  if (queue.length < 2) return;
+  queue.push(queue.shift());
   renderRatingSession();
 }
 
 function rsListenCurrent() {
-  const a = albums.find(x => x.id === ratingQueue[0]);
-  if (a) openYouTubeMusicForAlbum(a);
+  if (ratingSessionMode === 'tracks') {
+    const t = tracks.find(x => x.id === ratingQueueTracks[0]);
+    if (t) openYouTubeMusicSearch(t.artist, t.title);
+  } else {
+    const a = albums.find(x => x.id === ratingQueue[0]);
+    if (a) openYouTubeMusicForAlbum(a);
+  }
 }
 
 // Raccourcis clavier (touches 1-5 pour noter, S pour passer) — actifs uniquement
-// sur l'écran Session notation et hors saisie dans un champ.
+// sur l'écran Session notation (albums ou morceaux) et hors saisie dans un champ.
 document.addEventListener('keydown', (e) => {
   const sec = document.getElementById('sec-ratesession');
   if (!sec || !sec.classList.contains('active')) return;
