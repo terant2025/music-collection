@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-6 — Session notation étendue aux morceaux isolés : sélecteur "🎵 Albums / 🎧 Morceaux isolés" en haut de l'écran, file morceaux priorisée par écoutes last.fm, mêmes raccourcis clavier 1-5/S, barre de progression et badge sidebar cumulant les deux files -->
+<!-- APP_VERSION: v2026.07.07-7 — Nouvelle vue "📋 Notes à reporter" : chaque note posée via la Session notation génère une entrée listant les cibles externes à mettre à jour manuellement (MusicBee toujours, + Discogs/RYM pour les albums selon ce qui manque déjà côté source). Discogs/RYM se cochent automatiquement au prochain réimport CSV si la note y est détectée ; clic manuel sinon (utile pour MusicBee, pas d'API locale). Export CSV, badge sidebar, persistance Supabase/localStorage (table meta) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -670,6 +670,10 @@ input[type="file"] { display: none; }
     <span class="nav-icon">🎯</span> Session notation
     <span class="nav-badge warn" id="nav-ratesession-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('notestoreport')">
+    <span class="nav-icon">📋</span> Notes à reporter
+    <span class="nav-badge warn" id="nav-notestoreport-count">0</span>
+  </div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
   </div>
@@ -697,7 +701,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-6</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-7</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1721,6 +1725,23 @@ input[type="file"] { display: none; }
       </div>
     </div>
 
+    <!-- NOTES À REPORTER -->
+    <div class="section" id="sec-notestoreport">
+      <div class="covers-toolbar">
+        <div id="ntr-counter" style="font-size:12px;color:var(--text3)"></div>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="exportNotesToReportCSV()">⬇ Export CSV</button>
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Notes posées dans l'app à reporter manuellement dans les vraies sources externes (l'app n'est qu'un agrégateur, rien n'est synchronisé automatiquement).
+        Clique sur une cible pour la marquer comme reportée. Discogs et RYM se cochent automatiquement au prochain réimport si la note y est détectée.
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Type</th><th>Artiste</th><th>Titre</th><th>Note</th><th>Cibles restantes</th><th></th></tr></thead>
+        <tbody id="ntr-tbody"></tbody>
+      </table></div>
+    </div>
+
   </div><!-- /content -->
 </main>
 </div><!-- /app -->
@@ -2164,6 +2185,12 @@ let lastfmData = [];
 let rymData = [];
 let associations = [];    // [{cdKey, numKey}] — clés texte stables
 let rymAssociations = []; // [{rymKey, albumKey}] — clés texte stables
+let notesToReport = []; // [{ id, type:'album'|'track', key, artist, title, note, targets:['musicbee','discogs','rym'], createdAt }]
+// File des notes posées dans l'app (session de notation ou table classique) à reporter
+// manuellement dans les sources externes réelles (MusicBee, Discogs, RYM ne sont PAS
+// synchronisées automatiquement — l'app n'est qu'un agrégateur). Se vide automatiquement
+// pour discogs/rym quand un réimport détecte la note côté source ; MusicBee se coche
+// manuellement (pas d'API locale pour détecter un rescan).
 let modalNote = 0;
 let trackNote = 0;
 let currentPage = 1;
@@ -2195,7 +2222,7 @@ function _saveToStorageImpl() {
         await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, nextId, savedAt: now };
+        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -2227,6 +2254,7 @@ function loadFromStorage() {
     rymAssociations = data.rymAssociations || [];
     wishlist = data.wishlist || [];
     trackWishlist = data.trackWishlist || [];
+    notesToReport = data.notesToReport || [];
     nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
@@ -2520,6 +2548,7 @@ async function saveToSupabase() {
     const wishData = JSON.stringify({ albums: wishlist, tracks: trackWishlist });
     await window._sb.from('meta').upsert([
       { key: 'wishlist_data', value: wishData },
+      { key: 'notes_to_report_data', value: JSON.stringify(notesToReport) },
     ], { onConflict: 'key' });
 
     setSaveIndicator('saved', now);
@@ -2560,6 +2589,7 @@ async function loadFromSupabase() {
         const metaMap = Object.fromEntries(metaRows.map(r => [r.key, r.value]));
         if (metaMap.lastfm_sync_ts) localStorage.setItem(LASTFM_SYNC_KEY, metaMap.lastfm_sync_ts);
         if (metaMap.wishlist_data) { try { const wd = JSON.parse(metaMap.wishlist_data); if (wd.albums?.length) wishlist = wd.albums; if (wd.tracks?.length) trackWishlist = wd.tracks; } catch(e) {} }
+        if (metaMap.notes_to_report_data) { try { notesToReport = JSON.parse(metaMap.notes_to_report_data) || []; } catch(e) {} }
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
@@ -2713,6 +2743,9 @@ async function loadFromSupabase() {
           if (wd.albums?.length) wishlist = wd.albums;
           if (wd.tracks?.length) trackWishlist = wd.tracks;
         } catch(e) {}
+      }
+      if (metaMap.notes_to_report_data) {
+        try { notesToReport = JSON.parse(metaMap.notes_to_report_data) || []; } catch(e) {}
       }
       if (metaMap.lastfm_status) {
         try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {}
@@ -3066,7 +3099,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'ratesession', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'ratesession', 'notestoreport', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -3082,7 +3115,7 @@ function nav(id) {
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
-    ratesession: 'Session notation', import: 'Import / Export'
+    ratesession: 'Session notation', notestoreport: 'Notes à reporter', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -3093,6 +3126,7 @@ function nav(id) {
     rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
     covers: 'Galerie & résolution des pochettes',
     ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
+    notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
     import: 'Sources externes & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
@@ -3111,6 +3145,7 @@ function nav(id) {
   if (id === 'track-wishlist') renderTrackWishlist();
   if (id === 'covers') renderCoversGallery();
   if (id === 'ratesession') initRatingSession();
+  if (id === 'notestoreport') renderNotesToReport();
 }
 
 function onSearch() {
@@ -3754,6 +3789,7 @@ function updateNavBadges() {
   clearTimeout(_navBadgeTimer);
   _navBadgeTimer = setTimeout(() => {
     if (_dataReady) pruneWishlistOwned();
+    if (_dataReady && notesToReport.length) pruneNotesToReport();
     document.getElementById('nav-albums-count').textContent = albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length;
     document.getElementById('nav-tracks-count').textContent = tracks.length;
     const wishBadge = document.getElementById('nav-wish-count');
@@ -3777,6 +3813,9 @@ function updateNavBadges() {
     if (coversBadge) coversBadge.textContent = ownedAlbumsForCovers().filter(a => !a.cover_url).length;
     const rsBadge = document.getElementById('nav-ratesession-count');
     if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length + tracks.filter(t => !t.note).length;
+    const ntrBadge = document.getElementById('nav-notestoreport-count');
+    if (ntrBadge) ntrBadge.textContent = notesToReport.length;
+    if (document.getElementById('sec-notestoreport')?.classList.contains('active')) renderNotesToReport();
     // Calculs coûteux uniquement si données chargées
     if (_dataReady) {
       document.getElementById('nav-missing-count').textContent = computeMissing().length;
@@ -5034,6 +5073,7 @@ async function importDiscogs(input) {
     renderAlbums();
     toast(`Discogs : ${added} ajoutés, ${updated} mis à jour`);
     saveToStorage();
+    updateNavBadges();
     // Charger les tracklists Discogs manquantes en arrière-plan
     setTimeout(() => fetchAllTracklists(true), 1500);
   } catch (e) {
@@ -12444,6 +12484,7 @@ function rsRateCurrent(note) {
     const t = tracks.find(x => x.id === id);
     if (!t) return;
     t.note = note;
+    queueNoteToReport('track', t, note);
     saveToStorage();
     ratingQueueTracks.shift();
     toast(`${t.title} noté ${note}★`);
@@ -12453,6 +12494,7 @@ function rsRateCurrent(note) {
     const a = albums.find(x => x.id === id);
     if (!a) return;
     a.note = note;
+    queueNoteToReport('album', a, note);
     saveToStorage();
     ratingQueue.shift();
     toast(`${a.album} noté ${note}★`);
@@ -12487,6 +12529,102 @@ document.addEventListener('keydown', (e) => {
   if (e.key >= '1' && e.key <= '5') { e.preventDefault(); rsRateCurrent(parseInt(e.key, 10)); }
   else if (e.key.toLowerCase() === 's') { e.preventDefault(); rsSkipCurrent(); }
 });
+
+// ===================== NOTES À REPORTER =====================
+// L'app agrège MusicBee/Discogs/RYM mais n'y écrit jamais rien : une note posée dans l'app
+// (ex: via la Session notation) doit être reportée manuellement dans ces sources réelles pour
+// rester cohérente au fil des réimports. Cette file garde trace de ce qui reste à reporter,
+// par cible. Discogs et RYM se cochent automatiquement dès qu'un réimport détecte la note côté
+// source ; MusicBee n'a pas d'API locale détectable, donc se coche manuellement.
+const NTR_TARGET_LABELS = { musicbee: 'MusicBee', discogs: 'Discogs', rym: 'RYM' };
+
+function queueNoteToReport(type, entity, note) {
+  const title = type === 'album' ? entity.album : entity.title;
+  const key = normalizeKey(entity.artist, title);
+  let targets = ['musicbee'];
+  if (type === 'album') {
+    if (entity.discogsId && !entity.discogsRating) targets.push('discogs');
+    const rymEntry = lookupRym(entity.artist, entity.album) || lookupRym(cleanDiscogsArtist(entity.artist), entity.album);
+    if (!rymEntry?.rating) targets.push('rym');
+  }
+  // Une nouvelle note sur la même fiche remplace l'entrée en attente précédente
+  notesToReport = notesToReport.filter(e => !(e.type === type && e.key === key));
+  notesToReport.push({ id: uid(), type, key, artist: entity.artist, title, note, targets, createdAt: Date.now() });
+}
+
+// Retire automatiquement les cibles Discogs/RYM détectées comme reportées (via réimport).
+// Retourne true si quelque chose a changé (pour déclencher une sauvegarde).
+function pruneNotesToReport() {
+  let changed = false;
+  notesToReport.forEach(entry => {
+    if (entry.type !== 'album') return;
+    if (entry.targets.includes('discogs')) {
+      const a = albums.find(x => normalizeKey(x.artist, x.album) === entry.key);
+      if (a?.discogsRating) { entry.targets = entry.targets.filter(t => t !== 'discogs'); changed = true; }
+    }
+    if (entry.targets.includes('rym')) {
+      const rymEntry = lookupRym(entry.artist, entry.title) || lookupRym(cleanDiscogsArtist(entry.artist), entry.title);
+      if (rymEntry?.rating) { entry.targets = entry.targets.filter(t => t !== 'rym'); changed = true; }
+    }
+  });
+  const before = notesToReport.length;
+  notesToReport = notesToReport.filter(e => e.targets.length > 0);
+  if (notesToReport.length !== before) changed = true;
+  if (changed) saveToStorage();
+  return changed;
+}
+
+// Marquer une cible précise comme reportée (clic manuel — utilisé pour MusicBee,
+// et en filet de secours pour Discogs/RYM si la détection automatique n'a pas eu lieu)
+function dismissReportTarget(id, target) {
+  const entry = notesToReport.find(e => e.id === id);
+  if (!entry) return;
+  entry.targets = entry.targets.filter(t => t !== target);
+  if (!entry.targets.length) notesToReport = notesToReport.filter(e => e.id !== id);
+  saveToStorage();
+  renderNotesToReport();
+}
+
+function removeNoteToReport(id) {
+  notesToReport = notesToReport.filter(e => e.id !== id);
+  saveToStorage();
+  renderNotesToReport();
+}
+
+function renderNotesToReport() {
+  pruneNotesToReport();
+  const counter = document.getElementById('ntr-counter');
+  if (counter) counter.textContent = `${notesToReport.length} note(s) à reporter`;
+  const tbody = document.getElementById('ntr-tbody');
+  if (!tbody) return;
+  if (!notesToReport.length) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📋</div>Rien à reporter — tout est synchronisé.</div></td></tr>';
+    return;
+  }
+  const sorted = [...notesToReport].sort((a, b) => b.createdAt - a.createdAt);
+  tbody.innerHTML = sorted.map(e => {
+    const pills = e.targets.map(t =>
+      `<span class="badge badge-stock" style="cursor:pointer" onclick="dismissReportTarget('${e.id}','${t}')" title="Marquer ${NTR_TARGET_LABELS[t]} comme reporté">${NTR_TARGET_LABELS[t]} ✕</span>`
+    ).join(' ');
+    return `<tr>
+      <td>${e.type === 'album' ? '💿 Album' : '🎵 Morceau'}</td>
+      <td>${esc(e.artist)}</td>
+      <td>${esc(e.title)}</td>
+      <td class="mono" style="color:var(--accent)">${e.note}★</td>
+      <td><div class="badges-cell">${pills}</div></td>
+      <td><button class="btn btn-sm btn-danger" onclick="removeNoteToReport('${e.id}')" title="Retirer de la liste">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function exportNotesToReportCSV() {
+  const rows = [['Type', 'Artiste', 'Titre', 'Note', 'Cibles restantes']];
+  notesToReport.forEach(e => rows.push([
+    e.type === 'album' ? 'Album' : 'Morceau', e.artist, e.title, e.note,
+    e.targets.map(t => NTR_TARGET_LABELS[t]).join(' + ')
+  ]));
+  _csvDownload(`notes_a_reporter_${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
 
 </script>
 </body>
