@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-1 — Détection de conflits de synchronisation Supabase (deux onglets/appareils) : compteur meta.sync_version incrémenté atomiquement (fonction Postgres bump_sync_version(), migration-sync-conflict-detection.sql) à chaque saveToSupabase() réussi. Avant tout sync destructif (upsert + delete des albums absents localement), l'app compare la version distante à celle vue à son dernier chargement ; en cas d'écart et d'écrivain différent, bloque le sync et propose via un modal de recharger les données distantes ou de forcer l'écrasement. Identifiant/label d'appareil persistés en localStorage, renommables depuis Import/Export. Sans la migration SQL, la détection est simplement désactivée (comportement inchangé) -->
+<!-- APP_VERSION: v2026.07.07-1 — Galerie de pochettes (nav "🖼 Pochettes") : grille filtrable Sans pochette / Basse résolution / Toutes, détection basse résolution par scan asynchrone (naturalWidth/Height < 300px, mis en cache en session), modale de choix de pochette avec propositions Discogs + Last.fm côte à côte + saisie manuelle d'URL, badge de comptage dans la sidebar -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -349,6 +349,41 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 }
 .format-hint strong { color: var(--accent); }
 
+/* COVERS GALLERY */
+.covers-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.covers-filter-btn {
+  background: var(--bg2); border: 1px solid var(--border); color: var(--text2);
+  border-radius: var(--radius); padding: 7px 14px; font-size: 12px; cursor: pointer;
+}
+.covers-filter-btn.active { background: var(--accent-dim2); color: var(--accent); border-color: var(--accent); }
+.covers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.cover-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 10px; cursor: pointer; transition: border-color 0.15s; position: relative;
+}
+.cover-card:hover { border-color: var(--accent); }
+.cover-thumb {
+  width: 100%; aspect-ratio: 1; border-radius: 6px; background: var(--bg4);
+  display: flex; align-items: center; justify-content: center; font-size: 22px; color: var(--text3);
+  overflow: hidden; margin-bottom: 8px;
+}
+.cover-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover-card .name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cover-card .sub { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cover-flag {
+  position: absolute; top: 6px; left: 6px; font-size: 10px; font-family: var(--mono);
+  padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.65); color: #fff;
+}
+.cover-flag.missing { background: var(--red); }
+.cover-flag.lowres { background: var(--amber); color: #1a1a1a; }
+.cover-choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+.cover-choice-item {
+  border: 2px solid var(--border); border-radius: var(--radius); padding: 6px; cursor: pointer; text-align: center;
+}
+.cover-choice-item.selected { border-color: var(--accent); }
+.cover-choice-item img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
+.cover-choice-item .src-label { font-size: 10px; color: var(--text3); margin-top: 4px; font-family: var(--mono); }
+
 /* MODAL */
 .modal-overlay {
   position: fixed; inset: 0;
@@ -452,8 +487,6 @@ input[type="file"] { display: none; }
 .save-indicator.saved { color: var(--accent); }
 .save-indicator.error .save-dot { background: var(--red); }
 .save-indicator.error { color: var(--red); }
-.save-indicator.conflict .save-dot { background: var(--red); animation: pulse 1s infinite; }
-.save-indicator.conflict { color: var(--red); cursor: pointer; }
 
 /* Filtre note inline */
 .note-filter {
@@ -596,6 +629,10 @@ input[type="file"] { display: none; }
     <span class="nav-icon">🔗</span> Associations
     <span class="nav-badge" id="nav-assoc-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('covers')">
+    <span class="nav-icon">🖼</span> Pochettes
+    <span class="nav-badge warn" id="nav-covers-count">0</span>
+  </div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
   </div>
@@ -608,7 +645,7 @@ input[type="file"] { display: none; }
       </div>
       <div class="storage-bar"><div class="storage-fill" id="storage-bar" style="width:0%"></div></div>
     </div>
-    <div class="save-indicator" id="save-indicator" onclick="_syncConflictPending && openSyncConflictModal()">
+    <div class="save-indicator" id="save-indicator">
       <div class="save-dot"></div>
       <span id="save-label">Aucune sauvegarde</span>
     </div>
@@ -1581,10 +1618,26 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="openIntegrityModal()">🩺 Vérifier l'intégrité</button>
           <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Snapshots Supabase</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
-          <button class="btn" onclick="renameDevice()" title="Nom utilisé pour identifier cet appareil en cas de conflit de synchronisation">🏷 Renommer cet appareil</button>
         </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:6px">Appareil courant : <span id="device-label-display"></span></div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <!-- POCHETTES -->
+    <div class="section" id="sec-covers">
+      <div class="covers-toolbar">
+        <button class="covers-filter-btn active" id="cf-btn-missing" onclick="setCoverFilter('missing')">Sans pochette</button>
+        <button class="covers-filter-btn" id="cf-btn-lowres" onclick="setCoverFilter('lowres')">Basse résolution</button>
+        <button class="covers-filter-btn" id="cf-btn-all" onclick="setCoverFilter('all')">Toutes</button>
+        <div style="flex:1"></div>
+        <input type="text" id="covers-search" placeholder="Filtrer artiste/album…" oninput="coverGalleryPage=1;renderCoversGallery()" style="width:220px;font-size:12px">
+        <button class="btn btn-sm" onclick="scanCoverResolutions()" id="btn-scan-lowres">🔍 Scanner résolution</button>
+      </div>
+      <div id="covers-scan-progress" style="font-size:12px;color:var(--text3);margin-bottom:10px;display:none"></div>
+      <div id="covers-counter" style="font-size:12px;color:var(--text3);margin-bottom:14px"></div>
+      <div class="covers-grid" id="covers-grid"></div>
+      <div style="text-align:center;margin-top:20px">
+        <button class="btn" id="btn-covers-more" onclick="coverGalleryPage++;renderCoversGallery()" style="display:none">Charger plus</button>
       </div>
     </div>
 
@@ -1996,18 +2049,24 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
-<!-- Modal conflit de synchronisation -->
-<div class="modal-overlay" id="modal-sync-conflict">
-  <div class="modal" style="width:520px">
-    <h2>⚠️ Conflit de synchronisation</h2>
-    <p style="font-size:13px;color:var(--text2);margin-bottom:12px" id="sync-conflict-info"></p>
-    <p style="font-size:12px;color:var(--text3);margin-bottom:16px">La synchronisation automatique est en pause tant que ce conflit n'est pas résolu. Tes modifications restent en mémoire dans cette fenêtre.</p>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
-      <button class="btn btn-accent" onclick="resolveSyncConflictReload()">↻ Recharger les données du serveur (perd mes changements non synchronisés ici)</button>
-      <button class="btn" style="border-color:var(--red);color:var(--red)" onclick="resolveSyncConflictForce()">⚠ Forcer l'écrasement avec mes données (perd les changements distants)</button>
+<!-- Modal choix de pochette -->
+<div class="modal-overlay" id="modal-cover-choice">
+  <div class="modal" style="width:600px;max-width:92vw">
+    <h2 id="cover-choice-title">🖼 Choisir la pochette</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:4px" id="cover-choice-sub"></p>
+    <div id="cover-choice-status" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
+    <div class="cover-choice-grid" id="cover-choice-grid"></div>
+    <div class="form-row">
+      <label>Ou coller une URL manuellement</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="cover-choice-manual-url" placeholder="https://…" style="flex:1;font-size:12px">
+        <button class="btn btn-sm" onclick="previewManualCoverUrl()" type="button">Prévisualiser</button>
+      </div>
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="closeSyncConflictModal()">Décider plus tard</button>
+      <button class="btn" onclick="closeCoverChoiceModal()">Annuler</button>
+      <button class="btn btn-danger" onclick="clearCoverChoice()" title="Retirer la pochette de cet album">Retirer la pochette</button>
+      <button class="btn btn-accent" onclick="saveCoverChoice()">Enregistrer</button>
     </div>
   </div>
 </div>
@@ -2046,105 +2105,6 @@ function stableAlbumId(artist, album, mb_release_id, discogs_id) {
 // ===================== LOCALSTORAGE =====================
 const LS_KEY = 'discotheque_v2';
 const LS_CFG = 'discotheque_backend_cfg';
-
-// ===================== DÉTECTION DE CONFLITS DE SYNC =====================
-// Principe : meta.sync_version est un compteur incrémenté atomiquement (fonction Postgres
-// bump_sync_version()) à chaque saveToSupabase() réussi. On mémorise la version vue au dernier
-// chargement (_localSyncVersion). Avant tout sync destructif (upsert + delete des absents),
-// on relit la version distante : si elle a changé depuis notre dernier load, un autre
-// onglet/appareil a écrit entre-temps → on bloque le sync destructif et on prévient l'utilisateur
-// plutôt que d'écraser/supprimer silencieusement ses changements.
-const LS_DEVICE_ID = 'discotheque_device_id';
-const LS_DEVICE_LABEL = 'discotheque_device_label';
-function getDeviceId() {
-  let id = localStorage.getItem(LS_DEVICE_ID);
-  if (!id) {
-    id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-    localStorage.setItem(LS_DEVICE_ID, id);
-  }
-  return id;
-}
-function getDeviceLabel() {
-  let label = localStorage.getItem(LS_DEVICE_LABEL);
-  if (!label) {
-    const ua = navigator.userAgent || '';
-    const isMobile = /Android|iPhone|iPad/i.test(ua);
-    const platform = /Windows/i.test(ua) ? 'Windows' : /Mac/i.test(ua) ? 'Mac' : /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iOS' : 'PC';
-    label = platform + (isMobile ? ' · mobile' : ' · desktop');
-    localStorage.setItem(LS_DEVICE_LABEL, label);
-  }
-  return label;
-}
-function renameDevice() {
-  const current = getDeviceLabel();
-  const next = prompt('Nom de cet appareil (pour repérer qui a synchronisé quoi en cas de conflit) :', current);
-  if (next && next.trim()) { localStorage.setItem(LS_DEVICE_LABEL, next.trim()); toast('Appareil renommé : ' + next.trim()); }
-}
-let _localSyncVersion = 0;      // dernière version connue localement (posée au chargement)
-let _syncConflictPending = false; // true tant qu'un conflit détecté n'a pas été résolu par l'utilisateur
-let _syncConflictInfo = null;     // { remoteVersion, writer } du conflit en cours
-let _forceSyncOverride = false;   // true pour un unique passage forçant l'écrasement malgré le conflit
-
-async function bumpAndRecordSyncVersion() {
-  try {
-    const { data, error } = await window._sb.rpc('bump_sync_version');
-    if (error) throw error;
-    _localSyncVersion = data;
-    await window._sb.from('meta').upsert([
-      { key: 'sync_last_writer', value: JSON.stringify({ device: getDeviceId(), label: getDeviceLabel(), at: new Date().toISOString() }) }
-    ], { onConflict: 'key' });
-  } catch(e) {
-    // Fonction/colonne absente (migration pas encore appliquée) : ne bloque pas la sauvegarde,
-    // juste pas de détection de conflit possible tant que la migration SQL n'est pas passée.
-    console.warn('bump_sync_version indisponible — voir migration-sync-conflict-detection.sql', e);
-  }
-}
-
-// Vérifie si la version distante a changé depuis notre dernier chargement.
-// Retourne { conflict, remoteVersion, writer } — ne modifie rien.
-async function checkSyncConflict() {
-  try {
-    const { data, error } = await window._sb.from('meta').select('key,value').in('key', ['sync_version', 'sync_last_writer']);
-    if (error) throw error;
-    const map = Object.fromEntries((data || []).map(r => [r.key, r.value]));
-    const remoteVersion = parseInt(map.sync_version || '0', 10) || 0;
-    let writer = null;
-    if (map.sync_last_writer) { try { writer = JSON.parse(map.sync_last_writer); } catch(e) {} }
-    const conflict = remoteVersion !== _localSyncVersion && writer && writer.device !== getDeviceId();
-    return { conflict, remoteVersion, writer };
-  } catch(e) {
-    // Table/fonction pas encore migrée : pas de détection possible, on laisse passer.
-    return { conflict: false, remoteVersion: _localSyncVersion, writer: null };
-  }
-}
-
-function openSyncConflictModal(info) {
-  if (info) _syncConflictInfo = info;
-  const el = document.getElementById('modal-sync-conflict');
-  if (!el) return;
-  const who = _syncConflictInfo?.writer?.label || 'un autre appareil';
-  const when = _syncConflictInfo?.writer?.at ? new Date(_syncConflictInfo.writer.at).toLocaleString('fr-FR') : 'récemment';
-  document.getElementById('sync-conflict-info').textContent = `${who} a synchronisé ${when}, après le chargement de cette fenêtre. Continuer risquerait d'écraser ou supprimer ces changements.`;
-  el.classList.add('open');
-}
-function closeSyncConflictModal() {
-  document.getElementById('modal-sync-conflict')?.classList.remove('open');
-}
-async function resolveSyncConflictReload() {
-  closeSyncConflictModal();
-  _syncConflictPending = false;
-  toast('Rechargement des données distantes…');
-  await loadFromSupabase();
-  renderAlbums(); renderTracks(); updateNavBadges();
-  toast('🟢 Données rechargées depuis Supabase');
-}
-async function resolveSyncConflictForce() {
-  if (!confirm('Écraser les changements distants avec les données de cet appareil ? Cette action est irréversible pour les modifications faites ailleurs.')) return;
-  closeSyncConflictModal();
-  _syncConflictPending = false;
-  _forceSyncOverride = true;
-  await saveToSupabase();
-}
 
 function _saveToStorageImpl() {
   setSaveIndicator('saving');
@@ -2220,8 +2180,6 @@ async function connectSupabase(anonKey) {
     localStorage.setItem(LS_CFG, 'supabase');
     const setupEl = document.getElementById('supabase-setup');
     if (setupEl) setupEl.style.display = 'none';
-    const dlEl = document.getElementById('device-label-display');
-    if (dlEl) dlEl.textContent = getDeviceLabel();
     const loaded = await loadFromSupabase();
     // Ne pas sauvegarder si la collection est vide (ex: après migration — évite de purger les associations)
     if (!loaded && albums.length > 0) await saveToSupabase();
@@ -2349,7 +2307,6 @@ function deduplicateAlbums() {
 let _savingToSupabase = false;
 async function saveToSupabase() {
   if (!window._sb) return;
-  if (_syncConflictPending) return; // en attente de résolution utilisateur — ne rien pousser
   if (_savingToSupabase) { 
     // Relancer après la sauvegarde en cours
     setTimeout(() => saveToSupabase(), 1000);
@@ -2359,22 +2316,6 @@ async function saveToSupabase() {
   setSaveIndicator('saving');
   const now = new Date().toISOString();
   try {
-    // ── Détection de conflit AVANT tout envoi destructif ──────────────────────
-    // Le sync ci-dessous fait un upsert + delete des albums absents localement :
-    // si un autre onglet/appareil a synchronisé depuis notre dernier chargement,
-    // notre vue locale est potentiellement obsolète et ce delete supprimerait
-    // ses changements. On bloque et on prévient plutôt que d'écraser en silence.
-    if (!_forceSyncOverride) {
-      const { conflict, remoteVersion, writer } = await checkSyncConflict();
-      if (conflict) {
-        _syncConflictPending = true;
-        _savingToSupabase = false;
-        setSaveIndicator('conflict');
-        openSyncConflictModal({ remoteVersion, writer });
-        return;
-      }
-    }
-    _forceSyncOverride = false;
     // ── Albums (inclut stock, ok, forsale — distingués par folders[]) ──────────
     const albumRows = albums.map(a => ({
       id:             a.id,
@@ -2500,9 +2441,6 @@ async function saveToSupabase() {
       { key: 'wishlist_data', value: wishData },
     ], { onConflict: 'key' });
 
-    // ── Marquer cette version comme la nôtre pour la détection de conflit ────
-    await bumpAndRecordSyncVersion();
-
     setSaveIndicator('saved', now);
   } catch(e) {
     setSaveIndicator('error');
@@ -2544,7 +2482,6 @@ async function loadFromSupabase() {
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
-        _localSyncVersion = parseInt(metaMap.sync_version || '0', 10) || 0;
       }
       loadLastfmFromSupabase();
       const { data: rym } = await window._sb.from('rym_data').select('*');
@@ -2710,7 +2647,6 @@ async function loadFromSupabase() {
           if (countEl && _lovedTracks.size) countEl.textContent = `❤️ ${_lovedTracks.size} morceaux`;
         } catch(e) {}
       }
-      _localSyncVersion = parseInt(metaMap.sync_version || '0', 10) || 0;
     }
     setTimeout(() => updateLastSyncLabel(), 100);
     loadAlbumTracks();
@@ -2851,8 +2787,6 @@ function setSaveIndicator(state, isoDate) {
     } else { label.textContent = prefix + 'Synchronisé'; }
   } else if (state === 'error') {
     label.textContent = isSupa ? '🟢 Erreur sync' : 'Erreur sauvegarde';
-  } else if (state === 'conflict') {
-    label.textContent = '⚠️ Conflit — cliquer pour résoudre';
   } else {
     label.textContent = 'Aucune sauvegarde';
   }
@@ -3050,7 +2984,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -3065,7 +2999,7 @@ function nav(id) {
     'all-tracks': 'Tous les morceaux', 'album-tracks': 'Morceaux des albums',
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
-    rym: 'RateYourMusic', assocreview: 'Associations', import: 'Import / Export'
+    rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -3074,6 +3008,7 @@ function nav(id) {
     tracks: 'Fichiers isolés (top titres)', 'track-wishlist': 'Morceaux à acquérir',
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
     rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
+    covers: 'Galerie & résolution des pochettes',
     import: 'Sources externes & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
@@ -3090,6 +3025,7 @@ function nav(id) {
   if (id === 'all-tracks')    renderAllTracks();
   if (id === 'album-tracks')  renderAlbumTracks();
   if (id === 'track-wishlist') renderTrackWishlist();
+  if (id === 'covers') renderCoversGallery();
 }
 
 function onSearch() {
@@ -3752,6 +3688,8 @@ function updateNavBadges() {
     }
     const stockBadge = document.getElementById('nav-stock-count');
     if (stockBadge) stockBadge.textContent = stockItems.length;
+    const coversBadge = document.getElementById('nav-covers-count');
+    if (coversBadge) coversBadge.textContent = ownedAlbumsForCovers().filter(a => !a.cover_url).length;
     // Calculs coûteux uniquement si données chargées
     if (_dataReady) {
       document.getElementById('nav-missing-count').textContent = computeMissing().length;
@@ -4555,6 +4493,216 @@ async function fetchCoverForModal() {
       toast('Aucune pochette trouvée', 'warn');
     }
   } catch(e) { toast('Erreur : ' + e.message, 'error'); }
+}
+
+// ===================== GALERIE DE POCHETTES =====================
+let coverFilter = 'missing';
+let coverGalleryPage = 1;
+const COVERS_PAGE_SIZE = 60;
+const COVER_LOWRES_THRESHOLD = 300; // px — en dessous, considéré basse résolution
+
+function ownedAlbumsForCovers() {
+  return albums.filter(a => (a.flac || a.mp3 || a.digital || a.cd) && a.artist && a.album);
+}
+
+function setCoverFilter(f) {
+  coverFilter = f;
+  coverGalleryPage = 1;
+  ['missing', 'lowres', 'all'].forEach(k => {
+    document.getElementById('cf-btn-' + k).classList.toggle('active', k === f);
+  });
+  renderCoversGallery();
+}
+
+function renderCoversGallery() {
+  const q = (document.getElementById('covers-search')?.value || '').toLowerCase().trim();
+  let list = ownedAlbumsForCovers();
+  if (q) list = list.filter(a => a.artist.toLowerCase().includes(q) || a.album.toLowerCase().includes(q));
+
+  if (coverFilter === 'missing') list = list.filter(a => !a.cover_url);
+  else if (coverFilter === 'lowres') list = list.filter(a => a.cover_url && _cache.lowResCovers?.has(a.id));
+  // 'all' : pas de filtre supplémentaire
+
+  list.sort((a, b) => (a.artist + a.album).localeCompare(b.artist + b.album));
+
+  const counter = document.getElementById('covers-counter');
+  const labels = { missing: 'sans pochette', lowres: 'en basse résolution', all: 'au total' };
+  counter.textContent = `${list.length} album(s) ${labels[coverFilter]}`;
+
+  const scanBtn = document.getElementById('btn-scan-lowres');
+  if (scanBtn) scanBtn.style.display = coverFilter === 'lowres' ? 'inline-flex' : 'none';
+
+  const shown = list.slice(0, coverGalleryPage * COVERS_PAGE_SIZE);
+  const grid = document.getElementById('covers-grid');
+  grid.innerHTML = shown.map(a => renderCoverCard(a)).join('') ||
+    `<div style="grid-column:1/-1;color:var(--text3);font-size:13px;padding:20px 0">Rien à afficher${coverFilter === 'lowres' && !_cache.lowResScanned ? ' — clique sur "🔍 Scanner résolution" pour détecter les pochettes basse résolution.' : '.'}</div>`;
+
+  const moreBtn = document.getElementById('btn-covers-more');
+  moreBtn.style.display = list.length > shown.length ? 'inline-block' : 'none';
+}
+
+function renderCoverCard(a) {
+  const flag = !a.cover_url
+    ? '<span class="cover-flag missing">Sans pochette</span>'
+    : (_cache.lowResCovers?.has(a.id) ? '<span class="cover-flag lowres">Basse rés.</span>' : '');
+  return `<div class="cover-card" data-cover-id="${sid(a.id)}" onclick="openCoverChoiceModal('${sid(a.id)}')">
+    ${flag}
+    <div class="cover-thumb">${albumAvatar(a)}</div>
+    <div class="name">${esc(a.album)}</div>
+    <div class="sub">${esc(a.artist)}</div>
+  </div>`;
+}
+
+async function scanCoverResolutions() {
+  const targets = ownedAlbumsForCovers().filter(a => a.cover_url && !_cache.coverDimsChecked?.has(a.id));
+  if (!_cache.lowResCovers) _cache.lowResCovers = new Set();
+  if (!_cache.coverDimsChecked) _cache.coverDimsChecked = new Set();
+  if (!targets.length) { _cache.lowResScanned = true; toast('Toutes les pochettes ont déjà été scannées'); renderCoversGallery(); return; }
+
+  const progress = document.getElementById('covers-scan-progress');
+  progress.style.display = 'block';
+  let done = 0;
+  const CONCURRENCY = 8;
+  let idx = 0;
+
+  function loadOne(a) {
+    return new Promise(resolve => {
+      const img = new Image();
+      const finish = (lowres) => {
+        _cache.coverDimsChecked.add(a.id);
+        if (lowres) _cache.lowResCovers.add(a.id);
+        resolve();
+      };
+      img.onload = () => finish(img.naturalWidth > 0 && (img.naturalWidth < COVER_LOWRES_THRESHOLD || img.naturalHeight < COVER_LOWRES_THRESHOLD));
+      img.onerror = () => finish(false);
+      img.referrerPolicy = 'no-referrer';
+      img.src = a.cover_url;
+    });
+  }
+
+  async function worker() {
+    while (idx < targets.length) {
+      const a = targets[idx++];
+      await loadOne(a);
+      done++;
+      if (done % 20 === 0 || done === targets.length) {
+        progress.textContent = `Scan en cours… ${done}/${targets.length} pochettes vérifiées (${_cache.lowResCovers.size} basse résolution détectée(s))`;
+        if (coverFilter === 'lowres') renderCoversGallery();
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+  _cache.lowResScanned = true;
+  progress.textContent = `Scan terminé : ${_cache.lowResCovers.size} pochette(s) basse résolution sur ${targets.length} vérifiée(s).`;
+  toast(`Scan terminé : ${_cache.lowResCovers.size} pochette(s) basse résolution`);
+  renderCoversGallery();
+}
+
+// ---- Modale de choix de pochette ----
+let _coverChoiceAlbumId = null;
+let _coverChoiceSelected = '';
+
+function openCoverChoiceModal(sidVal) {
+  const id = unsid(sidVal);
+  const a = albums.find(x => x.id === id || x.id === String(id));
+  if (!a) return;
+  _coverChoiceAlbumId = a.id;
+  _coverChoiceSelected = a.cover_url || '';
+  document.getElementById('cover-choice-sub').textContent = `${a.artist} — ${a.album}`;
+  document.getElementById('cover-choice-status').textContent = 'Recherche de propositions…';
+  document.getElementById('cover-choice-manual-url').value = '';
+  const grid = document.getElementById('cover-choice-grid');
+  const candidates = [];
+  if (a.cover_url) candidates.push({ url: a.cover_url, label: 'Actuelle' });
+  renderCoverChoiceGrid(candidates);
+  document.getElementById('modal-cover-choice').classList.add('open');
+  fetchCoverCandidates(a).then(extra => {
+    extra.forEach(c => { if (!candidates.some(x => x.url === c.url)) candidates.push(c); });
+    renderCoverChoiceGrid(candidates);
+    document.getElementById('cover-choice-status').textContent = candidates.length
+      ? `${candidates.length} proposition(s) trouvée(s).`
+      : 'Aucune proposition trouvée automatiquement — colle une URL manuellement ci-dessous.';
+  });
+}
+
+async function fetchCoverCandidates(a) {
+  const out = [];
+  // Discogs — URL directe i.discogs.com
+  if (a.discogsId) {
+    try {
+      const data = await callEdgeFn({ source: 'discogs', release_id: a.discogsId });
+      if (data.cover_url && !data.cover_url.includes('coverartarchive')) out.push({ url: data.cover_url, label: 'Discogs' });
+    } catch(e) { /* ignore */ }
+  }
+  // Last.fm — direct lastfm.freetls.fastly.net
+  try {
+    const lfKey = 'e8aae3c9ca05ced8f56443c1108fdc65';
+    const rawArtist = (a.artist || '').split(/\s*;\s*/)[0].trim();
+    const url = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(cleanDiscogsArtist(rawArtist))}&album=${encodeURIComponent(a.album)}&api_key=${lfKey}&format=json`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      const images = data.album?.image || [];
+      const img = images.find(i => i.size === 'extralarge') || images.find(i => i.size === 'large');
+      if (img?.['#text'] && !img['#text'].includes('2a96cbd8b46e442fc41c2b86b821562f')) out.push({ url: img['#text'], label: 'Last.fm' });
+    }
+  } catch(e) { /* ignore */ }
+  return out;
+}
+
+function renderCoverChoiceGrid(candidates) {
+  const grid = document.getElementById('cover-choice-grid');
+  grid.innerHTML = candidates.map(c => `
+    <div class="cover-choice-item ${c.url === _coverChoiceSelected ? 'selected' : ''}" onclick="selectCoverCandidate('${esc(c.url).replace(/'/g,"\\'")}')">
+      <img src="${esc(c.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.style.opacity=0.35">
+      <div class="src-label">${esc(c.label)}</div>
+    </div>`).join('');
+}
+
+function selectCoverCandidate(url) {
+  _coverChoiceSelected = url;
+  document.querySelectorAll('.cover-choice-item').forEach(el => {
+    el.classList.toggle('selected', el.querySelector('img')?.src === url);
+  });
+}
+
+function previewManualCoverUrl() {
+  const url = document.getElementById('cover-choice-manual-url').value.trim();
+  if (!url) return;
+  _coverChoiceSelected = url;
+  const grid = document.getElementById('cover-choice-grid');
+  const existing = Array.from(grid.querySelectorAll('.cover-choice-item img')).map(img => ({ url: img.src }));
+  renderCoverChoiceGrid([{ url, label: 'Manuelle' }, ...existing.filter(c => c.url !== url).map(c => ({ ...c, label: c.label || '' }))]);
+}
+
+async function saveCoverChoice() {
+  const a = albums.find(x => x.id === _coverChoiceAlbumId || x.id === String(_coverChoiceAlbumId));
+  if (!a) return;
+  a.cover_url = _coverChoiceSelected || undefined;
+  _cache.coverDimsChecked?.delete(a.id);
+  _cache.lowResCovers?.delete(a.id);
+  saveToStorage();
+  if (window._sb) {
+    try { await window._sb.from('albums').update({ cover_url: a.cover_url || null }).eq('id', a.id); } catch(e) { /* ignore */ }
+  }
+  document.querySelectorAll(`[data-album-id="${a.id}"]`).forEach(el => { el.innerHTML = albumAvatar(a); });
+  invalidateCache();
+  updateNavBadges();
+  closeCoverChoiceModal();
+  renderCoversGallery();
+  toast('Pochette mise à jour');
+}
+
+function clearCoverChoice() {
+  _coverChoiceSelected = '';
+  saveCoverChoice();
+}
+
+function closeCoverChoiceModal() {
+  document.getElementById('modal-cover-choice').classList.remove('open');
+  _coverChoiceAlbumId = null;
+  _coverChoiceSelected = '';
 }
 
 function closeAlbumModal() { document.getElementById('modal-album').classList.remove('open'); }
@@ -11369,8 +11517,6 @@ async function cleanupLastfmDuplicates() {
 async function initApp() {
   loadLastfmTrackStatus();
   loadLovedTracks();
-  const dlEl = document.getElementById('device-label-display');
-  if (dlEl) dlEl.textContent = getDeviceLabel();
   const restored = loadFromStorage();
   // Ne charger la démo que si pas de Supabase et pas de données locales
   if (!restored && !window._sb) {
@@ -11686,6 +11832,10 @@ function closeIntegrityModal() {
 
 document.getElementById('modal-integrity').addEventListener('click', function(e) {
   if (e.target === this) closeIntegrityModal();
+});
+
+document.getElementById('modal-cover-choice').addEventListener('click', function(e) {
+  if (e.target === this) closeCoverChoiceModal();
 });
 
 const INTEGRITY_SEVERITY_COLOR = { critique: 'var(--red, #e5484d)', avertissement: 'var(--amber)', info: 'var(--text3)' };
