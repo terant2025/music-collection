@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-3 — Page Import/Export compactée pour tenir sur un écran : grille en 3 colonnes, cartes resserrées (padding/police réduits), icônes de source déplacées inline dans les titres, blocs "format attendu" repliés en accordéon (sauf statut sync last.fm, gardé visible car dynamique) -->
+<!-- APP_VERSION: v2026.07.07-4 — Rafraîchissement MusicBrainz (année/genre) devient incrémental : nouveau champ albums.mb_refreshed_at (migration SQL livrée), les albums rafraîchis il y a moins de 30j sont ignorés par défaut, bouton "🗓 (tout)" pour forcer un passage complet -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -670,7 +670,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-3</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-4</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1498,7 +1498,8 @@ input[type="file"] { display: none; }
           <div class="row-flex">
             <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 CSV Discogs</button>
             <button class="btn btn-sm" onclick="fetchAllTracklists()" id="btn-fetch-tracklists">🎵 Tracklists</button>
-            <button class="btn btn-sm" onclick="refreshMbYearGenres()" id="btn-refresh-mb-year-genre" title="Recontacte MusicBrainz pour chaque album ayant déjà un ID MB, sans retoucher les tracklists — met à jour uniquement l'année d'origine et le genre">🗓 Année/genre MB</button>
+            <button class="btn btn-sm" onclick="refreshMbYearGenres()" id="btn-refresh-mb-year-genre" title="Recontacte MusicBrainz pour chaque album ayant déjà un ID MB — ignore ceux rafraîchis il y a moins de 30j. Met à jour uniquement l'année d'origine et le genre">🗓 Année/genre MB</button>
+            <button class="btn btn-sm" onclick="if(confirm('Forcer le rafraîchissement MusicBrainz de TOUS les albums, y compris ceux déjà à jour ?')) refreshMbYearGenres(true)" title="Ignore le seuil de 30j et retraite tous les albums avec un ID MusicBrainz">🗓 (tout)</button>
             <button class="btn btn-sm" onclick="_coverFetchRunning ? stopCoverFetch() : fetchMissingCovers()" id="btn-auto-covers">🖼 Pochettes auto</button>
           </div>
           <input type="file" id="file-discogs" accept=".csv" onchange="importDiscogs(this)">
@@ -2091,7 +2092,7 @@ input[type="file"] { display: none; }
 
 <script>
 // ===================== STATE =====================
-let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_original_year, youtube_url, cover_url, lastfmAliases, label, catno, isCompilation }
+let albums = [];   // { id:text, artist, album, year, genre, folders:[], has_cd, format, note, plays, notes, discogsId, mb_release_id, mb_original_year, mb_refreshed_at, youtube_url, cover_url, lastfmAliases, label, catno, isCompilation }
 // mb_original_year : année de première parution (release-group MusicBrainz), distincte de `year`
 // qui peut refléter une réédition/remaster précise — jamais utilisé pour écraser `year` automatiquement.
 let tracks = [];   // morceaux isolés { artistNorm, titleNorm, artist, title, album, format, duration, note, mb_recording_id }
@@ -2349,6 +2350,7 @@ async function saveToSupabase() {
       discogs_rating: a.discogsRating || null,
       mb_release_id:  a.mb_release_id || null,
       mb_original_year: a.mb_original_year || null,
+      mb_refreshed_at: a.mb_refreshed_at || null,
       youtube_url:    a.youtube_url || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
@@ -2525,6 +2527,7 @@ async function loadFromSupabase() {
         discogsRating: a.discogs_rating || undefined,
         mb_release_id: a.mb_release_id || undefined,
         mb_original_year: a.mb_original_year || undefined,
+        mb_refreshed_at: a.mb_refreshed_at || undefined,
         youtube_url:   a.youtube_url || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
@@ -7171,14 +7174,27 @@ function applyMbEnrichment(album, rel) {
 // mb_release_id — sans toucher aux tracklists déjà en cache (contrairement à
 // fetchAllTracklists qui, lui, saute les albums déjà traités via onlyMissing).
 // Utile en backfill après ajout du champ mb_original_year sur des albums déjà enrichis.
-async function refreshMbYearGenres() {
+const MB_REFRESH_STALE_DAYS = 30; // seuil avant re-rafraîchissement automatique d'un album déjà traité
+
+async function refreshMbYearGenres(force = false) {
   const btn    = document.getElementById('btn-refresh-mb-year-genre');
   const status = document.getElementById('status-mb-year-genre');
-  const targets = albums.filter(a => a.mb_release_id);
+  const withMb = albums.filter(a => a.mb_release_id);
 
   if (!status) return;
-  if (!targets.length) {
+  if (!withMb.length) {
     status.textContent = 'Aucun album avec un ID MusicBrainz.';
+    status.className = 'status ok';
+    return;
+  }
+
+  const staleMs = MB_REFRESH_STALE_DAYS * 86400000;
+  const now = Date.now();
+  const targets = force ? withMb : withMb.filter(a => !a.mb_refreshed_at || (now - new Date(a.mb_refreshed_at).getTime()) > staleMs);
+  const skipped = withMb.length - targets.length;
+
+  if (!targets.length) {
+    status.textContent = `Rien à rafraîchir — ${withMb.length} album(s) déjà à jour (< ${MB_REFRESH_STALE_DAYS }j). Reforcer via le bouton "tout".`;
     status.className = 'status ok';
     return;
   }
@@ -7188,7 +7204,7 @@ async function refreshMbYearGenres() {
   let done = 0, updated = 0, errors = 0;
 
   for (const album of targets) {
-    status.textContent = `MusicBrainz ${done}/${targets.length} — ${album.artist} — ${album.album}`;
+    status.textContent = `MusicBrainz ${done}/${targets.length}${skipped ? ` (${skipped} déjà à jour, ignorés)` : ''} — ${album.artist} — ${album.album}`;
     try {
       await new Promise(r => setTimeout(r, 1200)); // MusicBrainz rate limit 1/s + marge Edge Fn
       const rel = await fetchMusicBrainzRelease(album.mb_release_id);
@@ -7196,6 +7212,7 @@ async function refreshMbYearGenres() {
       const beforeGenre = album.genre;
       const beforeYoutube = album.youtube_url;
       applyMbEnrichment(album, rel);
+      album.mb_refreshed_at = new Date().toISOString();
       if (album.mb_original_year !== beforeYear || album.genre !== beforeGenre || album.youtube_url !== beforeYoutube) updated++;
       done++;
     } catch(e) {
@@ -7205,8 +7222,9 @@ async function refreshMbYearGenres() {
   }
 
   if (btn) btn.disabled = false;
-  status.textContent = `Terminé : ${updated} album(s) mis à jour sur ${targets.length}${errors ? `, ${errors} erreur(s)` : ''}.`;
+  status.textContent = `Terminé : ${updated} album(s) mis à jour sur ${targets.length}${skipped ? ` (+ ${skipped} déjà à jour, ignorés)` : ''}${errors ? `, ${errors} erreur(s)` : ''}.`;
   status.className = errors ? 'status err' : 'status ok';
+  saveToStorage();
   renderAlbums(); renderDiscographie();
 }
 
