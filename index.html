@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-7 — Nouvelle vue "📋 Notes à reporter" : chaque note posée via la Session notation génère une entrée listant les cibles externes à mettre à jour manuellement (MusicBee toujours, + Discogs/RYM pour les albums selon ce qui manque déjà côté source). Discogs/RYM se cochent automatiquement au prochain réimport CSV si la note y est détectée ; clic manuel sinon (utile pour MusicBee, pas d'API locale). Export CSV, badge sidebar, persistance Supabase/localStorage (table meta) -->
+<!-- APP_VERSION: v2026.07.07-10 — Fix : sur "last.fm — Morceaux", un morceau marqué 🚫 Ignoré (ou 🔗 Associé) disparaissait complètement et devenait inaccessible — computeMissingTracks() les excluait du calcul brut avant même que le filtre de statut n'existe, donc le sélecteur "🚫 Ignorés" cherchait dans une liste qui ne les contenait déjà plus. Le filtrage par statut se fait maintenant dans renderMissingTracks (comme pour les albums), qui masque ignorés/associés par défaut mais les rend consultables via les filtres dédiés. Corrige au passage l'export CSV, qui les excluait aussi silencieusement -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -461,6 +461,13 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .modal-stars { display: flex; gap: 2px; }
 .modal-star { font-size: 22px; cursor: pointer; color: var(--border2); transition: color 0.1s; background: none; border: none; }
 .modal-star.on { color: var(--amber); }
+.hstars { display: inline-flex; gap: 1px; }
+.hstar-wrap { position: relative; display: inline-block; width: 15px; height: 15px; font-size: 15px; line-height: 1; }
+.hstar-bg { position: absolute; top: 0; left: 0; color: var(--border2); }
+.hstar-fill { position: absolute; top: 0; left: 0; overflow: hidden; color: var(--amber); white-space: nowrap; pointer-events: none; }
+.hstar-hit { position: absolute; top: 0; bottom: 0; width: 50%; opacity: 0; border: none; padding: 0; margin: 0; cursor: pointer; background: none; }
+.hstar-hit.left { left: 0; }
+.hstar-hit.right { right: 0; }
 
 /* TOAST */
 .toast {
@@ -701,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-7</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-10</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1788,6 +1795,10 @@ input[type="file"] { display: none; }
         <button class="modal-star" onclick="setModalNote(5)">★</button>
       </div>
     </div>
+    <div class="form-row" style="grid-column:1/-1">
+      <label>Morceaux (tracklist MusicBee) <span style="font-weight:400;color:var(--text3);font-size:11px">— demi-étoiles : clic sur la moitié gauche/droite de chaque étoile</span></label>
+      <div id="modal-tracklist-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px"></div>
+    </div>
     <div class="form-row">
       <label>Écoutes last.fm</label>
       <input type="text" id="f-plays" placeholder="0" style="width:100px">
@@ -2191,6 +2202,10 @@ let notesToReport = []; // [{ id, type:'album'|'track', key, artist, title, note
 // synchronisées automatiquement — l'app n'est qu'un agrégateur). Se vide automatiquement
 // pour discogs/rym quand un réimport détecte la note côté source ; MusicBee se coche
 // manuellement (pas d'API locale pour détecter un rescan).
+let trackNoteOverrides = {}; // { "albumId§titreNormalisé": note (0-5, pas de 0.5) }
+// Note posée dans l'app pour un morceau de la tracklist d'un album, indépendante du champ
+// `rating` importé depuis MusicBee (arrondi à l'étoile entière, écrasé à chaque réimport XML).
+// Stockée à part (jamais dans albumTracksCache) pour survivre aux réimports.
 let modalNote = 0;
 let trackNote = 0;
 let currentPage = 1;
@@ -2222,7 +2237,7 @@ function _saveToStorageImpl() {
         await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, nextId, savedAt: now };
+        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -2255,6 +2270,7 @@ function loadFromStorage() {
     wishlist = data.wishlist || [];
     trackWishlist = data.trackWishlist || [];
     notesToReport = data.notesToReport || [];
+    trackNoteOverrides = data.trackNoteOverrides || {};
     nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
@@ -2549,6 +2565,7 @@ async function saveToSupabase() {
     await window._sb.from('meta').upsert([
       { key: 'wishlist_data', value: wishData },
       { key: 'notes_to_report_data', value: JSON.stringify(notesToReport) },
+      { key: 'track_note_overrides_data', value: JSON.stringify(trackNoteOverrides) },
     ], { onConflict: 'key' });
 
     setSaveIndicator('saved', now);
@@ -2590,6 +2607,7 @@ async function loadFromSupabase() {
         if (metaMap.lastfm_sync_ts) localStorage.setItem(LASTFM_SYNC_KEY, metaMap.lastfm_sync_ts);
         if (metaMap.wishlist_data) { try { const wd = JSON.parse(metaMap.wishlist_data); if (wd.albums?.length) wishlist = wd.albums; if (wd.tracks?.length) trackWishlist = wd.tracks; } catch(e) {} }
         if (metaMap.notes_to_report_data) { try { notesToReport = JSON.parse(metaMap.notes_to_report_data) || []; } catch(e) {} }
+        if (metaMap.track_note_overrides_data) { try { trackNoteOverrides = JSON.parse(metaMap.track_note_overrides_data) || {}; } catch(e) {} }
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
@@ -2746,6 +2764,9 @@ async function loadFromSupabase() {
       }
       if (metaMap.notes_to_report_data) {
         try { notesToReport = JSON.parse(metaMap.notes_to_report_data) || []; } catch(e) {}
+      }
+      if (metaMap.track_note_overrides_data) {
+        try { trackNoteOverrides = JSON.parse(metaMap.track_note_overrides_data) || {}; } catch(e) {}
       }
       if (metaMap.lastfm_status) {
         try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {}
@@ -4121,9 +4142,10 @@ function computeMissingTracks() {
       if (typeof d.artist !== 'string' || typeof d.track !== 'string') return false;
       if (d.artist === '[object Object]' || d.track === '[object Object]') return false;
       const keyTrack = normalizeKey(d.artist, d.track);
-      // Statut ignoré ou associé manuellement
-      const st = _lastfmTrackStatus[keyTrack];
-      if (st?.status === 'ignored' || st?.status === 'linked') return false;
+      // Le statut (ignoré/associé) n'est PAS filtré ici : computeMissingTracks() doit rester
+      // la liste brute complète, sinon le filtre "🚫 Ignorés" de renderMissingTracks cherche
+      // dans une liste qui ne les contient déjà plus (bug : morceau ignoré = inaccessible,
+      // filtre "Ignorés" toujours vide). Le masquage par défaut se fait dans renderMissingTracks.
       // Matching prioritaire par recording_mbid (ListenBrainz)
       const recMbid = d.recording_mbid;
       if (recMbid && window._mbRecordingIds?.has(recMbid)) return false;
@@ -4176,11 +4198,15 @@ function renderMissingTracks() {
   let list = all.filter(d => {
     const key = normalizeKey(d.artist, d.track);
     const st  = _lastfmTrackStatus[key];
-    let stMatch = true;
+    let stMatch;
     if      (statusF === 'none')     stMatch = !st || !st.status;
     else if (statusF === 'ignored')  stMatch = st?.status === 'ignored';
     else if (statusF === 'wishlist') stMatch = st?.status === 'wishlist';
     else if (statusF === 'linked')   stMatch = st?.status === 'linked';
+    // "Tous statuts" (par défaut) : masque ignorés/associés pour ne pas polluer la vue
+    // générale — mais ils restent consultables via les filtres dédiés ci-dessus, ce qui
+    // n'était plus le cas avant (computeMissingTracks les excluait en amont, sans retour possible).
+    else stMatch = !(st?.status === 'ignored' || st?.status === 'linked');
     return (!q    || (d.artist+' '+d.track+' '+(d.album||'')).toLowerCase().includes(q))
         && (!af   || d.artist.toLowerCase().includes(af))
         && (!tf   || d.track.toLowerCase().includes(tf))
@@ -4197,7 +4223,13 @@ function renderMissingTracks() {
   if (ctr) ctr.textContent = list.length.toLocaleString('fr-FR') + ' / ' + all.length.toLocaleString('fr-FR') + ' morceaux';
 
   const badge = document.getElementById('nav-missing-tracks-count');
-  if (badge) badge.textContent = all.length;
+  if (badge) {
+    const visibleByDefault = all.filter(d => {
+      const st = _lastfmTrackStatus[normalizeKey(d.artist, d.track)];
+      return !(st?.status === 'ignored' || st?.status === 'linked');
+    }).length;
+    badge.textContent = visibleByDefault;
+  }
 
   const tbody = document.getElementById('mtrack-tbody');
   if (!list.length) {
@@ -4511,6 +4543,7 @@ function editAlbum(id) {
   else if (coverWrap) coverWrap.style.display = 'none';
   updateDiscogsLink();
   setModalNote(a.note || 0);
+  renderAlbumTracklistPanel(realId);
   document.getElementById('modal-album').classList.add('open');
 }
 
@@ -4737,11 +4770,20 @@ async function scanCoverResolutions() {
   function loadOne(a) {
     return new Promise(resolve => {
       const img = new Image();
+      let settled = false;
       const finish = (lowres) => {
+        if (settled) return; // évite un double-appel si le timeout et onload/onerror se chevauchent
+        settled = true;
+        clearTimeout(timer);
         _cache.coverDimsChecked.add(a.id);
         if (lowres) _cache.lowResCovers.add(a.id);
         resolve();
       };
+      // Sécurité : certaines URLs externes (Discogs/Last.fm) ne déclenchent parfois ni onload
+      // ni onerror (connexion qui traîne, serveur muet) — sans timeout, ça bloque le worker
+      // indéfiniment et, au fil du scan, finit par tout arrêter (les 8 lanes s'y coincent une
+      // à une). On traite un timeout comme un échec de chargement, pas comme basse résolution.
+      const timer = setTimeout(() => finish(false), 8000);
       img.onload = () => finish(img.naturalWidth > 0 && (img.naturalWidth < COVER_LOWRES_THRESHOLD || img.naturalHeight < COVER_LOWRES_THRESHOLD));
       img.onerror = () => finish(false);
       img.referrerPolicy = 'no-referrer';
@@ -8569,9 +8611,11 @@ function buildAlbumTracksList() {
     const mbT = atracks.filter(t => t.source === 'musicbee');
     const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
     useT.forEach(t => {
+      const key = trackNoteKey(a.id, t.title);
+      const rating = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (t.rating || 0);
       full.push({ title: t.title, artist: a.artist, album: a.album,
         source: t.source, bitrate: t.bitrate, duration: t.duration,
-        play_count: t.play_count, rating: t.rating || 0 });
+        play_count: t.play_count, rating });
     });
   });
   _cache.albumTracksList = full;
@@ -12624,6 +12668,68 @@ function exportNotesToReportCSV() {
     e.targets.map(t => NTR_TARGET_LABELS[t]).join(' + ')
   ]));
   _csvDownload(`notes_a_reporter_${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+// ===================== NOTATION DES MORCEAUX DE TRACKLIST (demi-étoiles) =====================
+// Le champ `rating` sur les pistes source=musicbee vient de l'import XML (tag Rating MusicBee,
+// arrondi à l'étoile entière) et est ENTIÈREMENT écrasé à chaque réimport (cf.
+// importMusicBeeTracklists). trackNoteOverrides est donc stocké à part, jamais dans
+// albumTracksCache, pour survivre aux réimports — et permet en prime la demi-étoile,
+// que MusicBee arrondit en interne.
+function trackNoteKey(albumId, title) {
+  return albumId + '§' + normalizeKey('', title).replace('|||', '');
+}
+
+function halfStarsHtml(value, albumIdSid, titleSid) {
+  let html = '';
+  for (let i = 1; i <= 5; i++) {
+    const fillPct = value >= i ? 100 : (value >= i - 0.5 ? 50 : 0);
+    html += `<span class="hstar-wrap">
+      <span class="hstar-bg">★</span>
+      <span class="hstar-fill" style="width:${fillPct}%">★</span>
+      <button class="hstar-hit left" onclick="rateAlbumTrack('${albumIdSid}','${titleSid}',${i - 0.5})" title="${i - 0.5}★"></button>
+      <button class="hstar-hit right" onclick="rateAlbumTrack('${albumIdSid}','${titleSid}',${i})" title="${i}★"></button>
+    </span>`;
+  }
+  return html;
+}
+
+function renderAlbumTracklistPanel(albumId) {
+  const wrap = document.getElementById('modal-tracklist-list');
+  if (!wrap) return;
+  const mbTracks = (albumTracksCache[albumId] || [])
+    .filter(t => t.source === 'musicbee')
+    .slice()
+    .sort((a, b) => (parseInt(a.position, 10) || 999) - (parseInt(b.position, 10) || 999));
+  if (!mbTracks.length) {
+    wrap.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:6px 2px">Aucune tracklist MusicBee associée à cet album (importez/associez le XML MusicBee).</div>';
+    return;
+  }
+  const albumIdSid = sid(albumId);
+  wrap.innerHTML = mbTracks.map(t => {
+    const key = trackNoteKey(albumId, t.title);
+    const value = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (t.rating || 0);
+    const titleSid = sid(t.title);
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;border-bottom:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1" title="${esc(t.title)}">${t.position ? esc(t.position) + '. ' : ''}${esc(t.title)}</div>
+      <div class="hstars">${halfStarsHtml(value, albumIdSid, titleSid)}</div>
+    </div>`;
+  }).join('');
+}
+
+function rateAlbumTrack(albumIdSid, titleSid, value) {
+  const albumId = unsid(albumIdSid);
+  const title = unsid(titleSid);
+  const key = trackNoteKey(albumId, title);
+  const mbT = (albumTracksCache[albumId] || []).find(t => t.source === 'musicbee' && t.title === title);
+  const current = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (mbT?.rating || 0);
+  const newVal = current === value ? 0 : value; // reclic sur la même valeur → efface la note
+  trackNoteOverrides[key] = newVal;
+  invalidateCache(); // buildAlbumTracksList doit refléter le nouveau rating
+  const album = albums.find(x => x.id === albumId);
+  if (newVal && album) queueNoteToReport('track', { artist: album.artist, title }, newVal);
+  saveToStorage();
+  renderAlbumTracklistPanel(albumId);
 }
 
 </script>
