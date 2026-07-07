@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-4 — Rafraîchissement MusicBrainz (année/genre) devient incrémental : nouveau champ albums.mb_refreshed_at (migration SQL livrée), les albums rafraîchis il y a moins de 30j sont ignorés par défaut, bouton "🗓 (tout)" pour forcer un passage complet -->
+<!-- APP_VERSION: v2026.07.07-5 — Nouvelle vue "🎯 Session notation" : écran dédié un album non noté à la fois (grosse pochette, étoiles, écoute YouTube Music), file priorisée par écoutes last.fm décroissantes, suggestion RYM affichée en point de départ (jamais posée automatiquement), raccourcis clavier 1-5 pour noter + S pour passer, barre de progression "X / Y albums notés", badge sidebar -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -394,6 +394,29 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .cover-choice-item img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
 .cover-choice-item .src-label { font-size: 10px; color: var(--text3); margin-top: 4px; font-family: var(--mono); }
 
+/* SESSION DE NOTATION */
+.rate-session-progress-wrap { max-width: 560px; margin: 0 auto 28px; }
+.rate-session-progress-bar { height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
+.rate-session-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.2s; }
+.rate-session-card {
+  max-width: 420px; margin: 0 auto; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 28px; text-align: center;
+}
+.rate-session-cover {
+  width: 260px; height: 260px; margin: 0 auto 20px; border-radius: 10px; background: var(--bg4);
+  display: flex; align-items: center; justify-content: center; font-size: 48px; color: var(--text3);
+  overflow: hidden;
+}
+.rate-session-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rate-session-title { font-size: 18px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.rate-session-artist { font-size: 14px; color: var(--text2); margin-bottom: 10px; }
+.rate-session-meta { font-size: 12px; color: var(--text3); margin-bottom: 6px; }
+.rate-session-plays { font-size: 12px; color: var(--text3); font-family: var(--mono); margin-bottom: 14px; }
+.rate-session-actions { margin-bottom: 18px; }
+.rate-session-stars { display: flex; justify-content: center; gap: 6px; margin-bottom: 6px; }
+.rate-session-stars .star { font-size: 34px; }
+.rate-session-nav { margin-top: 18px; }
+
 /* MODAL */
 .modal-overlay {
   position: fixed; inset: 0;
@@ -643,6 +666,10 @@ input[type="file"] { display: none; }
     <span class="nav-icon">🖼</span> Pochettes
     <span class="nav-badge warn" id="nav-covers-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('ratesession')">
+    <span class="nav-icon">🎯</span> Session notation
+    <span class="nav-badge warn" id="nav-ratesession-count">0</span>
+  </div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
   </div>
@@ -670,7 +697,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-4</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-5</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1655,6 +1682,38 @@ input[type="file"] { display: none; }
       <div class="covers-grid" id="covers-grid"></div>
       <div style="text-align:center;margin-top:20px">
         <button class="btn" id="btn-covers-more" onclick="coverGalleryPage++;renderCoversGallery()" style="display:none">Charger plus</button>
+      </div>
+    </div>
+
+    <!-- SESSION DE NOTATION -->
+    <div class="section" id="sec-ratesession">
+      <div class="rate-session-progress-wrap">
+        <div class="rate-session-progress-bar"><div class="rate-session-progress-fill" id="rs-progress-fill" style="width:0%"></div></div>
+        <div id="rs-progress-label" style="font-size:12px;color:var(--text3);margin-top:6px">0 / 0 albums notés</div>
+      </div>
+      <div id="rs-empty" style="display:none;text-align:center;padding:60px 20px;color:var(--text3)">
+        <div style="font-size:40px;margin-bottom:12px">🎉</div>
+        <div style="font-size:15px;color:var(--text2)">Tous les albums possédés sont notés !</div>
+      </div>
+      <div id="rs-card-wrap" style="display:none">
+        <div class="rate-session-card">
+          <div class="rate-session-cover" id="rs-cover"></div>
+          <div class="rate-session-info">
+            <div class="rate-session-title" id="rs-title"></div>
+            <div class="rate-session-artist" id="rs-artist"></div>
+            <div class="rate-session-meta" id="rs-meta"></div>
+            <div class="rate-session-plays" id="rs-plays"></div>
+            <div id="rs-rym-suggestion" style="display:none"></div>
+            <div class="rate-session-actions">
+              <button class="btn" id="rs-listen-btn" onclick="rsListenCurrent()">▶️ Écouter sur YouTube Music</button>
+            </div>
+            <div class="rate-session-stars" id="rs-stars"></div>
+            <div style="font-size:11px;color:var(--text3);margin-top:4px">Raccourcis clavier : touches 1 à 5 pour noter · S pour passer</div>
+            <div class="rate-session-nav">
+              <button class="btn btn-sm" onclick="rsSkipCurrent()">⏭ Passer</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -3003,7 +3062,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'ratesession', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -3018,7 +3077,8 @@ function nav(id) {
     'all-tracks': 'Tous les morceaux', 'album-tracks': 'Morceaux des albums',
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
-    rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes', import: 'Import / Export'
+    rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
+    ratesession: 'Session notation', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -3028,6 +3088,7 @@ function nav(id) {
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
     rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
     covers: 'Galerie & résolution des pochettes',
+    ratesession: 'Un album non noté à la fois, priorisé par écoutes last.fm',
     import: 'Sources externes & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
@@ -3045,6 +3106,7 @@ function nav(id) {
   if (id === 'album-tracks')  renderAlbumTracks();
   if (id === 'track-wishlist') renderTrackWishlist();
   if (id === 'covers') renderCoversGallery();
+  if (id === 'ratesession') initRatingSession();
 }
 
 function onSearch() {
@@ -3709,6 +3771,8 @@ function updateNavBadges() {
     if (stockBadge) stockBadge.textContent = stockItems.length;
     const coversBadge = document.getElementById('nav-covers-count');
     if (coversBadge) coversBadge.textContent = ownedAlbumsForCovers().filter(a => !a.cover_url).length;
+    const rsBadge = document.getElementById('nav-ratesession-count');
+    if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length;
     // Calculs coûteux uniquement si données chargées
     if (_dataReady) {
       document.getElementById('nav-missing-count').textContent = computeMissing().length;
@@ -4518,6 +4582,7 @@ async function fetchCoverForModal() {
 let coverFilter = 'missing';
 let coverGalleryPage = 1;
 const COVERS_PAGE_SIZE = 60;
+let ratingQueue = []; // file d'ids albums non notés, triée par écoutes last.fm décroissantes
 const COVER_LOWRES_THRESHOLD = 300; // px — en dessous, considéré basse résolution
 
 function ownedAlbumsForCovers() {
@@ -12253,6 +12318,107 @@ function openYouTubeMusicForAlbumId(id) {
   if (a) openYouTubeMusicForAlbum(a);
 }
 
+// ===================== SESSION DE NOTATION =====================
+// Écran dédié : un album non noté à la fois (grosse pochette, étoiles, raccourcis clavier),
+// plutôt que de chasser les lignes vides dans le tableau Collection. File d'attente priorisée
+// par écoutes last.fm décroissantes (le plus écouté et jamais noté remonte en premier).
+function buildRatingQueue() {
+  return ownedAlbumsForCovers()
+    .filter(a => !a.note)
+    .sort((a, b) => (b.plays || 0) - (a.plays || 0))
+    .map(a => a.id);
+}
+
+function initRatingSession() {
+  ratingQueue = buildRatingQueue();
+  renderRatingSession();
+}
+
+function renderRatingSession() {
+  // Retirer de la file les albums notés/supprimés entretemps ailleurs dans l'app
+  ratingQueue = ratingQueue.filter(id => {
+    const a = albums.find(x => x.id === id);
+    return a && !a.note;
+  });
+
+  const totalOwned = ownedAlbumsForCovers().length;
+  const ratedCount = ownedAlbumsForCovers().filter(a => a.note).length;
+  const pct = totalOwned ? Math.round((ratedCount / totalOwned) * 100) : 0;
+  const fillEl = document.getElementById('rs-progress-fill');
+  const labelEl = document.getElementById('rs-progress-label');
+  if (fillEl) fillEl.style.width = pct + '%';
+  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} albums notés`;
+
+  const emptyEl = document.getElementById('rs-empty');
+  const cardEl = document.getElementById('rs-card-wrap');
+  if (!ratingQueue.length) {
+    if (emptyEl) emptyEl.style.display = 'block';
+    if (cardEl) cardEl.style.display = 'none';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (cardEl) cardEl.style.display = 'block';
+
+  const a = albums.find(x => x.id === ratingQueue[0]);
+  if (!a) { ratingQueue.shift(); renderRatingSession(); return; }
+
+  document.getElementById('rs-cover').innerHTML = albumAvatar(a);
+  document.getElementById('rs-title').textContent = a.album;
+  document.getElementById('rs-artist').textContent = a.artist;
+  document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
+  document.getElementById('rs-plays').textContent = a.plays
+    ? `${a.plays} écoute(s) last.fm`
+    : 'Pas d’écoutes last.fm connues';
+
+  // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso
+  const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
+  const sugEl = document.getElementById('rs-rym-suggestion');
+  if (rymEntry?.rating) {
+    sugEl.style.display = 'block';
+    sugEl.innerHTML = `<div style="font-size:12px;color:var(--amber);margin-bottom:10px">Suggestion RYM : ${rymEntry.rating.toFixed(2)}★ <span style="color:var(--text3)">(point de départ, jamais posée automatiquement)</span></div>`;
+  } else {
+    sugEl.style.display = 'none';
+    sugEl.innerHTML = '';
+  }
+
+  document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5]
+    .map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`)
+    .join('');
+}
+
+function rsRateCurrent(note) {
+  const id = ratingQueue[0];
+  if (!id) return;
+  const a = albums.find(x => x.id === id);
+  if (!a) return;
+  a.note = note;
+  saveToStorage();
+  ratingQueue.shift();
+  toast(`${a.album} noté ${note}★`);
+  renderRatingSession();
+}
+
+function rsSkipCurrent() {
+  if (ratingQueue.length < 2) return;
+  ratingQueue.push(ratingQueue.shift());
+  renderRatingSession();
+}
+
+function rsListenCurrent() {
+  const a = albums.find(x => x.id === ratingQueue[0]);
+  if (a) openYouTubeMusicForAlbum(a);
+}
+
+// Raccourcis clavier (touches 1-5 pour noter, S pour passer) — actifs uniquement
+// sur l'écran Session notation et hors saisie dans un champ.
+document.addEventListener('keydown', (e) => {
+  const sec = document.getElementById('sec-ratesession');
+  if (!sec || !sec.classList.contains('active')) return;
+  const tag = (e.target?.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (e.key >= '1' && e.key <= '5') { e.preventDefault(); rsRateCurrent(parseInt(e.key, 10)); }
+  else if (e.key.toLowerCase() === 's') { e.preventDefault(); rsSkipCurrent(); }
+});
 
 </script>
 </body>
