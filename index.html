@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-2 — Galerie de pochettes enrichie : filtres dossier (Discographie/Ok/Stock/Vendre), genre, plage d'années, tri (artiste/album/année/genre), bouton réinitialiser. Chaque vignette affiche désormais l'icône du/des dossier(s) et année · genre pour distinguer d'un coup d'œil la Discographie du reste -->
+<!-- APP_VERSION: v2026.07.07-3 — Page Import/Export compactée pour tenir sur un écran : grille en 3 colonnes, cartes resserrées (padding/police réduits), icônes de source déplacées inline dans les titres, blocs "format attendu" repliés en accordéon (sauf statut sync last.fm, gardé visible car dynamique) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -323,31 +323,41 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .missing-info .plays { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-top: 4px; }
 
 /* IMPORT SECTION */
-.import-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
+.import-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
 .import-card {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: 12px 14px;
 }
-.import-card h3 { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
-.import-card p { font-size: 12px; color: var(--text2); margin-bottom: 16px; line-height: 1.6; }
-.import-card .status { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-top: 10px; min-height: 16px; }
+.import-card h3 { font-size: 12px; font-weight: 500; margin-bottom: 2px; display:flex; align-items:center; gap:6px; }
+.import-card p { font-size: 11px; color: var(--text2); margin-bottom: 8px; line-height: 1.4; }
+.import-card .status { font-size: 10px; color: var(--text3); font-family: var(--mono); margin-top: 6px; min-height: 13px; }
 .import-card .status.ok { color: var(--accent); }
 .import-card .status.err { color: var(--red); }
-.source-logo { font-size: 28px; margin-bottom: 12px; }
+.source-logo { font-size: 15px; margin-bottom: 0; display:inline-block; }
 .format-hint {
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 16px;
+  padding: 6px 10px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text2);
-  line-height: 1.8;
-  margin-bottom: 16px;
+  line-height: 1.5;
+  margin-bottom: 8px;
 }
 .format-hint strong { color: var(--accent); }
+.import-card details.format-hint-wrap { margin-bottom: 8px; }
+.import-card details.format-hint-wrap summary { cursor:pointer; font-size:10px; color:var(--text3); font-family: var(--mono); user-select:none; padding:2px 0; }
+.import-card details.format-hint-wrap summary:hover { color:var(--text2); }
+.import-card details.format-hint-wrap .format-hint { margin-top:6px; margin-bottom:0; }
+.import-card .btn { padding: 4px 9px; font-size: 11px; }
+.import-card .btn-sm { padding: 3px 8px; font-size: 10px; }
+.import-card input[type="text"] { padding: 4px 8px; font-size: 11px; }
+.import-card-export { grid-column: 1 / -1; margin-top:0; padding: 12px 14px; }
+.import-card-export h3 { font-size: 12px; margin-bottom: 2px; }
+.import-card-export p { font-size: 11px; margin-bottom: 8px; }
 
 /* COVERS GALLERY */
 .covers-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -660,7 +670,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-2</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-3</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1477,21 +1487,18 @@ input[type="file"] { display: none; }
 
         <!-- DISCOGS -->
         <div class="import-card">
-          <div class="source-logo">🔴</div>
-          <h3>Discogs</h3>
-          <p>Exportez votre collection depuis <strong>discogs.com → Collection → Export CSV</strong>. Le fichier contient artist, title, label, year, format.</p>
-          <div class="format-hint">
-            <strong>Colonnes attendues :</strong><br>
-            Artist, Title, Label, Catno, Format,<br>
-            Rating, Released, release_id
+          <h3><span class="source-logo">🔴</span>Discogs</h3>
+          <p>Export CSV depuis <strong>discogs.com → Collection → Export</strong>.</p>
+          <details class="format-hint-wrap"><summary>▸ Colonnes attendues</summary>
+            <div class="format-hint">Artist, Title, Label, Catno, Format,<br>Rating, Released, release_id</div>
+          </details>
+          <div style="margin-bottom:6px">
+            <input type="text" id="discogs-token" placeholder="Token Discogs (optionnel, tracklists)" style="font-family:var(--mono);width:100%" oninput="localStorage.setItem('discogs_token',this.value)">
           </div>
-          <div style="margin-bottom:8px">
-            <input type="text" id="discogs-token" placeholder="Token Discogs (optionnel, pour tracklists)" style="font-family:var(--mono);font-size:11px;width:100%" oninput="localStorage.setItem('discogs_token',this.value)">
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 Charger CSV Discogs</button>
-            <button class="btn btn-sm" onclick="fetchAllTracklists()" id="btn-fetch-tracklists">🎵 Charger tracklists</button>
-            <button class="btn btn-sm" onclick="refreshMbYearGenres()" id="btn-refresh-mb-year-genre" title="Recontacte MusicBrainz pour chaque album ayant déjà un ID MB, sans retoucher les tracklists — met à jour uniquement l'année d'origine et le genre">🗓 Rafraîchir année/genre MB</button>
+          <div class="row-flex">
+            <button class="btn btn-accent" onclick="document.getElementById('file-discogs').click()">📂 CSV Discogs</button>
+            <button class="btn btn-sm" onclick="fetchAllTracklists()" id="btn-fetch-tracklists">🎵 Tracklists</button>
+            <button class="btn btn-sm" onclick="refreshMbYearGenres()" id="btn-refresh-mb-year-genre" title="Recontacte MusicBrainz pour chaque album ayant déjà un ID MB, sans retoucher les tracklists — met à jour uniquement l'année d'origine et le genre">🗓 Année/genre MB</button>
             <button class="btn btn-sm" onclick="_coverFetchRunning ? stopCoverFetch() : fetchMissingCovers()" id="btn-auto-covers">🖼 Pochettes auto</button>
           </div>
           <input type="file" id="file-discogs" accept=".csv" onchange="importDiscogs(this)">
@@ -1500,28 +1507,21 @@ input[type="file"] { display: none; }
           <div class="status" id="status-mb-year-genre"></div>
         </div>
 
-        <!-- YOUTUBE MUSIC -->
+        <!-- MUSICBEE -->
         <div class="import-card">
-          <div class="source-logo">▶️</div>
-          <h3>YouTube Music</h3>
-          <p>Bouton "▶️ Écouter sur YouTube Music" sur les albums de la Collection et sur les morceaux/albums manquants (last.fm) : lien direct si MusicBrainz référence une relation de streaming vers YouTube sur la release, sinon recherche pré-remplie dans un nouvel onglet. Aucune clé API nécessaire.</p>
-        </div>
-
-
-        <div class="import-card">
-          <div class="source-logo">🎧</div>
-          <h3>MusicBee</h3>
-          <p>Dans MusicBee : <strong>Fichier → Bibliothèque → Exporter en XML</strong> (format iTunes). Ou exportez en M3U/CSV.</p>
-          <div class="format-hint">
-            <strong>XML (recommandé) :</strong> Fichier → Bibliothèque → Exporter en XML<br>
-            Contient artiste, album, année, genre, format, note<br><br>
-            <strong>M3U (alternatif) :</strong> #EXTINF avec Artist - Title<br>
-            <strong>CSV (alternatif) :</strong> Artist, Album Title, Year, Format, Genre
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-accent" onclick="document.getElementById('file-musicbee-xml').click()">📂 Charger XML</button>
-            <button class="btn" onclick="document.getElementById('file-musicbee-m3u').click()">📂 Charger M3U</button>
-            <button class="btn" onclick="document.getElementById('file-musicbee').click()">📂 Charger CSV</button>
+          <h3><span class="source-logo">🎧</span>MusicBee</h3>
+          <p><strong>Fichier → Bibliothèque → Exporter en XML</strong> (format iTunes). Ou M3U/CSV.</p>
+          <details class="format-hint-wrap"><summary>▸ Détail des formats</summary>
+            <div class="format-hint">
+              <strong>XML (recommandé) :</strong> artiste, album, année, genre, format, note<br>
+              <strong>M3U :</strong> #EXTINF Artist - Title<br>
+              <strong>CSV :</strong> Artist, Album Title, Year, Format, Genre
+            </div>
+          </details>
+          <div class="row-flex">
+            <button class="btn btn-accent" onclick="document.getElementById('file-musicbee-xml').click()">📂 XML</button>
+            <button class="btn btn-sm" onclick="document.getElementById('file-musicbee-m3u').click()">📂 M3U</button>
+            <button class="btn btn-sm" onclick="document.getElementById('file-musicbee').click()">📂 CSV</button>
           </div>
           <input type="file" id="file-musicbee-xml" accept=".xml" onchange="importMusicBeeXML(this)">
           <input type="file" id="file-musicbee-m3u" accept=".m3u,.m3u8" onchange="importM3U(this)">
@@ -1529,89 +1529,84 @@ input[type="file"] { display: none; }
           <div class="status" id="status-musicbee"></div>
         </div>
 
-        <!-- LASTFM API -->
-        <div class="import-card">
-          <div class="source-logo">🔵</div>
-          <h3>last.fm — Connexion API</h3>
-          <p>Connectez directement votre compte last.fm pour récupérer tout votre historique d'écoute automatiquement.</p>
-          <div class="format-hint" id="lastfm-sync-info">
-            <strong>Clé API :</strong> last.fm/api/account/create<br>
-            <strong>Nom d'utilisateur :</strong> votre pseudo last.fm<br>
-            <strong>Dernière sync :</strong> <span id="lastfm-last-sync-label">jamais</span><br>
-            <strong>Loved tracks :</strong> <span id="lastfm-loved-count">–</span>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
-            <input type="text" id="lastfm-apikey" placeholder="Clé API (32 caractères)" value="e8aae3c9ca05ced8f56443c1108fdc65" style="font-family:var(--mono);font-size:11px">
-            <input type="text" id="lastfm-user" placeholder="Nom d'utilisateur last.fm" value="terant">
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-accent" onclick="connectLastfm()">🔗 Synchroniser last.fm</button>
-            <button class="btn btn-sm" onclick="loadMoreLastfm()" id="btn-lastfm-more" style="display:none">⏸ Pause</button>
-            <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync complète</button>
-            <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux complète</button>
-            <button class="btn btn-sm" id="btn-loved-sync" onclick="syncLovedTracks()" title="Récupère vos morceaux lovés sur last.fm">❤️ Sync loved tracks</button>
-            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Synchronisation complète via API listens ListenBrainz (tous scrobbles + MBIDs, paginé)">🔵 Sync ListenBrainz</button>
-          </div>
-          <div class="status" id="status-lastfm"></div>
-          <div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:6px;line-height:1.7">
-            💡 <strong style="color:var(--text2)">Sync ListenBrainz</strong> = tous vos scrobbles avec MBIDs (recommandé, paginé par timestamp).<br>
-            La sync last.fm reste utile pour les écoutes antérieures à votre compte LB.
-          </div>
-          <div id="lastfm-loved-info" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:6px;display:none">
-            <span id="lastfm-loved-label"></span>
-          </div>
-          <div id="lastfm-progress" style="margin-top:8px;display:none">
-            <div style="height:3px;background:var(--bg4);border-radius:2px">
-              <div id="lastfm-bar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
-            </div>
-            <div id="lastfm-progress-label" style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:4px"></div>
-          </div>
-        </div>
-
-        <!-- CSV RÉIMPORT -->
-        <div class="import-card">
-          <div class="source-logo">♻️</div>
-          <h3>Réimport CSV (mise à jour)</h3>
-          <p>Rechargez un CSV précédemment exporté depuis cette application. Les entrées existantes seront <strong>mises à jour</strong>, les nouvelles <strong>ajoutées</strong>.</p>
-          <div class="format-hint">
-            <strong>Format export de cette app :</strong><br>
-            id, artist, album, year, genre,<br>
-            cd, flac, mp3, digital, note, plays
-          </div>
-          <button class="btn btn-accent" onclick="document.getElementById('file-reimport').click()">📂 Réimporter CSV</button>
-          <input type="file" id="file-reimport" accept=".csv" onchange="reimportCSV(this)">
-          <div class="status" id="status-reimport"></div>
-        </div>
-
         <!-- RYM IMPORT HTML -->
         <div class="import-card">
-          <div class="source-logo">⭐</div>
-          <h3>RateYourMusic — Import HTML</h3>
-          <p>Sur votre page RYM : <strong>Ctrl+S → "Page Web, HTML seulement"</strong>. Chargez le fichier ici. Fonctionne avec une ou plusieurs pages.</p>
-          <div class="format-hint">
-            <strong>Page à sauvegarder :</strong><br>
-            rateyourmusic.com/collection_p/<span style="color:var(--accent)">tairanteuh</span>/<br><br>
-            <strong>Récupère :</strong> artiste, album, note, ownership (CD)
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-accent" onclick="document.getElementById('file-rym-html').click()">📂 Charger page(s) RYM</button>
+          <h3><span class="source-logo">⭐</span>RateYourMusic</h3>
+          <p><strong>Ctrl+S → "Page Web, HTML seulement"</strong> sur votre page RYM. Une ou plusieurs pages.</p>
+          <details class="format-hint-wrap"><summary>▸ Page & données récupérées</summary>
+            <div class="format-hint">
+              rateyourmusic.com/collection_p/<span style="color:var(--accent)">tairanteuh</span>/<br>
+              Récupère : artiste, album, note, ownership (CD)
+            </div>
+          </details>
+          <div class="row-flex">
+            <button class="btn btn-accent" onclick="document.getElementById('file-rym-html').click()">📂 Page(s) RYM</button>
             <input type="file" id="file-rym-html" accept=".htm,.html" multiple onchange="importRYMHtml(this)">
           </div>
           <div class="status" id="status-rym-scrape"></div>
         </div>
 
+        <!-- LASTFM API -->
+        <div class="import-card">
+          <h3><span class="source-logo">🔵</span>last.fm — API</h3>
+          <p>Récupère tout votre historique d'écoute automatiquement.</p>
+          <div class="format-hint" id="lastfm-sync-info">
+            <strong>Dernière sync :</strong> <span id="lastfm-last-sync-label">jamais</span> · <strong>Loved :</strong> <span id="lastfm-loved-count">–</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+            <input type="text" id="lastfm-apikey" placeholder="Clé API (32 caractères)" value="e8aae3c9ca05ced8f56443c1108fdc65" style="font-family:var(--mono)">
+            <input type="text" id="lastfm-user" placeholder="Nom d'utilisateur last.fm" value="terant">
+          </div>
+          <div class="row-flex">
+            <button class="btn btn-accent" onclick="connectLastfm()">🔗 Sync last.fm</button>
+            <button class="btn btn-sm" onclick="loadMoreLastfm()" id="btn-lastfm-more" style="display:none">⏸ Pause</button>
+            <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync</button>
+            <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux</button>
+            <button class="btn btn-sm" id="btn-loved-sync" onclick="syncLovedTracks()" title="Récupère vos morceaux lovés sur last.fm">❤️ Loved</button>
+            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Synchronisation complète via API listens ListenBrainz (tous scrobbles + MBIDs, paginé)">🔵 ListenBrainz</button>
+          </div>
+          <div class="status" id="status-lastfm"></div>
+          <div id="lastfm-loved-info" style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:4px;display:none">
+            <span id="lastfm-loved-label"></span>
+          </div>
+          <div id="lastfm-progress" style="margin-top:6px;display:none">
+            <div style="height:3px;background:var(--bg4);border-radius:2px">
+              <div id="lastfm-bar" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
+            </div>
+            <div id="lastfm-progress-label" style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:3px"></div>
+          </div>
+        </div>
+
+        <!-- CSV RÉIMPORT -->
+        <div class="import-card">
+          <h3><span class="source-logo">♻️</span>Réimport CSV</h3>
+          <p>Recharge un CSV exporté par l'app. Existants <strong>mis à jour</strong>, nouveaux <strong>ajoutés</strong>.</p>
+          <details class="format-hint-wrap"><summary>▸ Format attendu</summary>
+            <div class="format-hint">id, artist, album, year, genre, cd, flac, mp3, digital, note, plays</div>
+          </details>
+          <button class="btn btn-accent" onclick="document.getElementById('file-reimport').click()">📂 Réimporter CSV</button>
+          <input type="file" id="file-reimport" accept=".csv" onchange="reimportCSV(this)">
+          <div class="status" id="status-reimport"></div>
+        </div>
+
+        <!-- YOUTUBE MUSIC -->
+        <div class="import-card">
+          <h3><span class="source-logo">▶️</span>YouTube Music</h3>
+          <p>Bouton "▶️ Écouter sur YouTube Music" sur les albums et morceaux/albums manquants (last.fm) : lien direct via MusicBrainz sinon recherche pré-remplie. Aucune clé API nécessaire.</p>
+        </div>
+
       </div>
 
       <!-- EXPORT -->
-      <div class="import-card" style="grid-column: 1 / -1; margin-top:0">
+      <div class="import-card import-card-export">
         <h3>Export & sauvegarde</h3>
-        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Sauvegardez votre collection complète. Le CSV est compatible avec le réimport ci-dessus. Le JSON restaure l'intégralité de la collection.</p>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-accent" onclick="exportCSV()">↓ Exporter collection (CSV)</button>
-          <button class="btn" onclick="exportTracksCSV()">↓ Exporter morceaux isolés (CSV)</button>
-          <button class="btn" onclick="exportJSON()">↓ Exporter tout (JSON)</button>
+        <p>Sauvegardez votre collection complète. Le CSV est compatible avec le réimport ci-dessus. Le JSON restaure l'intégralité de la collection.</p>
+        <div class="row-flex">
+          <button class="btn btn-accent" onclick="exportCSV()">↓ Collection (CSV)</button>
+          <button class="btn" onclick="exportTracksCSV()">↓ Morceaux isolés (CSV)</button>
+          <button class="btn" onclick="exportJSON()">↓ Tout (JSON)</button>
           <button class="btn btn-accent" onclick="exportOfflineAndroid()">📱 Export offline Android</button>
-          <button class="btn btn-accent" onclick="document.getElementById('file-reimport-json').click()">📂 Restaurer depuis JSON</button>
+          <button class="btn btn-accent" onclick="document.getElementById('file-reimport-json').click()">📂 Restaurer JSON</button>
           <input type="file" id="file-reimport-json" accept=".json" onchange="reimportJSON(this)">
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
@@ -1619,7 +1614,7 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Snapshots Supabase</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
-        <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
+        <div class="status" id="status-json-reimport" style="margin-top:6px"></div>
       </div>
     </div>
 
