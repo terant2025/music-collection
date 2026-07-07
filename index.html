@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.06-9 — Remplacement de Qobuz par YouTube Music comme service d'écoute (recherche/lien direct) : Qobuz posait des problèmes récurrents (domaine changé, résultats vides) sans moyen de les diagnostiquer sans compte. music.youtube.com/search fonctionne sans connexion. Colonne albums.qobuz_url renommée en youtube_url (relation MB "free streaming"/"stream for free" vers youtube.com) -->
+<!-- APP_VERSION: v2026.07.07-1 — Détection de conflits de synchronisation Supabase (deux onglets/appareils) : compteur meta.sync_version incrémenté atomiquement (fonction Postgres bump_sync_version(), migration-sync-conflict-detection.sql) à chaque saveToSupabase() réussi. Avant tout sync destructif (upsert + delete des albums absents localement), l'app compare la version distante à celle vue à son dernier chargement ; en cas d'écart et d'écrivain différent, bloque le sync et propose via un modal de recharger les données distantes ou de forcer l'écrasement. Identifiant/label d'appareil persistés en localStorage, renommables depuis Import/Export. Sans la migration SQL, la détection est simplement désactivée (comportement inchangé) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -452,6 +452,8 @@ input[type="file"] { display: none; }
 .save-indicator.saved { color: var(--accent); }
 .save-indicator.error .save-dot { background: var(--red); }
 .save-indicator.error { color: var(--red); }
+.save-indicator.conflict .save-dot { background: var(--red); animation: pulse 1s infinite; }
+.save-indicator.conflict { color: var(--red); cursor: pointer; }
 
 /* Filtre note inline */
 .note-filter {
@@ -606,7 +608,7 @@ input[type="file"] { display: none; }
       </div>
       <div class="storage-bar"><div class="storage-fill" id="storage-bar" style="width:0%"></div></div>
     </div>
-    <div class="save-indicator" id="save-indicator">
+    <div class="save-indicator" id="save-indicator" onclick="_syncConflictPending && openSyncConflictModal()">
       <div class="save-dot"></div>
       <span id="save-label">Aucune sauvegarde</span>
     </div>
@@ -621,7 +623,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.06-9</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-1</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1579,7 +1581,9 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="openIntegrityModal()">🩺 Vérifier l'intégrité</button>
           <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Snapshots Supabase</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
+          <button class="btn" onclick="renameDevice()" title="Nom utilisé pour identifier cet appareil en cas de conflit de synchronisation">🏷 Renommer cet appareil</button>
         </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px">Appareil courant : <span id="device-label-display"></span></div>
         <div class="status" id="status-json-reimport" style="margin-top:8px"></div>
       </div>
     </div>
@@ -1992,6 +1996,22 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
+<!-- Modal conflit de synchronisation -->
+<div class="modal-overlay" id="modal-sync-conflict">
+  <div class="modal" style="width:520px">
+    <h2>⚠️ Conflit de synchronisation</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:12px" id="sync-conflict-info"></p>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:16px">La synchronisation automatique est en pause tant que ce conflit n'est pas résolu. Tes modifications restent en mémoire dans cette fenêtre.</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+      <button class="btn btn-accent" onclick="resolveSyncConflictReload()">↻ Recharger les données du serveur (perd mes changements non synchronisés ici)</button>
+      <button class="btn" style="border-color:var(--red);color:var(--red)" onclick="resolveSyncConflictForce()">⚠ Forcer l'écrasement avec mes données (perd les changements distants)</button>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeSyncConflictModal()">Décider plus tard</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -2026,6 +2046,105 @@ function stableAlbumId(artist, album, mb_release_id, discogs_id) {
 // ===================== LOCALSTORAGE =====================
 const LS_KEY = 'discotheque_v2';
 const LS_CFG = 'discotheque_backend_cfg';
+
+// ===================== DÉTECTION DE CONFLITS DE SYNC =====================
+// Principe : meta.sync_version est un compteur incrémenté atomiquement (fonction Postgres
+// bump_sync_version()) à chaque saveToSupabase() réussi. On mémorise la version vue au dernier
+// chargement (_localSyncVersion). Avant tout sync destructif (upsert + delete des absents),
+// on relit la version distante : si elle a changé depuis notre dernier load, un autre
+// onglet/appareil a écrit entre-temps → on bloque le sync destructif et on prévient l'utilisateur
+// plutôt que d'écraser/supprimer silencieusement ses changements.
+const LS_DEVICE_ID = 'discotheque_device_id';
+const LS_DEVICE_LABEL = 'discotheque_device_label';
+function getDeviceId() {
+  let id = localStorage.getItem(LS_DEVICE_ID);
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    localStorage.setItem(LS_DEVICE_ID, id);
+  }
+  return id;
+}
+function getDeviceLabel() {
+  let label = localStorage.getItem(LS_DEVICE_LABEL);
+  if (!label) {
+    const ua = navigator.userAgent || '';
+    const isMobile = /Android|iPhone|iPad/i.test(ua);
+    const platform = /Windows/i.test(ua) ? 'Windows' : /Mac/i.test(ua) ? 'Mac' : /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iOS' : 'PC';
+    label = platform + (isMobile ? ' · mobile' : ' · desktop');
+    localStorage.setItem(LS_DEVICE_LABEL, label);
+  }
+  return label;
+}
+function renameDevice() {
+  const current = getDeviceLabel();
+  const next = prompt('Nom de cet appareil (pour repérer qui a synchronisé quoi en cas de conflit) :', current);
+  if (next && next.trim()) { localStorage.setItem(LS_DEVICE_LABEL, next.trim()); toast('Appareil renommé : ' + next.trim()); }
+}
+let _localSyncVersion = 0;      // dernière version connue localement (posée au chargement)
+let _syncConflictPending = false; // true tant qu'un conflit détecté n'a pas été résolu par l'utilisateur
+let _syncConflictInfo = null;     // { remoteVersion, writer } du conflit en cours
+let _forceSyncOverride = false;   // true pour un unique passage forçant l'écrasement malgré le conflit
+
+async function bumpAndRecordSyncVersion() {
+  try {
+    const { data, error } = await window._sb.rpc('bump_sync_version');
+    if (error) throw error;
+    _localSyncVersion = data;
+    await window._sb.from('meta').upsert([
+      { key: 'sync_last_writer', value: JSON.stringify({ device: getDeviceId(), label: getDeviceLabel(), at: new Date().toISOString() }) }
+    ], { onConflict: 'key' });
+  } catch(e) {
+    // Fonction/colonne absente (migration pas encore appliquée) : ne bloque pas la sauvegarde,
+    // juste pas de détection de conflit possible tant que la migration SQL n'est pas passée.
+    console.warn('bump_sync_version indisponible — voir migration-sync-conflict-detection.sql', e);
+  }
+}
+
+// Vérifie si la version distante a changé depuis notre dernier chargement.
+// Retourne { conflict, remoteVersion, writer } — ne modifie rien.
+async function checkSyncConflict() {
+  try {
+    const { data, error } = await window._sb.from('meta').select('key,value').in('key', ['sync_version', 'sync_last_writer']);
+    if (error) throw error;
+    const map = Object.fromEntries((data || []).map(r => [r.key, r.value]));
+    const remoteVersion = parseInt(map.sync_version || '0', 10) || 0;
+    let writer = null;
+    if (map.sync_last_writer) { try { writer = JSON.parse(map.sync_last_writer); } catch(e) {} }
+    const conflict = remoteVersion !== _localSyncVersion && writer && writer.device !== getDeviceId();
+    return { conflict, remoteVersion, writer };
+  } catch(e) {
+    // Table/fonction pas encore migrée : pas de détection possible, on laisse passer.
+    return { conflict: false, remoteVersion: _localSyncVersion, writer: null };
+  }
+}
+
+function openSyncConflictModal(info) {
+  if (info) _syncConflictInfo = info;
+  const el = document.getElementById('modal-sync-conflict');
+  if (!el) return;
+  const who = _syncConflictInfo?.writer?.label || 'un autre appareil';
+  const when = _syncConflictInfo?.writer?.at ? new Date(_syncConflictInfo.writer.at).toLocaleString('fr-FR') : 'récemment';
+  document.getElementById('sync-conflict-info').textContent = `${who} a synchronisé ${when}, après le chargement de cette fenêtre. Continuer risquerait d'écraser ou supprimer ces changements.`;
+  el.classList.add('open');
+}
+function closeSyncConflictModal() {
+  document.getElementById('modal-sync-conflict')?.classList.remove('open');
+}
+async function resolveSyncConflictReload() {
+  closeSyncConflictModal();
+  _syncConflictPending = false;
+  toast('Rechargement des données distantes…');
+  await loadFromSupabase();
+  renderAlbums(); renderTracks(); updateNavBadges();
+  toast('🟢 Données rechargées depuis Supabase');
+}
+async function resolveSyncConflictForce() {
+  if (!confirm('Écraser les changements distants avec les données de cet appareil ? Cette action est irréversible pour les modifications faites ailleurs.')) return;
+  closeSyncConflictModal();
+  _syncConflictPending = false;
+  _forceSyncOverride = true;
+  await saveToSupabase();
+}
 
 function _saveToStorageImpl() {
   setSaveIndicator('saving');
@@ -2101,6 +2220,8 @@ async function connectSupabase(anonKey) {
     localStorage.setItem(LS_CFG, 'supabase');
     const setupEl = document.getElementById('supabase-setup');
     if (setupEl) setupEl.style.display = 'none';
+    const dlEl = document.getElementById('device-label-display');
+    if (dlEl) dlEl.textContent = getDeviceLabel();
     const loaded = await loadFromSupabase();
     // Ne pas sauvegarder si la collection est vide (ex: après migration — évite de purger les associations)
     if (!loaded && albums.length > 0) await saveToSupabase();
@@ -2228,6 +2349,7 @@ function deduplicateAlbums() {
 let _savingToSupabase = false;
 async function saveToSupabase() {
   if (!window._sb) return;
+  if (_syncConflictPending) return; // en attente de résolution utilisateur — ne rien pousser
   if (_savingToSupabase) { 
     // Relancer après la sauvegarde en cours
     setTimeout(() => saveToSupabase(), 1000);
@@ -2237,6 +2359,22 @@ async function saveToSupabase() {
   setSaveIndicator('saving');
   const now = new Date().toISOString();
   try {
+    // ── Détection de conflit AVANT tout envoi destructif ──────────────────────
+    // Le sync ci-dessous fait un upsert + delete des albums absents localement :
+    // si un autre onglet/appareil a synchronisé depuis notre dernier chargement,
+    // notre vue locale est potentiellement obsolète et ce delete supprimerait
+    // ses changements. On bloque et on prévient plutôt que d'écraser en silence.
+    if (!_forceSyncOverride) {
+      const { conflict, remoteVersion, writer } = await checkSyncConflict();
+      if (conflict) {
+        _syncConflictPending = true;
+        _savingToSupabase = false;
+        setSaveIndicator('conflict');
+        openSyncConflictModal({ remoteVersion, writer });
+        return;
+      }
+    }
+    _forceSyncOverride = false;
     // ── Albums (inclut stock, ok, forsale — distingués par folders[]) ──────────
     const albumRows = albums.map(a => ({
       id:             a.id,
@@ -2362,6 +2500,9 @@ async function saveToSupabase() {
       { key: 'wishlist_data', value: wishData },
     ], { onConflict: 'key' });
 
+    // ── Marquer cette version comme la nôtre pour la détection de conflit ────
+    await bumpAndRecordSyncVersion();
+
     setSaveIndicator('saved', now);
   } catch(e) {
     setSaveIndicator('error');
@@ -2403,6 +2544,7 @@ async function loadFromSupabase() {
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
+        _localSyncVersion = parseInt(metaMap.sync_version || '0', 10) || 0;
       }
       loadLastfmFromSupabase();
       const { data: rym } = await window._sb.from('rym_data').select('*');
@@ -2568,6 +2710,7 @@ async function loadFromSupabase() {
           if (countEl && _lovedTracks.size) countEl.textContent = `❤️ ${_lovedTracks.size} morceaux`;
         } catch(e) {}
       }
+      _localSyncVersion = parseInt(metaMap.sync_version || '0', 10) || 0;
     }
     setTimeout(() => updateLastSyncLabel(), 100);
     loadAlbumTracks();
@@ -2708,6 +2851,8 @@ function setSaveIndicator(state, isoDate) {
     } else { label.textContent = prefix + 'Synchronisé'; }
   } else if (state === 'error') {
     label.textContent = isSupa ? '🟢 Erreur sync' : 'Erreur sauvegarde';
+  } else if (state === 'conflict') {
+    label.textContent = '⚠️ Conflit — cliquer pour résoudre';
   } else {
     label.textContent = 'Aucune sauvegarde';
   }
@@ -11224,6 +11369,8 @@ async function cleanupLastfmDuplicates() {
 async function initApp() {
   loadLastfmTrackStatus();
   loadLovedTracks();
+  const dlEl = document.getElementById('device-label-display');
+  if (dlEl) dlEl.textContent = getDeviceLabel();
   const restored = loadFromStorage();
   // Ne charger la démo que si pas de Supabase et pas de données locales
   if (!restored && !window._sb) {
