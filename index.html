@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-12 — Score de confiance visible : dans le détail album, nouveau panneau montrant comment MusicBrainz (score de recherche floue, auto-accepté si ≥90%, avec bouton "✕ Réinitialiser") et RYM (exact / variante d'artiste à vérifier / association manuelle) ont matché l'album. Le score MB est désormais conservé (albums.mb_match_score, migration SQL requise) au lieu d'être une décision silencieuse jetée après coup -->
+<!-- APP_VERSION: v2026.07.07-13 — Fix majeur : les compteurs d'écoutes last.fm morceaux (et potentiellement albums) étaient gonflés à chaque relance d'une sync complète. startTrackSync() ne réinitialisait jamais _lastfmTrackCounts avant de recompter tout l'historique (pas de mode incrémental pour les morceaux) — chaque relance de "🎵 Sync morceaux complète" additionnait donc les nouveaux comptes PAR-DESSUS les comptes déjà corrects en mémoire, doublant/triplant les écoutes au fil des relances (ex: "Hunter" affiché à 26 écoutes vs 6 réelles sur last.fm). Corrigé : reset systématique sauf reprise explicite depuis un checkpoint, dont la clé (artiste+titre+album) est maintenant cohérente entre sauvegarde et restauration (elle ignorait l'album auparavant, causant des doublons supplémentaires à la reprise). Même protection ajoutée à la première sync complète albums, qui alimente aussi ces compteurs. Un nouveau lancement de "Sync morceaux complète" corrige automatiquement l'historique déjà gonflé (l'upsert écrase chaque ligne avec le total recalculé correctement) -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -708,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-12</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-13</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -6345,6 +6345,11 @@ async function connectLastfm() {
     } else {
       // Première fois : chargement complet
       _lastfmCounts = {};
+      // fetchLastfmPage() alimente aussi _lastfmTrackCounts au passage (indexation morceaux) —
+      // le réinitialiser ici aussi, par cohérence avec le même correctif appliqué à
+      // startTrackSync() (sinon un full sync album relancé après un sync morceaux existant
+      // gonflerait ces compteurs-là de la même façon).
+      _lastfmTrackCounts = {};
       _lastfmTotalPages = Math.ceil(totalScrobbles / LASTFM_PAGE_SIZE);
       status.textContent = `✓ Connecté — ${totalScrobbles.toLocaleString('fr-FR')} scrobbles à charger`;
       status.className = 'status ok';
@@ -6406,19 +6411,37 @@ async function startTrackSync() {
     // Checkpoint léger (localStorage) pour reprendre si pause
     const TRACK_CP_KEY = 'lastfm_track_sync_page';
     let startPage = 1;
+    let resumed = false;
     try {
       const cp = JSON.parse(localStorage.getItem(TRACK_CP_KEY) || 'null');
       if (cp && cp.totalPages === totalPages && cp.page > 1) {
         if (confirm(`Reprendre la sync morceaux depuis la page ${cp.page} / ${totalPages} ?`)) {
           startPage = cp.page;
-          // Restaurer les counts déjà accumulés
+          // Restaurer les counts déjà accumulés — clé composite IDENTIQUE à celle utilisée dans
+          // la boucle principale (artiste+titre+album), sinon les entrées restaurées et les
+          // entrées re-comptées à la reprise atterrissent dans des clés différentes et se
+          // dupliquent au lieu de se cumuler.
           if (cp.counts) {
             _lastfmTrackCounts = {};
-            cp.counts.forEach(d => { _lastfmTrackCounts[normalizeKey(d.a, d.t)] = { artist: d.a, track: d.t, plays: d.p }; });
+            cp.counts.forEach(d => {
+              const kt = normalizeKey(d.a, d.t) + '|' + normalizeKey('', d.b || '');
+              _lastfmTrackCounts[kt] = { artist: d.a, track: d.t, album: d.b || '', plays: d.p };
+            });
           }
+          resumed = true;
         }
       }
     } catch(e) {}
+    if (!resumed) {
+      // BUG HISTORIQUE (corrigé ici) : une sync complète relancée depuis zéro repartait des
+      // compteurs déjà en mémoire (chargés depuis Supabase au démarrage de l'app, donc déjà
+      // corrects) et les incrémentait une seconde fois par-dessus en re-scannant tout
+      // l'historique — chaque relance de "Sync morceaux complète" gonflait donc tous les
+      // compteurs (x2, x3...). Une sync complète DOIT repartir d'une base vierge, puisqu'elle
+      // recompte de toute façon l'intégralité de l'historique last.fm à chaque fois (pas de
+      // mode incrémental pour les morceaux, contrairement aux albums).
+      _lastfmTrackCounts = {};
+    }
 
     status.textContent = `Sync morceaux : ${totalScrobbles.toLocaleString('fr-FR')} scrobbles, ${totalPages} pages — page ${startPage} →`;
     status.className = 'status';
@@ -6465,7 +6488,7 @@ async function startTrackSync() {
 
       // Checkpoint toutes les 10 pages
       if (page % 10 === 0) {
-        const compact = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, p: d.plays }));
+        const compact = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, b: d.album || '', p: d.plays }));
         try { localStorage.setItem(TRACK_CP_KEY, JSON.stringify({ page: page + 1, totalPages, counts: compact, savedAt: Date.now() })); } catch(e) {}
       }
 
