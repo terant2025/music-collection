@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-06 — Fix "Checkpoint albums non sauvegardé (localStorage plein)" en boucle pendant une sync last.fm complète. Cause : saveLastfmCheckpoint() écrivait un compact de TOUS les morceaux (~197k entrées, 15-30 Mo stringifié) dans localStorage à chaque checkpoint (toutes les 10 pages), saturant le quota et faisant échouer par ricochet l'écriture — pourtant minuscule — du checkpoint albums juste après. Les checkpoints locaux ne stockent plus que la position de page à reprendre ({page, totalPages}) ; les compteurs eux-mêmes ne sont plus jamais restaurés depuis un blob local mais reconstruits depuis lastfmData (source de vérité déjà en mémoire / rechargée depuis Supabase au démarrage). Ajout de flushAlbumCountsToSupabase() (miroir de flushTrackCountsToSupabase(), qui existait déjà côté morceaux) : les albums sont désormais aussi sécurisés vers Supabase toutes les 50 pages ET à la mise en pause, pas seulement en toute fin de sync. Nettoyage automatique de l'ancien checkpoint volumineux (lastfm_track_checkpoint) s'il traîne encore en localStorage. Non touché dans ce fix : le checkpoint de "Sync morceaux complète" (bouton dédié, TRACK_CP_KEY) a la même mécanique mais son blob local sert aussi à préserver l'exactitude du compte en cas de reprise avant le prochain flush Supabase (à 50 pages) — modifier ce point demande plus de prudence vu l'historique du bug de doublon déjà corrigé en v2026.07.07-13, laissé pour une prochaine itération si le besoin se confirme. -->
+<!-- APP_VERSION: v2026.07.08-07 — Refonte Session notation demandée : (1) l'ancien onglet séparé "💿 Pistes d'albums" est supprimé et fusionné dans le 1er onglet "🎵 Albums" — sous la pochette/étoiles de l'album en cours, un panneau affiche désormais sa tracklist MusicBee notable en demi-étoiles (renderAlbumTracklistPanel généralisée avec un containerId, réutilisée telle quelle dans la modale album ET ce panneau embarqué, rateAlbumTrack rafraîchit les deux). (2) Les 2 vues "🕐 Scrobbles récents" (Albums/Morceaux) ont maintenant une colonne Note cliquable (prompt 0-5, demi-étoiles) : si le scrobble correspond à un album/morceau déjà possédé, sa note est mise à jour normalement (album.note, morceau isolé, ou trackNoteOverrides pour une piste d'album) ; sinon la note est quand même envoyée dans "📋 Notes à reporter" pour ne pas la perdre. Toutes les notes posées depuis ces écrans (nouvelles ou existantes) continuent d'alimenter uniquement "Notes à reporter" et d'être persistées via saveToStorage()/Supabase comme le reste de l'app — aucun nouveau mécanisme de stockage introduit. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -711,7 +711,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-06</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-07</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1715,7 +1715,6 @@ input[type="file"] { display: none; }
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:20px">
         <button class="covers-filter-btn active" id="rs-mode-btn-albums" onclick="setRatingSessionMode('albums')">🎵 Albums</button>
         <button class="covers-filter-btn" id="rs-mode-btn-tracks" onclick="setRatingSessionMode('tracks')">🎧 Morceaux isolés</button>
-        <button class="covers-filter-btn" id="rs-mode-btn-albumtracks" onclick="setRatingSessionMode('albumtracks')">💿 Pistes d'albums</button>
         <button class="covers-filter-btn" id="rs-mode-btn-scrobbles" onclick="setRatingSessionMode('scrobbles')">🕐 Scrobbles récents</button>
       </div>
       <div class="rate-session-progress-wrap" id="rs-progress-wrap">
@@ -1742,6 +1741,12 @@ input[type="file"] { display: none; }
             <div style="font-size:11px;color:var(--text3);margin-top:4px">Raccourcis clavier : touches 1 à 5 pour noter · S pour passer</div>
             <div class="rate-session-nav">
               <button class="btn btn-sm" onclick="rsSkipCurrent()">⏭ Passer</button>
+            </div>
+            <!-- Pistes de l'album courant, notables en demi-étoiles sans quitter la session
+                 (fusionné ici depuis l'ancien onglet "Pistes d'albums" séparé) -->
+            <div id="rs-album-tracklist-wrap" style="display:none;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+              <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Pistes de l'album</div>
+              <div id="rs-album-tracklist-list" style="max-height:260px;overflow-y:auto"></div>
             </div>
           </div>
         </div>
@@ -12780,9 +12785,8 @@ function openYouTubeMusicForAlbumId(id) {
 // étoiles, raccourcis clavier), plutôt que de chasser les lignes vides dans un tableau de
 // 2500+ entrées. Deux files séparées (albums / morceaux isolés), chacune priorisée par
 // écoutes last.fm décroissantes (le plus écouté et jamais noté remonte en premier).
-let ratingSessionMode = 'albums'; // 'albums' | 'tracks' | 'albumtracks'
+let ratingSessionMode = 'albums'; // 'albums' | 'tracks' | 'scrobbles'
 let ratingQueueTracks = [];
-let ratingQueueAlbumTracks = []; // [{ albumId, title, artist, album }]
 
 function buildRatingQueue() {
   return ownedAlbumsForCovers()
@@ -12799,7 +12803,9 @@ function buildRatingQueueTracks() {
     .map(t => t.id);
 }
 
-// Note actuelle d'une piste d'album (override utilisateur sinon note MusicBee/Discogs importée)
+// Note actuelle d'une piste d'album (override utilisateur sinon note MusicBee/Discogs importée) —
+// utilisée par le panneau tracklist embarqué dans le mode Albums, et par la notation depuis les
+// Scrobbles récents.
 function getAlbumTrackRating(albumId, title) {
   const key = trackNoteKey(albumId, title);
   if (Object.prototype.hasOwnProperty.call(trackNoteOverrides, key)) return trackNoteOverrides[key];
@@ -12808,24 +12814,6 @@ function getAlbumTrackRating(albumId, title) {
   if (mbT) return mbT.rating || 0;
   const dT = atracks.find(t => t.source === 'discogs' && t.title === title);
   return dT?.rating || 0;
-}
-
-function buildRatingQueueAlbumTracks() {
-  const lfExact = getLfExactMap();
-  const queue = [];
-  ownedAlbumsForCovers().forEach(a => {
-    const atracks = albumTracksCache[a.id] || [];
-    const mbT = atracks.filter(t => t.source === 'musicbee');
-    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
-    useT.forEach(t => {
-      if (!getAlbumTrackRating(a.id, t.title)) {
-        queue.push({ albumId: a.id, title: t.title, artist: a.artist, album: a.album, position: t.position,
-          plays: lfExact.get(normalizeKey(a.artist, t.title)) || 0 });
-      }
-    });
-  });
-  queue.sort((x, y) => y.plays - x.plays);
-  return queue;
 }
 
 // ===================== SCROBBLES RÉCENTS (Session notation) =====================
@@ -12901,15 +12889,21 @@ function fmtScrobbleDate(ts) {
   return new Date(ts * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function noteCellHtml(value) {
+  return value
+    ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${Number(value).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>`
+    : `<span style="color:var(--text3);font-size:11px">–</span>`;
+}
+
 function renderScrobblesList() {
   const thead = document.getElementById('rs-scrobbles-thead');
   const tbody = document.getElementById('rs-scrobbles-tbody');
   if (!thead || !tbody) return;
 
   if (scrobblesViewMode === 'tracks') {
-    thead.innerHTML = '<tr><th>Titre</th><th>Artiste</th><th>Album</th><th style="width:150px">Écouté le</th></tr>';
+    thead.innerHTML = '<tr><th>Titre</th><th>Artiste</th><th>Album</th><th style="width:150px">Écouté le</th><th style="width:60px">Note</th></tr>';
     if (!_scrobblesRaw.length) {
-      tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
       return;
     }
     tbody.innerHTML = _scrobblesRaw.map(s => `<tr>
@@ -12917,11 +12911,12 @@ function renderScrobblesList() {
       <td style="font-size:12px;color:var(--text2)">${esc(s.artist)}</td>
       <td style="font-size:12px;color:var(--text3)">${esc(s.album || '–')}</td>
       <td class="mono" style="font-size:11px;color:var(--text3)">${fmtScrobbleDate(s.ts)}</td>
+      <td onclick="rateScrobbleTrack('${sid(s.artist)}','${sid(s.title)}')" title="Noter ce morceau" style="cursor:pointer">${noteCellHtml(_scrobbleTrackCurrentNote(s.artist, s.title))}</td>
     </tr>`).join('');
   } else {
     // Vue Albums : dédoublonnée en conservant l'ordre d'apparition (donc le scrobble le plus
     // récent) de chaque couple artiste/album — reconstitue une liste d'albums récemment écoutés.
-    thead.innerHTML = '<tr><th>Album</th><th>Artiste</th><th style="width:150px">Dernière écoute</th></tr>';
+    thead.innerHTML = '<tr><th>Album</th><th>Artiste</th><th style="width:150px">Dernière écoute</th><th style="width:60px">Note</th></tr>';
     const seen = new Set();
     const albumsList = [];
     _scrobblesRaw.forEach(s => {
@@ -12932,21 +12927,114 @@ function renderScrobblesList() {
       albumsList.push(s);
     });
     if (!albumsList.length) {
-      tbody.innerHTML = '<tr><td colspan="3"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
       return;
     }
     tbody.innerHTML = albumsList.map(s => `<tr>
       <td style="font-weight:500">${esc(s.album)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(s.artist)}</td>
       <td class="mono" style="font-size:11px;color:var(--text3)">${fmtScrobbleDate(s.ts)}</td>
+      <td onclick="rateScrobbleAlbum('${sid(s.artist)}','${sid(s.album)}')" title="Noter cet album" style="cursor:pointer">${noteCellHtml(_scrobbleAlbumCurrentNote(s.artist, s.album))}</td>
     </tr>`).join('');
   }
+}
+
+// Note actuelle d'un scrobble album/morceau — cherche d'abord dans la collection possédée
+// (album.note, morceau isolé, ou piste d'album via trackNoteOverrides), sinon 0 (rien connu).
+function _scrobbleAlbumCurrentNote(artist, album) {
+  const key = normalizeKey(artist, album);
+  const owned = albums.find(a => normalizeKey(a.artist, a.album) === key);
+  return owned?.note || 0;
+}
+
+function _scrobbleTrackCurrentNote(artist, title) {
+  const key = normalizeKey(artist, title);
+  const iso = tracks.find(t => normalizeKey(t.artist, t.title) === key);
+  if (iso) return iso.note || 0;
+  for (const a of albums) {
+    const atracks = albumTracksCache[a.id] || [];
+    const t = atracks.find(tt => normalizeKey(a.artist, tt.title) === key);
+    if (t) return getAlbumTrackRating(a.id, t.title);
+  }
+  return 0;
+}
+
+// Notation depuis le panneau Scrobbles récents — via prompt() comme les autres notes rapides de
+// l'app (promptStockRating/promptDiscogsRating). Le scrobble n'est pas forcément dans la
+// collection : si un album/morceau possédé correspond, sa note est mise à jour normalement ; sinon
+// la note est quand même envoyée dans "📋 Notes à reporter" pour ne pas la perdre, avec un avertissement.
+function rateScrobbleAlbum(artistSid, albumSid) {
+  const artist = unsid(artistSid), album = unsid(albumSid);
+  const key = normalizeKey(artist, album);
+  const owned = albums.find(a => normalizeKey(a.artist, a.album) === key);
+  const raw = prompt(`Note pour "${album}" — ${artist} (0 à 5, demi-étoiles possibles) :`, owned?.note || '');
+  if (raw === null) return;
+  const trimmed = raw.trim().replace(',', '.');
+  let note = 0;
+  if (trimmed !== '') {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)', 'warn'); return; }
+    note = Math.round(n * 2) / 2;
+  }
+  if (owned) {
+    owned.note = note;
+    queueNoteToReport('album', owned, note);
+    invalidateCache();
+    renderAlbums();
+    toast(`${owned.artist} — ${owned.album} noté ${note}★`);
+  } else {
+    queueNoteToReport('album', { artist, album }, note);
+    toast(`Pas dans la collection — note ajoutée à "Notes à reporter" pour ${artist} — ${album}`, 'warn');
+  }
+  saveToStorage();
+  updateNavBadges();
+  renderScrobblesList();
+}
+
+function rateScrobbleTrack(artistSid, titleSid) {
+  const artist = unsid(artistSid), title = unsid(titleSid);
+  const key = normalizeKey(artist, title);
+  const ownedIsolated = tracks.find(t => normalizeKey(t.artist, t.title) === key);
+  const raw = prompt(`Note pour "${title}" — ${artist} (0 à 5, demi-étoiles possibles) :`, ownedIsolated?.note || '');
+  if (raw === null) return;
+  const trimmed = raw.trim().replace(',', '.');
+  let note = 0;
+  if (trimmed !== '') {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)', 'warn'); return; }
+    note = Math.round(n * 2) / 2;
+  }
+  if (ownedIsolated) {
+    ownedIsolated.note = note;
+    queueNoteToReport('track', ownedIsolated, note);
+    toast(`${ownedIsolated.title} noté ${note}★`);
+  } else {
+    // Peut-être une piste d'un album possédé plutôt qu'un morceau isolé
+    let matchedAlbum = null, matchedTitle = null;
+    for (const a of albums) {
+      const atracks = albumTracksCache[a.id] || [];
+      const t = atracks.find(tt => normalizeKey(a.artist, tt.title) === key);
+      if (t) { matchedAlbum = a; matchedTitle = t.title; break; }
+    }
+    if (matchedAlbum) {
+      const tkey = trackNoteKey(matchedAlbum.id, matchedTitle);
+      trackNoteOverrides[tkey] = note;
+      invalidateCache();
+      queueNoteToReport('track', { artist: matchedAlbum.artist, title: matchedTitle }, note);
+      toast(`${matchedTitle} (${matchedAlbum.album}) noté ${note}★`);
+    } else {
+      queueNoteToReport('track', { artist, title }, note);
+      toast(`Pas dans la collection — note ajoutée à "Notes à reporter" pour ${artist} — ${title}`, 'warn');
+    }
+  }
+  saveToStorage();
+  updateNavBadges();
+  renderScrobblesList();
 }
 
 function initRatingSession() {
   ratingQueue = buildRatingQueue();
   ratingQueueTracks = buildRatingQueueTracks();
-  ratingQueueAlbumTracks = buildRatingQueueAlbumTracks();
   renderRatingSession();
 }
 
@@ -12954,11 +13042,9 @@ function setRatingSessionMode(mode) {
   ratingSessionMode = mode;
   const btnA = document.getElementById('rs-mode-btn-albums');
   const btnT = document.getElementById('rs-mode-btn-tracks');
-  const btnAT = document.getElementById('rs-mode-btn-albumtracks');
   const btnS = document.getElementById('rs-mode-btn-scrobbles');
   if (btnA) btnA.classList.toggle('active', mode === 'albums');
   if (btnT) btnT.classList.toggle('active', mode === 'tracks');
-  if (btnAT) btnAT.classList.toggle('active', mode === 'albumtracks');
   if (btnS) btnS.classList.toggle('active', mode === 'scrobbles');
   renderRatingSession();
 }
@@ -12992,32 +13078,24 @@ function renderRatingSession() {
     const t = tracks.find(x => x.id === id);
     return t && !t.note;
   });
-  ratingQueueAlbumTracks = ratingQueueAlbumTracks.filter(q => !getAlbumTrackRating(q.albumId, q.title));
 
-  const albumTracksTotalList = mode === 'albumtracks' ? buildAlbumTracksList() : null;
-  const totalOwned = mode === 'tracks' ? tracks.length
-    : mode === 'albumtracks' ? albumTracksTotalList.length
-    : ownedAlbumsForCovers().length;
-  const ratedCount = mode === 'tracks' ? tracks.filter(t => t.note).length
-    : mode === 'albumtracks' ? albumTracksTotalList.filter(t => t.rating).length
-    : ownedAlbumsForCovers().filter(a => a.note).length;
+  const totalOwned = mode === 'tracks' ? tracks.length : ownedAlbumsForCovers().length;
+  const ratedCount = mode === 'tracks' ? tracks.filter(t => t.note).length : ownedAlbumsForCovers().filter(a => a.note).length;
   const pct = totalOwned ? Math.round((ratedCount / totalOwned) * 100) : 0;
   const fillEl = document.getElementById('rs-progress-fill');
   const labelEl = document.getElementById('rs-progress-label');
-  const labelWord = mode === 'tracks' ? 'morceaux notés' : mode === 'albumtracks' ? 'pistes d\u2019albums notées' : 'albums notés';
+  const labelWord = mode === 'tracks' ? 'morceaux notés' : 'albums notés';
   if (fillEl) fillEl.style.width = pct + '%';
   if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} ${labelWord}`;
 
-  const queue = mode === 'tracks' ? ratingQueueTracks : mode === 'albumtracks' ? ratingQueueAlbumTracks : ratingQueue;
+  const queue = mode === 'tracks' ? ratingQueueTracks : ratingQueue;
   const emptyEl = document.getElementById('rs-empty');
   const cardEl = document.getElementById('rs-card-wrap');
   if (!queue.length) {
     if (emptyEl) {
       emptyEl.style.display = 'block';
       const msg = emptyEl.querySelector('div:last-child');
-      if (msg) msg.textContent = mode === 'tracks' ? 'Tous les morceaux isolés sont notés !'
-        : mode === 'albumtracks' ? 'Toutes les pistes d\u2019albums sont notées !'
-        : 'Tous les albums possédés sont notés !';
+      if (msg) msg.textContent = mode === 'tracks' ? 'Tous les morceaux isolés sont notés !' : 'Tous les albums possédés sont notés !';
     }
     if (cardEl) cardEl.style.display = 'none';
     return;
@@ -13027,6 +13105,7 @@ function renderRatingSession() {
 
   const starsHtml = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   const sugEl = document.getElementById('rs-rym-suggestion');
+  const tracklistWrapEl = document.getElementById('rs-album-tracklist-wrap');
 
   if (mode === 'tracks') {
     const t = tracks.find(x => x.id === queue[0]);
@@ -13040,17 +13119,7 @@ function renderRatingSession() {
     document.getElementById('rs-meta').textContent = [t.album, (t.format || '').toUpperCase()].filter(Boolean).join(' · ');
     document.getElementById('rs-plays').textContent = plays ? `${plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
     if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
-  } else if (mode === 'albumtracks') {
-    const q = queue[0];
-    const a = albums.find(x => x.id === q.albumId);
-    if (!a) { ratingQueueAlbumTracks.shift(); renderRatingSession(); return; }
-
-    document.getElementById('rs-cover').innerHTML = albumAvatar(a);
-    document.getElementById('rs-title').textContent = q.title;
-    document.getElementById('rs-artist').textContent = q.artist;
-    document.getElementById('rs-meta').textContent = [q.position ? `Piste ${q.position}` : '', q.album].filter(Boolean).join(' · ');
-    document.getElementById('rs-plays').textContent = q.plays ? `${q.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
-    if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
+    if (tracklistWrapEl) tracklistWrapEl.style.display = 'none';
   } else {
     const a = albums.find(x => x.id === queue[0]);
     if (!a) { ratingQueue.shift(); renderRatingSession(); return; }
@@ -13072,6 +13141,11 @@ function renderRatingSession() {
         sugEl.innerHTML = '';
       }
     }
+
+    // Pistes de l'album, notables en demi-étoiles sans quitter la session (ex "Pistes d'albums")
+    const hasTracklist = (albumTracksCache[a.id] || []).some(t => t.source === 'musicbee');
+    if (tracklistWrapEl) tracklistWrapEl.style.display = hasTracklist ? 'block' : 'none';
+    if (hasTracklist) renderAlbumTracklistPanel(a.id, 'rs-album-tracklist-list');
   }
 
   document.getElementById('rs-stars').innerHTML = starsHtml;
@@ -13088,16 +13162,6 @@ function rsRateCurrent(note) {
     saveToStorage();
     ratingQueueTracks.shift();
     toast(`${t.title} noté ${note}★`);
-  } else if (ratingSessionMode === 'albumtracks') {
-    const q = ratingQueueAlbumTracks[0];
-    if (!q) return;
-    const key = trackNoteKey(q.albumId, q.title);
-    trackNoteOverrides[key] = note;
-    invalidateCache();
-    queueNoteToReport('track', { artist: q.artist, title: q.title }, note);
-    saveToStorage();
-    ratingQueueAlbumTracks.shift();
-    toast(`${q.title} noté ${note}★`);
   } else {
     const id = ratingQueue[0];
     if (!id) return;
@@ -13113,9 +13177,7 @@ function rsRateCurrent(note) {
 }
 
 function rsSkipCurrent() {
-  const queue = ratingSessionMode === 'tracks' ? ratingQueueTracks
-    : ratingSessionMode === 'albumtracks' ? ratingQueueAlbumTracks
-    : ratingQueue;
+  const queue = ratingSessionMode === 'tracks' ? ratingQueueTracks : ratingQueue;
   if (queue.length < 2) return;
   queue.push(queue.shift());
   renderRatingSession();
@@ -13125,9 +13187,6 @@ function rsListenCurrent() {
   if (ratingSessionMode === 'tracks') {
     const t = tracks.find(x => x.id === ratingQueueTracks[0]);
     if (t) openYouTubeMusicSearch(t.artist, t.title);
-  } else if (ratingSessionMode === 'albumtracks') {
-    const q = ratingQueueAlbumTracks[0];
-    if (q) openYouTubeMusicSearch(q.artist, q.title);
   } else {
     const a = albums.find(x => x.id === ratingQueue[0]);
     if (a) openYouTubeMusicForAlbum(a);
@@ -13265,8 +13324,9 @@ function halfStarsHtml(value, albumIdSid, titleSid) {
   return html;
 }
 
-function renderAlbumTracklistPanel(albumId) {
-  const wrap = document.getElementById('modal-tracklist-list');
+function renderAlbumTracklistPanel(albumId, containerId) {
+  containerId = containerId || 'modal-tracklist-list';
+  const wrap = document.getElementById(containerId);
   if (!wrap) return;
   const mbTracks = (albumTracksCache[albumId] || [])
     .filter(t => t.source === 'musicbee')
@@ -13300,7 +13360,10 @@ function rateAlbumTrack(albumIdSid, titleSid, value) {
   const album = albums.find(x => x.id === albumId);
   if (newVal && album) queueNoteToReport('track', { artist: album.artist, title }, newVal);
   saveToStorage();
-  renderAlbumTracklistPanel(albumId);
+  // Rafraîchit les 2 emplacements possibles où cette tracklist peut être affichée (modale édition
+  // album, et panneau embarqué dans la Session notation) — chacun est un no-op si absent du DOM.
+  renderAlbumTracklistPanel(albumId, 'modal-tracklist-list');
+  renderAlbumTracklistPanel(albumId, 'rs-album-tracklist-list');
 }
 
 // ===================== SCORE DE CONFIANCE VISIBLE (matching MB / RYM) =====================
