@@ -6,6 +6,8 @@
 <title>Terant Music Collection</title>
 <!-- APP_VERSION: v2026.07.08-11 — Suite au retour "les demi-étoiles ne marchent toujours pas" : test isolé (jsdom, clic DOM réellement dispatché sur le bouton, pas un appel direct de fonction) confirmant que la mécanique clic → rateAlbumTrack() → trackNoteOverrides fonctionne correctement de bout en bout côté code. La capture montrait une icône flottante (losange/étincelle) juste au-dessus de la rangée d'étoiles de la 1ère piste, caractéristique d'une extension navigateur (assistant IA, traducteur, etc.) qui s'incruste au survol — probable interception du clic avant qu'il n'atteigne le bouton. Mesures défensives en attendant confirmation : cible de clic des demi-étoiles piste agrandie (15px → 18px), z-index explicite sur les boutons de clic pour gagner la priorité d'empilement dans les cas ambigus. -->
 <!-- APP_VERSION: v2026.07.08-12 — Clarification du panneau "Scrobbles récents" (Session notation) suite à question sur le rapatriement des notes RYM : (1) colonne RYM ajoutée à côté de Note dans la vue Albums, car la notation d'un album depuis ce panneau sert avant tout à alimenter RYM via "Notes à reporter" — elle n'était jusqu'ici jamais affichée nulle part dans ce panneau ; (2) vue Morceaux : la notation n'est plus possible sur un scrobble sans correspondance réelle dans la collection (morceau isolé ou piste d'un album possédé) — cellule Note grisée/non cliquable sinon, au lieu de créer silencieusement une entrée "Notes à reporter" sans destination utile ; (3) "Notes à reporter" : ajout d'onglets de filtre Tout/Albums/Morceaux, regroupement visuel par type avec en-têtes de groupe rappelant la cible (Albums→RYM, Morceaux→MusicBee), compteur détaillé par type au lieu d'un total unique. -->
+<!-- APP_VERSION: v2026.07.08-13 — Suite à alerte Supabase (RLS désactivé sur toutes les tables) + dépassement du quota egress gratuit (6.26 Go / 5 Go) : (1) BUG EGRESS CORRIGÉ — renderSnapshotsList() (modale "Snapshots Supabase") sélectionnait la colonne `data` complète (tout le JSON de la collection sérialisé) pour CHACUN des 10 snapshots conservés à chaque ouverture de la modale, uniquement pour afficher un compteur "X albums · Y morceaux" ; remplacé par une colonne `counts` légère calculée une fois à la création du snapshot (_snapshotCounts) — la colonne `data` n'est plus jamais téléchargée que pour un seul snapshot précis, à la restauration ou à la comparaison Journal. Migration SQL : ajout colonne `counts` + backfill des anciens snapshots (calcul côté base, aucun egress client). (2) RLS : migration SQL livrée séparément (migration_v2026.07.08-13.sql) activant Row-Level Security + policies permissives sur les 11 tables, avec avertissement explicite que ça ne protège pas réellement les données tant que la clé anon reste publique dans le HTML statique (satisfait l'audit Supabase, zéro régression). -->
+
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -713,7 +715,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-12</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-13</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -12545,8 +12547,11 @@ function fixBadNotes() {
 //     id bigserial primary key,
 //     created_at timestamptz default now(),
 //     label text,
-//     data jsonb
+//     data jsonb,
+//     counts jsonb
 //   );
+// Si la table existe déjà (avant v2026.07.08-13) :
+//   alter table collection_snapshots add column if not exists counts jsonb;
 const SNAPSHOT_KEEP = 10;           // nombre de snapshots conservés (les plus anciens sont purgés)
 const SNAPSHOT_AUTO_THRESHOLD = 5;  // déclenche un snapshot auto si une sync s'apprête à supprimer plus de X albums
 
@@ -12571,12 +12576,31 @@ function _rowToLocalAlbum(a) {
   };
 }
 
+// Résumé léger (compteurs) calculé au moment de la création — stocké dans une colonne à part
+// (counts) pour que la liste des snapshots (renderSnapshotsList) n'ait jamais besoin de retélécharger
+// la colonne `data` complète (tout le JSON de la collection) juste pour afficher "X albums · Y morceaux".
+// BUG CORRIGÉ (v2026.07.08-13) : avant ce correctif, la modale "Snapshots Supabase" retéléchargeait
+// l'intégralité des 10 snapshots conservés (SNAPSHOT_KEEP) à CHAQUE ouverture, uniquement pour ces
+// compteurs — probable plus gros poste de l'egress Supabase observé (dépassement du quota gratuit).
+function _snapshotCounts(payload) {
+  const d = payload || {};
+  if (d._remoteFormat) return { remoteFormat: true, albums: (d.albums || []).length };
+  return {
+    remoteFormat: false,
+    albums: (d.albums || []).length,
+    tracks: (d.tracks || []).length,
+    wishlist: (d.wishlist || []).length,
+  };
+}
+
 async function createSnapshot(label, payload) {
   if (!window._sb) { toast("Supabase non connecté — snapshot impossible", 'error'); return false; }
   try {
+    const finalPayload = payload || { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist };
     const { error } = await window._sb.from('collection_snapshots').insert({
       label: label || 'Snapshot',
-      data: payload || { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist },
+      data: finalPayload,
+      counts: _snapshotCounts(finalPayload),
     });
     if (error) throw error;
     await pruneOldSnapshots();
@@ -12646,16 +12670,21 @@ async function renderSnapshotsList() {
   el.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">Chargement…</div>';
   if (!window._sb) { el.innerHTML = '<div class="empty" style="padding:24px">Supabase non connecté</div>'; return; }
   try {
+    // IMPORTANT : ne JAMAIS sélectionner la colonne `data` ici (tout le JSON de la collection) —
+    // seule `counts` (résumé léger, voir _snapshotCounts) est nécessaire pour l'affichage de la
+    // liste. La colonne `data` complète n'est téléchargée que pour UN snapshot précis, à la
+    // restauration (restoreSnapshot) ou à la comparaison journal (compareJournal).
     const { data, error } = await window._sb.from('collection_snapshots')
-      .select('id, created_at, label, data').order('created_at', { ascending: false });
+      .select('id, created_at, label, counts').order('created_at', { ascending: false });
     if (error) throw error;
     if (!data || !data.length) { el.innerHTML = '<div class="empty" style="padding:24px">Aucun snapshot pour l\'instant — utilise "📸 Nouveau snapshot" avant un import ou une fusion importante.</div>'; return; }
     el.innerHTML = data.map(row => {
-      const d = row.data || {};
-      const nAlbums = (d.albums || []).length;
-      const counts = d._remoteFormat
-        ? `${nAlbums} albums (snapshot de sécurité — albums uniquement)`
-        : `${nAlbums} albums · ${(d.tracks || []).length} morceaux · ${(d.wishlist || []).length} wishlist`;
+      const c = row.counts;
+      const counts = !c
+        ? 'détails indisponibles (snapshot créé avant la migration `counts`)'
+        : c.remoteFormat
+          ? `${c.albums} albums (snapshot de sécurité — albums uniquement)`
+          : `${c.albums} albums · ${c.tracks} morceaux · ${c.wishlist} wishlist`;
       return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
         <div style="min-width:0">
           <div style="font-size:13px;font-weight:500">${esc(row.label || 'Snapshot')}</div>
