@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
 <!-- APP_VERSION: v2026.07.08-11 — Suite au retour "les demi-étoiles ne marchent toujours pas" : test isolé (jsdom, clic DOM réellement dispatché sur le bouton, pas un appel direct de fonction) confirmant que la mécanique clic → rateAlbumTrack() → trackNoteOverrides fonctionne correctement de bout en bout côté code. La capture montrait une icône flottante (losange/étincelle) juste au-dessus de la rangée d'étoiles de la 1ère piste, caractéristique d'une extension navigateur (assistant IA, traducteur, etc.) qui s'incruste au survol — probable interception du clic avant qu'il n'atteigne le bouton. Mesures défensives en attendant confirmation : cible de clic des demi-étoiles piste agrandie (15px → 18px), z-index explicite sur les boutons de clic pour gagner la priorité d'empilement dans les cas ambigus. -->
+<!-- APP_VERSION: v2026.07.08-12 — Clarification du panneau "Scrobbles récents" (Session notation) suite à question sur le rapatriement des notes RYM : (1) colonne RYM ajoutée à côté de Note dans la vue Albums, car la notation d'un album depuis ce panneau sert avant tout à alimenter RYM via "Notes à reporter" — elle n'était jusqu'ici jamais affichée nulle part dans ce panneau ; (2) vue Morceaux : la notation n'est plus possible sur un scrobble sans correspondance réelle dans la collection (morceau isolé ou piste d'un album possédé) — cellule Note grisée/non cliquable sinon, au lieu de créer silencieusement une entrée "Notes à reporter" sans destination utile ; (3) "Notes à reporter" : ajout d'onglets de filtre Tout/Albums/Morceaux, regroupement visuel par type avec en-têtes de groupe rappelant la cible (Albums→RYM, Morceaux→MusicBee), compteur détaillé par type au lieu d'un total unique. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -712,7 +713,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-11</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-12</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1779,6 +1780,11 @@ input[type="file"] { display: none; }
 
     <!-- NOTES À REPORTER -->
     <div class="section" id="sec-notestoreport">
+      <div class="covers-toolbar" style="justify-content:center;margin-bottom:14px">
+        <button class="covers-filter-btn active" id="ntr-filter-btn-all" onclick="setNtrFilter('all')">Tout</button>
+        <button class="covers-filter-btn" id="ntr-filter-btn-album" onclick="setNtrFilter('album')">💿 Albums</button>
+        <button class="covers-filter-btn" id="ntr-filter-btn-track" onclick="setNtrFilter('track')">🎵 Morceaux</button>
+      </div>
       <div class="covers-toolbar">
         <div id="ntr-counter" style="font-size:12px;color:var(--text3)"></div>
         <div style="flex:1"></div>
@@ -1786,6 +1792,7 @@ input[type="file"] { display: none; }
       </div>
       <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
         Notes posées dans l'app à reporter manuellement dans les vraies sources externes (l'app n'est qu'un agrégateur, rien n'est synchronisé automatiquement).
+        Albums → RYM (+ Discogs/MusicBee) ; Morceaux → MusicBee uniquement (RYM ne note pas au niveau morceau).
         Clique sur une cible pour la marquer comme reportée. Discogs et RYM se cochent automatiquement au prochain réimport si la note y est détectée.
       </div>
       <div class="table-wrap"><table>
@@ -13003,17 +13010,29 @@ function renderScrobblesList() {
       tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
       return;
     }
-    tbody.innerHTML = _scrobblesRaw.map(s => `<tr>
+    // La cellule Note n'est cliquable que s'il existe une correspondance réelle dans la collection
+    // (morceau isolé ou piste d'un album possédé) : noter un scrobble qui ne matche rien n'a pas
+    // de destination utile et n'était donc jamais reporté nulle part.
+    tbody.innerHTML = _scrobblesRaw.map(s => {
+      const matched = !!_scrobbleTrackMatch(s.artist, s.title);
+      const noteCell = matched
+        ? `<td onclick="rateScrobbleTrack('${sid(s.artist)}','${sid(s.title)}')" title="Noter ce morceau" style="cursor:pointer">${noteCellHtml(_scrobbleTrackCurrentNote(s.artist, s.title))}</td>`
+        : `<td title="Aucune correspondance dans la collection — impossible de noter" style="cursor:not-allowed;opacity:0.4">${noteCellHtml(0)}</td>`;
+      return `<tr>
       <td style="font-weight:500">${esc(s.title)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(s.artist)}</td>
       <td style="font-size:12px;color:var(--text3)">${esc(s.album || '–')}</td>
       <td class="mono" style="font-size:11px;color:var(--text3)">${fmtScrobbleDate(s.ts)}</td>
-      <td onclick="rateScrobbleTrack('${sid(s.artist)}','${sid(s.title)}')" title="Noter ce morceau" style="cursor:pointer">${noteCellHtml(_scrobbleTrackCurrentNote(s.artist, s.title))}</td>
-    </tr>`).join('');
+      ${noteCell}
+    </tr>`;
+    }).join('');
   } else {
     // Vue Albums : dédoublonnée en conservant l'ordre d'apparition (donc le scrobble le plus
     // récent) de chaque couple artiste/album — reconstitue une liste d'albums récemment écoutés.
-    thead.innerHTML = '<tr><th>Album</th><th>Artiste</th><th style="width:150px">Dernière écoute</th><th style="width:60px">Note</th></tr>';
+    // Colonne RYM ajoutée à côté de Note : la notation d'un album depuis ce panneau sert avant
+    // tout à alimenter RYM (via "Notes à reporter"), donc on affiche la note RYM existante (si
+    // déjà connue) pour éviter de re-noter un album déjà noté côté RYM.
+    thead.innerHTML = '<tr><th>Album</th><th>Artiste</th><th style="width:150px">Dernière écoute</th><th style="width:60px">RYM</th><th style="width:60px">Note</th></tr>';
     const seen = new Set();
     const albumsList = [];
     _scrobblesRaw.forEach(s => {
@@ -13024,15 +13043,19 @@ function renderScrobblesList() {
       albumsList.push(s);
     });
     if (!albumsList.length) {
-      tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
       return;
     }
-    tbody.innerHTML = albumsList.map(s => `<tr>
+    tbody.innerHTML = albumsList.map(s => {
+      const rymEntry = lookupRym(s.artist, s.album) || lookupRym(cleanDiscogsArtist(s.artist), s.album);
+      return `<tr>
       <td style="font-weight:500">${esc(s.album)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(s.artist)}</td>
       <td class="mono" style="font-size:11px;color:var(--text3)">${fmtScrobbleDate(s.ts)}</td>
+      <td class="mono" style="font-size:11px;color:var(--amber)">${rymEntry?.rating ? rymEntry.rating.toFixed(2) + '★' : '<span style="color:var(--text3)">–</span>'}</td>
       <td onclick="rateScrobbleAlbum('${sid(s.artist)}','${sid(s.album)}')" title="Noter cet album" style="cursor:pointer">${noteCellHtml(_scrobbleAlbumCurrentNote(s.artist, s.album))}</td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
   }
 }
 
@@ -13044,16 +13067,26 @@ function _scrobbleAlbumCurrentNote(artist, album) {
   return owned?.note || 0;
 }
 
-function _scrobbleTrackCurrentNote(artist, title) {
+// Cherche une correspondance réelle dans la collection pour un scrobble morceau (isolé ou piste
+// d'un album possédé, tout le catalogue de tracklists confondu). Noter un scrobble n'a de sens
+// que s'il y a une telle correspondance — sinon la note ne rejoindra jamais aucune fiche réelle.
+function _scrobbleTrackMatch(artist, title) {
   const key = normalizeKey(artist, title);
   const iso = tracks.find(t => normalizeKey(t.artist, t.title) === key);
-  if (iso) return iso.note || 0;
+  if (iso) return { type: 'isolated', track: iso };
   for (const a of albums) {
     const atracks = albumTracksCache[a.id] || [];
     const t = atracks.find(tt => normalizeKey(a.artist, tt.title) === key);
-    if (t) return getAlbumTrackRating(a.id, t.title);
+    if (t) return { type: 'albumtrack', album: a, title: t.title };
   }
-  return 0;
+  return null;
+}
+
+function _scrobbleTrackCurrentNote(artist, title) {
+  const m = _scrobbleTrackMatch(artist, title);
+  if (!m) return 0;
+  if (m.type === 'isolated') return m.track.note || 0;
+  return getAlbumTrackRating(m.album.id, m.title);
 }
 
 // Notation depuis le panneau Scrobbles récents — via prompt() comme les autres notes rapides de
@@ -13090,9 +13123,15 @@ function rateScrobbleAlbum(artistSid, albumSid) {
 
 function rateScrobbleTrack(artistSid, titleSid) {
   const artist = unsid(artistSid), title = unsid(titleSid);
-  const key = normalizeKey(artist, title);
-  const ownedIsolated = tracks.find(t => normalizeKey(t.artist, t.title) === key);
-  const raw = prompt(`Note pour "${title}" — ${artist} (0 à 5, demi-étoiles possibles) :`, ownedIsolated?.note || '');
+  const match = _scrobbleTrackMatch(artist, title);
+  if (!match) {
+    // Filet de sécurité : la cellule Note n'est normalement pas cliquable dans ce cas (voir
+    // renderScrobblesList), mais on protège aussi la fonction elle-même.
+    toast(`Aucune correspondance dans la collection pour "${title}" — ${artist}, impossible de noter`, 'warn');
+    return;
+  }
+  const current = match.type === 'isolated' ? (match.track.note || 0) : getAlbumTrackRating(match.album.id, match.title);
+  const raw = prompt(`Note pour "${title}" — ${artist} (0 à 5, demi-étoiles possibles) :`, current || '');
   if (raw === null) return;
   const trimmed = raw.trim().replace(',', '.');
   let note = 0;
@@ -13101,28 +13140,16 @@ function rateScrobbleTrack(artistSid, titleSid) {
     if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)', 'warn'); return; }
     note = Math.round(n * 2) / 2;
   }
-  if (ownedIsolated) {
-    ownedIsolated.note = note;
-    queueNoteToReport('track', ownedIsolated, note);
-    toast(`${ownedIsolated.title} noté ${note}★`);
+  if (match.type === 'isolated') {
+    match.track.note = note;
+    queueNoteToReport('track', match.track, note);
+    toast(`${match.track.title} noté ${note}★`);
   } else {
-    // Peut-être une piste d'un album possédé plutôt qu'un morceau isolé
-    let matchedAlbum = null, matchedTitle = null;
-    for (const a of albums) {
-      const atracks = albumTracksCache[a.id] || [];
-      const t = atracks.find(tt => normalizeKey(a.artist, tt.title) === key);
-      if (t) { matchedAlbum = a; matchedTitle = t.title; break; }
-    }
-    if (matchedAlbum) {
-      const tkey = trackNoteKey(matchedAlbum.id, matchedTitle);
-      trackNoteOverrides[tkey] = note;
-      invalidateCache();
-      queueNoteToReport('track', { artist: matchedAlbum.artist, title: matchedTitle }, note);
-      toast(`${matchedTitle} (${matchedAlbum.album}) noté ${note}★`);
-    } else {
-      queueNoteToReport('track', { artist, title }, note);
-      toast(`Pas dans la collection — note ajoutée à "Notes à reporter" pour ${artist} — ${title}`, 'warn');
-    }
+    const tkey = trackNoteKey(match.album.id, match.title);
+    trackNoteOverrides[tkey] = note;
+    invalidateCache();
+    queueNoteToReport('track', { artist: match.album.artist, title: match.title }, note);
+    toast(`${match.title} (${match.album.album}) noté ${note}★`);
   }
   saveToStorage();
   updateNavBadges();
@@ -13363,18 +13390,36 @@ function removeNoteToReport(id) {
   renderNotesToReport();
 }
 
+let ntrFilter = 'all'; // 'all' | 'album' | 'track'
+
+function setNtrFilter(type) {
+  ntrFilter = type;
+  const btnAll = document.getElementById('ntr-filter-btn-all');
+  const btnAlbum = document.getElementById('ntr-filter-btn-album');
+  const btnTrack = document.getElementById('ntr-filter-btn-track');
+  if (btnAll) btnAll.classList.toggle('active', type === 'all');
+  if (btnAlbum) btnAlbum.classList.toggle('active', type === 'album');
+  if (btnTrack) btnTrack.classList.toggle('active', type === 'track');
+  renderNotesToReport();
+}
+
+// Groupé par type (Albums d'abord, puis Morceaux) avec une ligne d'en-tête de groupe, plutôt
+// qu'un simple mélange trié par date : les deux servent des cibles très différentes (RYM pour les
+// albums, MusicBee seul pour les morceaux) et ne doivent pas être confondus au premier coup d'œil.
 function renderNotesToReport() {
   pruneNotesToReport();
+  const albumCount = notesToReport.filter(e => e.type === 'album').length;
+  const trackCount = notesToReport.filter(e => e.type === 'track').length;
   const counter = document.getElementById('ntr-counter');
-  if (counter) counter.textContent = `${notesToReport.length} note(s) à reporter`;
+  if (counter) counter.textContent = `${albumCount} album(s) · ${trackCount} morceau(x) à reporter`;
   const tbody = document.getElementById('ntr-tbody');
   if (!tbody) return;
   if (!notesToReport.length) {
     tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📋</div>Rien à reporter — tout est synchronisé.</div></td></tr>';
     return;
   }
-  const sorted = [...notesToReport].sort((a, b) => b.createdAt - a.createdAt);
-  tbody.innerHTML = sorted.map(e => {
+
+  const rowHtml = e => {
     const pills = e.targets.map(t =>
       `<span class="badge badge-stock" style="cursor:pointer" onclick="dismissReportTarget('${e.id}','${t}')" title="Marquer ${NTR_TARGET_LABELS[t]} comme reporté">${NTR_TARGET_LABELS[t]} ✕</span>`
     ).join(' ');
@@ -13386,7 +13431,26 @@ function renderNotesToReport() {
       <td><div class="badges-cell">${pills}</div></td>
       <td><button class="btn btn-sm btn-danger" onclick="removeNoteToReport('${e.id}')" title="Retirer de la liste">✕</button></td>
     </tr>`;
-  }).join('');
+  };
+  const groupHeaderHtml = (label, count) =>
+    `<tr><td colspan="6" style="background:var(--bg2);font-size:11px;font-weight:600;color:var(--text3);letter-spacing:0.5px;text-transform:uppercase;padding:8px 12px">${label} (${count})</td></tr>`;
+
+  const albumEntries = notesToReport.filter(e => e.type === 'album').sort((a, b) => b.createdAt - a.createdAt);
+  const trackEntries = notesToReport.filter(e => e.type === 'track').sort((a, b) => b.createdAt - a.createdAt);
+
+  let html = '';
+  if (ntrFilter !== 'track' && albumEntries.length) {
+    html += groupHeaderHtml('💿 Albums — vers RYM (+ Discogs/MusicBee)', albumEntries.length);
+    html += albumEntries.map(rowHtml).join('');
+  }
+  if (ntrFilter !== 'album' && trackEntries.length) {
+    html += groupHeaderHtml('🎵 Morceaux — vers MusicBee', trackEntries.length);
+    html += trackEntries.map(rowHtml).join('');
+  }
+  if (!html) {
+    html = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📋</div>Rien à reporter dans cette catégorie.</div></td></tr>';
+  }
+  tbody.innerHTML = html;
 }
 
 function exportNotesToReportCSV() {
