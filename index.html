@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-03 — Nouvel onglet "🕐 Scrobbles récents" dans Session notation : liste live des derniers scrobbles last.fm (user.getrecenttracks), plus récents en premier, jamais persistée (la sync habituelle n'agrège que des compteurs, pas l'horodatage par scrobble — donc rien d'exploitable dans les données déjà stockées, ce panneau refait l'appel API à chaque ouverture/actualisation). Deux vues : "💿 Albums" (dédoublonnée par artiste+album en gardant le scrobble le plus récent de chacun — reconstitue une liste d'albums récemment écoutés) et "🎵 Morceaux" (liste brute de chaque scrobble individuel). Bouton "Charger plus" pour paginer (200 scrobbles/page, limite API last.fm). Lecture seule, pas de notation associée. -->
+<!-- APP_VERSION: v2026.07.08-04 — Fix doublon d'écoutes détecté via last.fm (ex: "sugar cube / small cloud" affiché à 16 écoutes pour 8 réelles). Cause : _lastfmTrackCounts/_lastfmCounts étaient partagés entre la sync last.fm ET la sync ListenBrainz, chacune avec son propre horodatage de dernière sync — une sync LB incrémentale ajoutait ses propres écoutes par-dessus un compte déjà correct de last.fm pour toute écoute plus récente que le dernier sync LB, alors que les deux rapportent les mêmes écoutes réelles (scrobbler soumettant aux deux services). ListenBrainz ne touche plus jamais aux compteurs d'écoutes : il ne fait plus qu'enrichir les MBID (recording/release) sur des entrées déjà comptées par last.fm, jamais n'en crée ni n'incrémente. Les compteurs repartent systématiquement de lastfmData (source de vérité persistée) à chaque lancement de sync LB, plus jamais d'un reset à vide. Correctif rétroactif : relancer une "Sync morceaux complète last.fm" (et une sync albums complète si besoin) pour recalculer les totaux déjà doublés — l'upsert écrasera chaque ligne avec le total correct. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -708,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-03</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-04</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1613,7 +1613,7 @@ input[type="file"] { display: none; }
             <button class="btn btn-sm" onclick="if(confirm('Relancer une synchronisation complète depuis le début ?')){localStorage.removeItem(LASTFM_SYNC_KEY);connectLastfm();}">↺ Resync</button>
             <button class="btn btn-sm" id="btn-tracks-sync" onclick="startTrackSync()" title="Parcourt tous les scrobbles pour remplir lastfm_tracks sans toucher aux albums ni au timestamp">🎵 Sync morceaux</button>
             <button class="btn btn-sm" id="btn-loved-sync" onclick="syncLovedTracks()" title="Récupère vos morceaux lovés sur last.fm">❤️ Loved</button>
-            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Synchronisation complète via API listens ListenBrainz (tous scrobbles + MBIDs, paginé)">🔵 ListenBrainz</button>
+            <button class="btn btn-sm" id="btn-lb-sync" onclick="syncListenBrainz()" title="Enrichissement MBID via l'API ListenBrainz (recording/release), paginé — n'incrémente jamais les écoutes, last.fm reste la seule source des compteurs">🔵 ListenBrainz</button>
           </div>
           <div class="status" id="status-lastfm"></div>
           <div id="lastfm-loved-info" style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:4px;display:none">
@@ -6919,18 +6919,22 @@ async function syncListenBrainz() {
   bar.style.width = '0%';
 
   status.textContent = isIncremental
-    ? `LB : sync depuis ${new Date(lastSyncTs * 1000).toLocaleDateString('fr-FR')}…`
-    : 'LB : première synchronisation complète (tous scrobbles + MBIDs)…';
+    ? `LB : enrichissement MBID depuis ${new Date(lastSyncTs * 1000).toLocaleDateString('fr-FR')}…`
+    : 'LB : premier enrichissement MBID complet (n\u2019affecte pas les compteurs d\u2019écoutes)…';
 
-  // Reconstruire les counts depuis lastfmData existant pour sync incrémentale
-  if (isIncremental && !Object.keys(_lastfmCounts).length) {
-    lastfmData.forEach(d => {
-      _lastfmCounts[normalizeKey(d.artist, d.album)] = { artist: d.artist, album: d.album, plays: d.plays || 0, release_mbid: d.release_mbid || '' };
-    });
-  } else if (!isIncremental) {
-    _lastfmCounts = {};
-    _lastfmTrackCounts = {};
-  }
+  // last.fm reste la SEULE source des compteurs d'écoutes (plays) — ListenBrainz ne sert plus
+  // qu'à enrichir les MBID sur les entrées déjà comptées par last.fm. On repart donc toujours de
+  // lastfmData (source de vérité persistée) avant de traiter les listens LB, jamais d'un reset à
+  // vide : un reset ici effaçait l'historique last.fm déjà correct dès que _lastfmCounts n'était
+  // pas encore rechargé en mémoire (ex: après un rechargement de page), et l'ancien code
+  // incrémentait en plus ses propres compteurs LB par-dessus — les deux sources rapportant les
+  // mêmes écoutes réelles (un même scrobbler soumettant à last.fm ET ListenBrainz), ça doublait
+  // le total pour toute écoute plus récente que le dernier sync LB (ex: 8 écoutes réelles → 16
+  // affichées). _lastfmTrackCounts n'est plus jamais reset ici non plus, pour la même raison.
+  _lastfmCounts = {};
+  lastfmData.forEach(d => {
+    _lastfmCounts[normalizeKey(d.artist, d.album)] = { artist: d.artist, album: d.album, plays: d.plays || 0, release_mbid: d.release_mbid || '' };
+  });
 
   // Récupérer le listen-count total pour la barre de progression
   let totalListens = 0;
@@ -6949,13 +6953,8 @@ async function syncListenBrainz() {
 		const cp = JSON.parse(localStorage.getItem('lb_checkpoint') || 'null');
 		if (cp && cp.maxTs && cp.totalFetched > 0) {
 			if (confirm(`Reprendre la sync ListenBrainz depuis ${cp.totalFetched.toLocaleString('fr-FR')} écoutes déjà traitées ?`)) {
-			// Restaurer les counts
-			_lastfmCounts = {};
-			_lastfmTrackCounts = {};
-			(cp.counts || []).forEach(d => {
-            _lastfmCounts[normalizeKey(d.a, d.b)] = { artist: d.a, album: d.b, plays: d.p, release_mbid: d.m || '' };
-			});
-			lastfmData = Object.values(_lastfmCounts);
+			// Ne restaure QUE la position de pagination (maxTs/totalFetched) — les compteurs
+			// eux-mêmes viennent uniquement de lastfmData (voir plus haut), jamais du checkpoint.
 			_restoredFromCheckpoint = true;
 			status.textContent = `LB : reprise depuis ${cp.totalFetched.toLocaleString('fr-FR')} écoutes…`;
 			}
@@ -6968,6 +6967,8 @@ async function syncListenBrainz() {
   let maxTs = (() => { try { const cp = JSON.parse(localStorage.getItem('lb_checkpoint')||'null'); return (_restoredFromCheckpoint && cp) ? cp.maxTs : null; } catch(e) { return null; } })();
   let done = false;
   let errorStreak = 0;
+  let albumsMbidEnriched = 0;
+  let tracksMbidEnriched = 0;
 
   // Index MBID albums collection pour matching rapide
   const mbReleaseIndex = new Map();
@@ -7024,13 +7025,15 @@ async function syncListenBrainz() {
         totalFetched++;
 
         // ── Index albums ────────────────────────────────────────────────
+        // ListenBrainz n'incrémente plus jamais .plays (last.fm reste seul comptable) —
+        // seul l'enrichissement MBID est appliqué, et uniquement sur une entrée déjà connue
+        // de last.fm (sinon un scrobble vu par LB mais pas encore par last.fm resterait à 0
+        // écoute de toute façon, inutile de créer une entrée fantôme).
         if (album) {
           const k = normalizeKey(artist, album);
-          if (!_lastfmCounts[k]) _lastfmCounts[k] = { artist, album, plays: 0, release_mbid: '' };
-          _lastfmCounts[k].plays++;
-          if (relMbid && !_lastfmCounts[k].release_mbid) _lastfmCounts[k].release_mbid = relMbid;
+          if (_lastfmCounts[k] && relMbid && !_lastfmCounts[k].release_mbid) { _lastfmCounts[k].release_mbid = relMbid; albumsMbidEnriched++; }
 
-          // Matcher contre la collection
+          // Matcher contre la collection (uniquement pour le MBID — jamais pour a.plays)
           let found = relMbid ? mbReleaseIndex.get(relMbid) : null;
           if (!found) {
             const aNorm = normalizeKey('', album).replace('|||','');
@@ -7039,19 +7042,17 @@ async function syncListenBrainz() {
               if (found) break;
             }
           }
-          if (found) {
-            found.plays = (_lastfmCounts[k].plays);
-            if (relMbid && !found.mb_release_id) { found.mb_release_id = relMbid; mbReleaseIndex.set(relMbid, found); }
-          }
+          if (found && relMbid && !found.mb_release_id) { found.mb_release_id = relMbid; mbReleaseIndex.set(relMbid, found); }
         }
 
         // ── Index morceaux ──────────────────────────────────────────────
+        // Idem : enrichissement MBID seul sur une entrée déjà comptée par la sync last.fm morceaux.
         if (track) {
           const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album);
-          if (!_lastfmTrackCounts[kt]) _lastfmTrackCounts[kt] = { artist, track, album: album || '', plays: 0 };
-          _lastfmTrackCounts[kt].plays++;
-          if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) _lastfmTrackCounts[kt].recording_mbid = recMbid;
-          if (relMbid && !_lastfmTrackCounts[kt].release_mbid)   _lastfmTrackCounts[kt].release_mbid   = relMbid;
+          if (_lastfmTrackCounts[kt]) {
+            if (recMbid && !_lastfmTrackCounts[kt].recording_mbid) { _lastfmTrackCounts[kt].recording_mbid = recMbid; tracksMbidEnriched++; }
+            if (relMbid && !_lastfmTrackCounts[kt].release_mbid)   _lastfmTrackCounts[kt].release_mbid   = relMbid;
+          }
         }
       });
 
@@ -7059,11 +7060,9 @@ async function syncListenBrainz() {
       if (isIncremental || listens.length < 1000) { done = true; }
 
       // Progression
-      const nA = Object.keys(_lastfmCounts).length;
-      const nT = Object.keys(_lastfmTrackCounts).length;
       const pct = totalListens > 0 ? Math.min(99, Math.round(totalFetched / totalListens * 100)) : 0;
       bar.style.width = pct + '%';
-      progressLabel.textContent = `${totalFetched.toLocaleString('fr-FR')} / ${totalListens.toLocaleString('fr-FR')} écoutes — ${nA} albums · ${nT} morceaux`;
+      progressLabel.textContent = `${totalFetched.toLocaleString('fr-FR')} / ${totalListens.toLocaleString('fr-FR')} écoutes parcourues — ${albumsMbidEnriched} album(s) + ${tracksMbidEnriched} morceau(x) enrichis en MBID`;
 
       // Checkpoint + flush Supabase toutes les 50 000 écoutes
       if (totalFetched > 0 && totalFetched % 50000 < 1000) {
@@ -7094,12 +7093,10 @@ async function syncListenBrainz() {
     }
     localStorage.removeItem('lb_checkpoint');
     bar.style.width = '100%';
-    const nA = Object.keys(_lastfmCounts).length;
-    const nT = Object.keys(_lastfmTrackCounts).length;
     const matched = albums.filter(a => (a.plays || 0) > 0).length;
-    status.textContent = `✓ LB ${isIncremental ? 'incrémental' : 'complet'} — ${totalFetched.toLocaleString('fr-FR')} écoutes · ${nA} albums · ${nT} morceaux · ${matched} matchés`;
+    status.textContent = `✓ LB ${isIncremental ? 'incrémental' : 'complet'} — ${totalFetched.toLocaleString('fr-FR')} écoutes parcourues · ${albumsMbidEnriched} album(s) + ${tracksMbidEnriched} morceau(x) enrichis en MBID (écoutes inchangées, source last.fm)`;
     status.className = 'status ok';
-    toast(`🔵 LB : ${totalFetched.toLocaleString('fr-FR')} écoutes · ${nA} albums · ${nT} morceaux`);
+    toast(`🔵 LB : ${albumsMbidEnriched} album(s) + ${tracksMbidEnriched} morceau(x) enrichis en MBID`);
   }
 
   await _flushLbToSupabase(true);
@@ -7120,8 +7117,9 @@ const LB_SYNC_KEY  = 'lb_last_sync_ts';
 
 function _saveLbCheckpoint(maxTs, totalFetched) {
   try {
-    const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays, m: d.release_mbid || '' }));
-    localStorage.setItem('lb_checkpoint', JSON.stringify({ maxTs, totalFetched, counts: compact, savedAt: Date.now() }));
+    // Ne stocke plus que la position de pagination — les compteurs ne sont plus jamais restaurés
+    // depuis le checkpoint (voir syncListenBrainz), inutile de dupliquer tout _lastfmCounts ici.
+    localStorage.setItem('lb_checkpoint', JSON.stringify({ maxTs, totalFetched, savedAt: Date.now() }));
   } catch(e) { console.warn('LB checkpoint non sauvegardé:', e); }
 }
 
