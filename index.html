@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-04 — Fix doublon d'écoutes détecté via last.fm (ex: "sugar cube / small cloud" affiché à 16 écoutes pour 8 réelles). Cause : _lastfmTrackCounts/_lastfmCounts étaient partagés entre la sync last.fm ET la sync ListenBrainz, chacune avec son propre horodatage de dernière sync — une sync LB incrémentale ajoutait ses propres écoutes par-dessus un compte déjà correct de last.fm pour toute écoute plus récente que le dernier sync LB, alors que les deux rapportent les mêmes écoutes réelles (scrobbler soumettant aux deux services). ListenBrainz ne touche plus jamais aux compteurs d'écoutes : il ne fait plus qu'enrichir les MBID (recording/release) sur des entrées déjà comptées par last.fm, jamais n'en crée ni n'incrémente. Les compteurs repartent systématiquement de lastfmData (source de vérité persistée) à chaque lancement de sync LB, plus jamais d'un reset à vide. Correctif rétroactif : relancer une "Sync morceaux complète last.fm" (et une sync albums complète si besoin) pour recalculer les totaux déjà doublés — l'upsert écrasera chaque ligne avec le total correct. -->
+<!-- APP_VERSION: v2026.07.08-06 — Fix "Checkpoint albums non sauvegardé (localStorage plein)" en boucle pendant une sync last.fm complète. Cause : saveLastfmCheckpoint() écrivait un compact de TOUS les morceaux (~197k entrées, 15-30 Mo stringifié) dans localStorage à chaque checkpoint (toutes les 10 pages), saturant le quota et faisant échouer par ricochet l'écriture — pourtant minuscule — du checkpoint albums juste après. Les checkpoints locaux ne stockent plus que la position de page à reprendre ({page, totalPages}) ; les compteurs eux-mêmes ne sont plus jamais restaurés depuis un blob local mais reconstruits depuis lastfmData (source de vérité déjà en mémoire / rechargée depuis Supabase au démarrage). Ajout de flushAlbumCountsToSupabase() (miroir de flushTrackCountsToSupabase(), qui existait déjà côté morceaux) : les albums sont désormais aussi sécurisés vers Supabase toutes les 50 pages ET à la mise en pause, pas seulement en toute fin de sync. Nettoyage automatique de l'ancien checkpoint volumineux (lastfm_track_checkpoint) s'il traîne encore en localStorage. Non touché dans ce fix : le checkpoint de "Sync morceaux complète" (bouton dédié, TRACK_CP_KEY) a la même mécanique mais son blob local sert aussi à préserver l'exactitude du compte en cas de reprise avant le prochain flush Supabase (à 50 pages) — modifier ce point demande plus de prudence vu l'historique du bug de doublon déjà corrigé en v2026.07.07-13, laissé pour une prochaine itération si le besoin se confirme. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -681,6 +681,9 @@ input[type="file"] { display: none; }
     <span class="nav-icon">📋</span> Notes à reporter
     <span class="nav-badge warn" id="nav-notestoreport-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('journal')">
+    <span class="nav-icon">📰</span> Journal
+  </div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
   </div>
@@ -708,7 +711,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-04</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-06</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1783,6 +1786,22 @@ input[type="file"] { display: none; }
         <thead><tr><th>Type</th><th>Artiste</th><th>Titre</th><th>Note</th><th>Cibles restantes</th><th></th></tr></thead>
         <tbody id="ntr-tbody"></tbody>
       </table></div>
+    </div>
+
+    <!-- ==================== JOURNAL DES CHANGEMENTS ==================== -->
+    <div class="section" id="sec-journal">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Compare l'état actuel de la collection à un snapshot précédent — pratique pour vérifier l'effet d'un import XML/CSV sans passer par la console.
+        Un snapshot doit exister au préalable (bouton "📸 Nouveau snapshot" dans Import/Export, ou pris automatiquement avant une suppression massive).
+      </div>
+      <div class="covers-toolbar">
+        <select id="journal-snapshot-select" style="min-width:320px"></select>
+        <button class="btn btn-sm" onclick="compareJournal()">🔍 Comparer</button>
+        <button class="btn btn-sm" onclick="manualSnapshot().then(renderJournal)">📸 Nouveau snapshot</button>
+        <div style="flex:1"></div>
+        <span id="journal-status" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+      <div id="journal-results"></div>
     </div>
 
   </div><!-- /content -->
@@ -3162,7 +3181,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'ratesession', 'notestoreport', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'ratesession', 'notestoreport', 'journal', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -3178,7 +3197,7 @@ function nav(id) {
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
-    ratesession: 'Session notation', notestoreport: 'Notes à reporter', import: 'Import / Export'
+    ratesession: 'Session notation', notestoreport: 'Notes à reporter', journal: 'Journal des changements', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -3190,6 +3209,7 @@ function nav(id) {
     covers: 'Galerie & résolution des pochettes',
     ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
     notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
+    journal: 'Ce qui a changé depuis un snapshot — pour vérifier l\u2019effet d\u2019un import',
     import: 'Sources externes & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
@@ -3209,6 +3229,7 @@ function nav(id) {
   if (id === 'covers') renderCoversGallery();
   if (id === 'ratesession') initRatingSession();
   if (id === 'notestoreport') renderNotesToReport();
+  if (id === 'journal') renderJournal();
 }
 
 function onSearch() {
@@ -7163,23 +7184,17 @@ async function _flushLbToSupabase(isFinal) {
 }
 
 function saveLastfmCheckpoint(currentPage, totalPages) {
-  const compact = Object.values(_lastfmCounts).map(d => ({ a: d.artist, b: d.album, p: d.plays }));
+  // Les compteurs (albums ET morceaux) sont désormais sécurisés régulièrement côté Supabase par
+  // flushAlbumCountsToSupabase()/flushTrackCountsToSupabase() (appelées plus bas dans la boucle),
+  // et rechargés en mémoire au démarrage de l'app. Le checkpoint local ne stocke donc plus qu'un
+  // pointeur de reprise minuscule ({page, totalPages}) — avant ce fix, un compact des ~197k
+  // morceaux (15-30 Mo une fois stringifié) saturait le quota localStorage à chaque appel, ce qui
+  // faisait aussi échouer l'écriture — pourtant minuscule — du checkpoint albums juste après.
   try {
-    localStorage.setItem(LASTFM_CHECKPOINT_KEY, JSON.stringify({
-      page: currentPage, totalPages, counts: compact, savedAt: Date.now()
-    }));
-  } catch(e) { console.warn('Checkpoint albums non sauvegardé (localStorage plein)'); }
-  // Checkpoint tracks séparé (peut être volumineux)
-  const compactTracks = Object.values(_lastfmTrackCounts).map(d => ({ a: d.artist, t: d.track, b: d.album || '', p: d.plays }));
-  try {
-    localStorage.setItem(LASTFM_TRACK_CHECKPOINT_KEY, JSON.stringify({
-      page: currentPage, totalPages, counts: compactTracks, savedAt: Date.now()
-    }));
-  } catch(e) {
-    // localStorage plein — sauvegarder dans Supabase à la place
-    console.warn('Checkpoint tracks non sauvegardé localement, flush vers Supabase');
-    flushTrackCountsToSupabase();
-  }
+    localStorage.setItem(LASTFM_CHECKPOINT_KEY, JSON.stringify({ page: currentPage, totalPages, savedAt: Date.now() }));
+  } catch(e) { console.warn('Checkpoint last.fm non sauvegardé :', e); }
+  // Nettoyage d'un éventuel ancien checkpoint morceaux volumineux laissé par une version antérieure
+  localStorage.removeItem(LASTFM_TRACK_CHECKPOINT_KEY);
 }
 
 function loadLastfmCheckpoint() {
@@ -7192,18 +7207,6 @@ function loadLastfmCheckpoint() {
       localStorage.removeItem(LASTFM_TRACK_CHECKPOINT_KEY);
       return null;
     }
-    // Restaurer aussi les tracks
-    try {
-      const rawT = localStorage.getItem(LASTFM_TRACK_CHECKPOINT_KEY);
-      if (rawT) {
-        const cpT = JSON.parse(rawT);
-        _lastfmTrackCounts = {};
-        cpT.counts.forEach(d => {
-          const kt = normalizeKey(d.a, d.t) + '|' + normalizeKey('', d.b || '');
-          _lastfmTrackCounts[kt] = { artist: d.a, track: d.t, album: d.b || '', plays: d.p };
-        });
-      }
-    } catch(e) {}
     return cp;
   } catch(e) { return null; }
 }
@@ -7231,6 +7234,25 @@ async function flushTrackCountsToSupabase() {
   } catch(e) { console.warn('Erreur flush lastfm_tracks:', e); }
 }
 
+// Même principe côté albums — avant ce fix, seul flushTrackCountsToSupabase() existait : les
+// morceaux étaient sécurisés régulièrement pendant la sync, mais les albums (_lastfmCounts)
+// n'étaient écrits dans Supabase qu'à la toute fin (saveToStorage), donc perdus en cas de crash
+// ou de fermeture d'onglet en cours de route.
+async function flushAlbumCountsToSupabase() {
+  if (!window._sb || !Object.keys(_lastfmCounts).length) return;
+  try {
+    const rows = Object.values(_lastfmCounts).map(d => ({
+      artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: new Date().toISOString()
+    }));
+    for (let i = 0; i < rows.length; i += 400) {
+      const { error } = await window._sb.from('lastfm_data')
+        .upsert(rows.slice(i, i + 400), { onConflict: 'artist,album' });
+      if (error) console.warn('flush chunk error (albums):', error);
+    }
+    console.log(`lastfm_data : ${rows.length} albums sauvegardés dans Supabase`);
+  } catch(e) { console.warn('Erreur flush lastfm_data:', e); }
+}
+
 async function fetchLastfmPage(page) {
   const status = document.getElementById('status-lastfm');
   const progress = document.getElementById('lastfm-progress');
@@ -7247,12 +7269,12 @@ async function fetchLastfmPage(page) {
   const checkpoint = loadLastfmCheckpoint();
   let currentPage = page;
   if (checkpoint && checkpoint.page > page && checkpoint.totalPages === _lastfmTotalPages) {
-    // Reprendre depuis le checkpoint
+    // Reprendre depuis le checkpoint — les compteurs eux-mêmes viennent de lastfmData (déjà en
+    // mémoire, rechargé depuis Supabase au démarrage / mis à jour par les flushs périodiques),
+    // plus jamais d'un blob stocké dans le checkpoint local (voir saveLastfmCheckpoint).
     currentPage = checkpoint.page;
     _lastfmCounts = {};
-    checkpoint.counts.forEach(d => {
-      _lastfmCounts[normalizeKey(d.a, d.b)] = { artist: d.a, album: d.b, plays: d.p };
-    });
+    lastfmData.forEach(d => { _lastfmCounts[normalizeKey(d.artist, d.album)] = { artist: d.artist, album: d.album, plays: d.plays || 0 }; });
     progressLabel.textContent = `Reprise depuis la page ${currentPage} (checkpoint trouvé)`;
   }
 
@@ -7331,10 +7353,11 @@ async function fetchLastfmPage(page) {
         saveLastfmCheckpoint(currentPage + 1, _lastfmTotalPages);
         updateNavBadges();
       }
-      // Flush Supabase toutes les 50 pages (sauvegarde partielle morceaux)
+      // Flush Supabase toutes les 50 pages (sauvegarde partielle albums + morceaux)
       if (currentPage % 50 === 0) {
         progressLabel.textContent += ' — sauvegarde partielle…';
         await flushTrackCountsToSupabase();
+        await flushAlbumCountsToSupabase();
       }
 
       currentPage++;
@@ -7358,14 +7381,18 @@ async function fetchLastfmPage(page) {
 
   if (_lastfmAbort) {
     saveLastfmCheckpoint(currentPage, _lastfmTotalPages);
+    progressLabel.textContent = 'Sauvegarde avant pause…';
+    await flushTrackCountsToSupabase();
+    await flushAlbumCountsToSupabase();
     status.textContent = `⏸ Mis en pause à la page ${currentPage - 1}/${_lastfmTotalPages} — ${lastfmData.length} albums — checkpoint sauvegardé`;
     status.className = 'status ok';
     btnMore.textContent = '▶ Reprendre';
     btnMore.style.display = 'inline-flex';
   } else {
-    // Flush final des morceaux dans Supabase
-    progressLabel.textContent = 'Sauvegarde des morceaux dans Supabase…';
+    // Flush final des albums + morceaux dans Supabase
+    progressLabel.textContent = 'Sauvegarde des albums et morceaux dans Supabase…';
     await flushTrackCountsToSupabase();
+    await flushAlbumCountsToSupabase();
     clearLastfmCheckpoint();
     const syncTs = String(Math.floor(Date.now() / 1000));
     localStorage.setItem(LASTFM_SYNC_KEY, syncTs);
@@ -7393,11 +7420,9 @@ async function loadMoreLastfm() {
     document.getElementById('btn-lastfm-more').style.display = 'none';
     // Reprendre depuis le checkpoint si disponible, sinon depuis la page courante
     const cp = loadLastfmCheckpoint();
-    if (cp && cp.counts) {
+    if (cp) {
       _lastfmCounts = {};
-      cp.counts.forEach(d => {
-        _lastfmCounts[normalizeKey(d.a, d.b)] = { artist: d.a, album: d.b, plays: d.p };
-      });
+      lastfmData.forEach(d => { _lastfmCounts[normalizeKey(d.artist, d.album)] = { artist: d.artist, album: d.album, plays: d.plays || 0 }; });
       _lastfmTotalPages = cp.totalPages;
       await fetchLastfmPage(cp.page);
     } else {
@@ -12587,6 +12612,127 @@ async function deleteSnapshot(id) {
     await renderSnapshotsList();
   } catch(e) {
     toast('Erreur suppression snapshot : ' + (e.message || e), 'error');
+  }
+}
+
+// ===================== JOURNAL DES CHANGEMENTS (diff vs snapshot) =====================
+// Quasi sous-produit du système de snapshots ci-dessus : plutôt que de rejouer une
+// synchro/import pour deviner ce qui a changé, on compare simplement l'état actuel de
+// `albums` à celui capturé dans un snapshot choisi. Ajouts/suppressions par clé
+// (artiste, album) normalisée ; "déplacé" = changement de dossier(s) ; note MusicBee
+// changée affichée à part. Pas de détection de fusion dédiée (trop ambigu à déduire d'un
+// simple diff d'ids) — une fusion apparaît ici comme 1 suppression + 1 modification.
+function _snapshotAlbums(d) {
+  if (!d) return [];
+  return d._remoteFormat ? (d.albums || []).map(_rowToLocalAlbum) : (d.albums || []);
+}
+
+function _journalFolderLabel(a) {
+  const labels = [];
+  if (a.folders?.includes('stock') || a.primaryFolder === 'stock') labels.push('📦 Stock');
+  if (a.okFolder) labels.push('✅ Ok');
+  if (a.forSale) labels.push('💸 Vendre');
+  if (!labels.length) labels.push('🎵 Discographie');
+  return labels.join(' + ');
+}
+
+async function renderJournal() {
+  const sel = document.getElementById('journal-snapshot-select');
+  const status = document.getElementById('journal-status');
+  const results = document.getElementById('journal-results');
+  if (!window._sb) {
+    sel.innerHTML = '<option>Supabase non connecté</option>';
+    results.innerHTML = '<div class="empty" style="padding:24px">Le journal nécessite Supabase (les snapshots y sont stockés).</div>';
+    return;
+  }
+  sel.innerHTML = '<option>Chargement…</option>';
+  try {
+    const { data, error } = await window._sb.from('collection_snapshots')
+      .select('id, created_at, label').order('created_at', { ascending: false });
+    if (error) throw error;
+    if (!data || !data.length) {
+      sel.innerHTML = '<option value="">Aucun snapshot</option>';
+      results.innerHTML = '<div class="empty" style="padding:24px">Aucun snapshot disponible pour comparer — crée-en un avec "📸 Nouveau snapshot" avant ton prochain import.</div>';
+      status.textContent = '';
+      return;
+    }
+    sel.innerHTML = data.map(row =>
+      `<option value="${row.id}">${new Date(row.created_at).toLocaleString('fr-FR')} — ${esc(row.label || 'Snapshot')}</option>`
+    ).join('');
+    status.textContent = `${data.length} snapshot(s) disponible(s)`;
+    // Compare automatiquement contre le plus récent à l'ouverture de l'écran
+    await compareJournal();
+  } catch(e) {
+    console.error('renderJournal error', e);
+    sel.innerHTML = '<option value="">Erreur</option>';
+    const msg = /relation .* does not exist|not found/i.test(e.message || '')
+      ? "Table collection_snapshots absente — voir la migration SQL en commentaire du code (fonction createSnapshot)"
+      : (e.message || String(e));
+    results.innerHTML = `<div class="empty" style="padding:24px">Erreur de chargement : ${esc(msg)}</div>`;
+  }
+}
+
+async function compareJournal() {
+  const sel = document.getElementById('journal-snapshot-select');
+  const status = document.getElementById('journal-status');
+  const results = document.getElementById('journal-results');
+  const id = sel?.value;
+  if (!id) return;
+  status.textContent = 'Comparaison…';
+  try {
+    const { data, error } = await window._sb.from('collection_snapshots').select('created_at, label, data').eq('id', id).single();
+    if (error) throw error;
+    const refAlbums = _snapshotAlbums(data.data || {});
+    const refByKey = new Map(refAlbums.map(a => [normalizeKey(a.artist, a.album), a]));
+    const curByKey = new Map(albums.map(a => [normalizeKey(a.artist, a.album), a]));
+
+    const added = [], removed = [], moved = [], notedChanged = [];
+    curByKey.forEach((a, k) => {
+      const ref = refByKey.get(k);
+      if (!ref) { added.push(a); return; }
+      const refFolder = _journalFolderLabel(ref);
+      const curFolder = _journalFolderLabel(a);
+      if (refFolder !== curFolder) moved.push({ a, from: refFolder, to: curFolder });
+      if ((ref.note || 0) !== (a.note || 0)) notedChanged.push({ a, from: ref.note || 0, to: a.note || 0 });
+    });
+    refByKey.forEach((ref, k) => { if (!curByKey.has(k)) removed.push(ref); });
+
+    const total = added.length + removed.length + moved.length + notedChanged.length;
+    status.textContent = `Comparé au ${new Date(data.created_at).toLocaleString('fr-FR')} (${data.label || 'Snapshot'}) — ${total} changement(s)`;
+
+    const section = (title, icon, rows, renderRow) => rows.length ? `
+      <div style="margin-bottom:22px">
+        <div style="font-size:13px;font-weight:600;color:var(--text2);margin-bottom:8px">${icon} ${title} (${rows.length})</div>
+        <div class="table-wrap"><table><tbody>${rows.map(renderRow).join('')}</tbody></table></div>
+      </div>` : '';
+
+    results.innerHTML = (!total
+      ? '<div class="empty" style="padding:24px">🎉 Aucun changement depuis ce snapshot.</div>'
+      : '') +
+      section('Ajoutés', '➕', added, a => `<tr>
+        <td style="font-weight:500">${esc(a.album)}</td>
+        <td style="font-size:12px;color:var(--text2)">${esc(a.artist)}</td>
+        <td style="font-size:11px;color:var(--text3)">${_journalFolderLabel(a)}</td>
+      </tr>`) +
+      section('Supprimés', '➖', removed, a => `<tr>
+        <td style="font-weight:500;text-decoration:line-through;color:var(--text3)">${esc(a.album)}</td>
+        <td style="font-size:12px;color:var(--text3)">${esc(a.artist)}</td>
+        <td style="font-size:11px;color:var(--text3)">${_journalFolderLabel(a)}</td>
+      </tr>`) +
+      section('Déplacés (changement de dossier)', '📂', moved, r => `<tr>
+        <td style="font-weight:500">${esc(r.a.album)}</td>
+        <td style="font-size:12px;color:var(--text2)">${esc(r.a.artist)}</td>
+        <td style="font-size:11px;color:var(--text3)">${r.from} → ${r.to}</td>
+      </tr>`) +
+      section('Note MusicBee changée', '⭐', notedChanged, r => `<tr>
+        <td style="font-weight:500">${esc(r.a.album)}</td>
+        <td style="font-size:12px;color:var(--text2)">${esc(r.a.artist)}</td>
+        <td style="font-size:11px;color:var(--text3);font-family:var(--mono)">${r.from || '–'} → ${r.to || '–'}</td>
+      </tr>`);
+  } catch(e) {
+    console.error('compareJournal error', e);
+    status.textContent = '';
+    results.innerHTML = `<div class="empty" style="padding:24px">Erreur : ${esc(e.message || String(e))}</div>`;
   }
 }
 
