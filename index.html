@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.07-13 — Fix majeur : les compteurs d'écoutes last.fm morceaux (et potentiellement albums) étaient gonflés à chaque relance d'une sync complète. startTrackSync() ne réinitialisait jamais _lastfmTrackCounts avant de recompter tout l'historique (pas de mode incrémental pour les morceaux) — chaque relance de "🎵 Sync morceaux complète" additionnait donc les nouveaux comptes PAR-DESSUS les comptes déjà corrects en mémoire, doublant/triplant les écoutes au fil des relances (ex: "Hunter" affiché à 26 écoutes vs 6 réelles sur last.fm). Corrigé : reset systématique sauf reprise explicite depuis un checkpoint, dont la clé (artiste+titre+album) est maintenant cohérente entre sauvegarde et restauration (elle ignorait l'album auparavant, causant des doublons supplémentaires à la reprise). Même protection ajoutée à la première sync complète albums, qui alimente aussi ces compteurs. Un nouveau lancement de "Sync morceaux complète" corrige automatiquement l'historique déjà gonflé (l'upsert écrase chaque ligne avec le total recalculé correctement) -->
+<!-- APP_VERSION: v2026.07.08-01 — Nouveau mode "💿 Pistes d'albums" dans Session notation : jusqu'ici seuls les albums et les morceaux isolés (tracks[]) pouvaient y être notés, il n'y avait aucun moyen de noter piste par piste les morceaux appartenant à un album (déjà possible mais seulement un par un dans la modal album). Nouveau 3e onglet qui construit une file de toutes les pistes MusicBee/Discogs des albums possédés sans note (override trackNoteOverrides ou note importée), triée par écoutes last.fm décroissantes, réutilise le même flux de notation (étoiles 1-5, raccourcis clavier, passer, écouter sur YouTube Music) que les 2 autres modes. Écrit dans trackNoteOverrides comme le fait déjà rateAlbumTrack() depuis la modal album — même persistance, même file "Notes à reporter". -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -708,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.07-13</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-01</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1701,6 +1701,7 @@ input[type="file"] { display: none; }
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:20px">
         <button class="covers-filter-btn active" id="rs-mode-btn-albums" onclick="setRatingSessionMode('albums')">🎵 Albums</button>
         <button class="covers-filter-btn" id="rs-mode-btn-tracks" onclick="setRatingSessionMode('tracks')">🎧 Morceaux isolés</button>
+        <button class="covers-filter-btn" id="rs-mode-btn-albumtracks" onclick="setRatingSessionMode('albumtracks')">💿 Pistes d'albums</button>
       </div>
       <div class="rate-session-progress-wrap">
         <div class="rate-session-progress-bar"><div class="rate-session-progress-fill" id="rs-progress-fill" style="width:0%"></div></div>
@@ -12476,8 +12477,9 @@ function openYouTubeMusicForAlbumId(id) {
 // étoiles, raccourcis clavier), plutôt que de chasser les lignes vides dans un tableau de
 // 2500+ entrées. Deux files séparées (albums / morceaux isolés), chacune priorisée par
 // écoutes last.fm décroissantes (le plus écouté et jamais noté remonte en premier).
-let ratingSessionMode = 'albums'; // 'albums' | 'tracks'
+let ratingSessionMode = 'albums'; // 'albums' | 'tracks' | 'albumtracks'
 let ratingQueueTracks = [];
+let ratingQueueAlbumTracks = []; // [{ albumId, title, artist, album }]
 
 function buildRatingQueue() {
   return ownedAlbumsForCovers()
@@ -12494,9 +12496,39 @@ function buildRatingQueueTracks() {
     .map(t => t.id);
 }
 
+// Note actuelle d'une piste d'album (override utilisateur sinon note MusicBee/Discogs importée)
+function getAlbumTrackRating(albumId, title) {
+  const key = trackNoteKey(albumId, title);
+  if (Object.prototype.hasOwnProperty.call(trackNoteOverrides, key)) return trackNoteOverrides[key];
+  const atracks = albumTracksCache[albumId] || [];
+  const mbT = atracks.find(t => t.source === 'musicbee' && t.title === title);
+  if (mbT) return mbT.rating || 0;
+  const dT = atracks.find(t => t.source === 'discogs' && t.title === title);
+  return dT?.rating || 0;
+}
+
+function buildRatingQueueAlbumTracks() {
+  const lfExact = getLfExactMap();
+  const queue = [];
+  ownedAlbumsForCovers().forEach(a => {
+    const atracks = albumTracksCache[a.id] || [];
+    const mbT = atracks.filter(t => t.source === 'musicbee');
+    const useT = mbT.length ? mbT : atracks.filter(t => t.source === 'discogs');
+    useT.forEach(t => {
+      if (!getAlbumTrackRating(a.id, t.title)) {
+        queue.push({ albumId: a.id, title: t.title, artist: a.artist, album: a.album, position: t.position,
+          plays: lfExact.get(normalizeKey(a.artist, t.title)) || 0 });
+      }
+    });
+  });
+  queue.sort((x, y) => y.plays - x.plays);
+  return queue;
+}
+
 function initRatingSession() {
   ratingQueue = buildRatingQueue();
   ratingQueueTracks = buildRatingQueueTracks();
+  ratingQueueAlbumTracks = buildRatingQueueAlbumTracks();
   renderRatingSession();
 }
 
@@ -12504,13 +12536,15 @@ function setRatingSessionMode(mode) {
   ratingSessionMode = mode;
   const btnA = document.getElementById('rs-mode-btn-albums');
   const btnT = document.getElementById('rs-mode-btn-tracks');
+  const btnAT = document.getElementById('rs-mode-btn-albumtracks');
   if (btnA) btnA.classList.toggle('active', mode === 'albums');
   if (btnT) btnT.classList.toggle('active', mode === 'tracks');
+  if (btnAT) btnAT.classList.toggle('active', mode === 'albumtracks');
   renderRatingSession();
 }
 
 function renderRatingSession() {
-  const isTracks = ratingSessionMode === 'tracks';
+  const mode = ratingSessionMode;
 
   // Retirer des files les entrées notées/supprimées entretemps ailleurs dans l'app
   ratingQueue = ratingQueue.filter(id => {
@@ -12521,23 +12555,32 @@ function renderRatingSession() {
     const t = tracks.find(x => x.id === id);
     return t && !t.note;
   });
+  ratingQueueAlbumTracks = ratingQueueAlbumTracks.filter(q => !getAlbumTrackRating(q.albumId, q.title));
 
-  const totalOwned = isTracks ? tracks.length : ownedAlbumsForCovers().length;
-  const ratedCount = isTracks ? tracks.filter(t => t.note).length : ownedAlbumsForCovers().filter(a => a.note).length;
+  const albumTracksTotalList = mode === 'albumtracks' ? buildAlbumTracksList() : null;
+  const totalOwned = mode === 'tracks' ? tracks.length
+    : mode === 'albumtracks' ? albumTracksTotalList.length
+    : ownedAlbumsForCovers().length;
+  const ratedCount = mode === 'tracks' ? tracks.filter(t => t.note).length
+    : mode === 'albumtracks' ? albumTracksTotalList.filter(t => t.rating).length
+    : ownedAlbumsForCovers().filter(a => a.note).length;
   const pct = totalOwned ? Math.round((ratedCount / totalOwned) * 100) : 0;
   const fillEl = document.getElementById('rs-progress-fill');
   const labelEl = document.getElementById('rs-progress-label');
+  const labelWord = mode === 'tracks' ? 'morceaux notés' : mode === 'albumtracks' ? 'pistes d\u2019albums notées' : 'albums notés';
   if (fillEl) fillEl.style.width = pct + '%';
-  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} ${isTracks ? 'morceaux notés' : 'albums notés'}`;
+  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} ${labelWord}`;
 
-  const queue = isTracks ? ratingQueueTracks : ratingQueue;
+  const queue = mode === 'tracks' ? ratingQueueTracks : mode === 'albumtracks' ? ratingQueueAlbumTracks : ratingQueue;
   const emptyEl = document.getElementById('rs-empty');
   const cardEl = document.getElementById('rs-card-wrap');
   if (!queue.length) {
     if (emptyEl) {
       emptyEl.style.display = 'block';
       const msg = emptyEl.querySelector('div:last-child');
-      if (msg) msg.textContent = isTracks ? 'Tous les morceaux isolés sont notés !' : 'Tous les albums possédés sont notés !';
+      if (msg) msg.textContent = mode === 'tracks' ? 'Tous les morceaux isolés sont notés !'
+        : mode === 'albumtracks' ? 'Toutes les pistes d\u2019albums sont notées !'
+        : 'Tous les albums possédés sont notés !';
     }
     if (cardEl) cardEl.style.display = 'none';
     return;
@@ -12548,7 +12591,7 @@ function renderRatingSession() {
   const starsHtml = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   const sugEl = document.getElementById('rs-rym-suggestion');
 
-  if (isTracks) {
+  if (mode === 'tracks') {
     const t = tracks.find(x => x.id === queue[0]);
     if (!t) { ratingQueueTracks.shift(); renderRatingSession(); return; }
     const lfExact = getLfExactMap();
@@ -12559,6 +12602,17 @@ function renderRatingSession() {
     document.getElementById('rs-artist').textContent = t.artist;
     document.getElementById('rs-meta').textContent = [t.album, (t.format || '').toUpperCase()].filter(Boolean).join(' · ');
     document.getElementById('rs-plays').textContent = plays ? `${plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
+    if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
+  } else if (mode === 'albumtracks') {
+    const q = queue[0];
+    const a = albums.find(x => x.id === q.albumId);
+    if (!a) { ratingQueueAlbumTracks.shift(); renderRatingSession(); return; }
+
+    document.getElementById('rs-cover').innerHTML = albumAvatar(a);
+    document.getElementById('rs-title').textContent = q.title;
+    document.getElementById('rs-artist').textContent = q.artist;
+    document.getElementById('rs-meta').textContent = [q.position ? `Piste ${q.position}` : '', q.album].filter(Boolean).join(' · ');
+    document.getElementById('rs-plays').textContent = q.plays ? `${q.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
     if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
   } else {
     const a = albums.find(x => x.id === queue[0]);
@@ -12597,6 +12651,16 @@ function rsRateCurrent(note) {
     saveToStorage();
     ratingQueueTracks.shift();
     toast(`${t.title} noté ${note}★`);
+  } else if (ratingSessionMode === 'albumtracks') {
+    const q = ratingQueueAlbumTracks[0];
+    if (!q) return;
+    const key = trackNoteKey(q.albumId, q.title);
+    trackNoteOverrides[key] = note;
+    invalidateCache();
+    queueNoteToReport('track', { artist: q.artist, title: q.title }, note);
+    saveToStorage();
+    ratingQueueAlbumTracks.shift();
+    toast(`${q.title} noté ${note}★`);
   } else {
     const id = ratingQueue[0];
     if (!id) return;
@@ -12612,7 +12676,9 @@ function rsRateCurrent(note) {
 }
 
 function rsSkipCurrent() {
-  const queue = ratingSessionMode === 'tracks' ? ratingQueueTracks : ratingQueue;
+  const queue = ratingSessionMode === 'tracks' ? ratingQueueTracks
+    : ratingSessionMode === 'albumtracks' ? ratingQueueAlbumTracks
+    : ratingQueue;
   if (queue.length < 2) return;
   queue.push(queue.shift());
   renderRatingSession();
@@ -12622,6 +12688,9 @@ function rsListenCurrent() {
   if (ratingSessionMode === 'tracks') {
     const t = tracks.find(x => x.id === ratingQueueTracks[0]);
     if (t) openYouTubeMusicSearch(t.artist, t.title);
+  } else if (ratingSessionMode === 'albumtracks') {
+    const q = ratingQueueAlbumTracks[0];
+    if (q) openYouTubeMusicSearch(q.artist, q.title);
   } else {
     const a = albums.find(x => x.id === ratingQueue[0]);
     if (a) openYouTubeMusicForAlbum(a);
