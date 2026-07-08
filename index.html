@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-08 — 🐛 Fix majeur : retirer un morceau de la wishlist en supprimait plusieurs d'un coup (même bug latent côté wishlist albums et Notes à reporter). Cause : nextId (compteur uid() partagé par wishlist/trackWishlist/notesToReport/albums) n'était recalculé, à chaque chargement, qu'à partir de albums/tracks — jamais des wishlist/trackWishlist/notesToReport qui utilisent pourtant aussi uid(). Pire, dans loadFromSupabase() la ligne de recalcul mappait chaque track sur la CONSTANTE 1 (`tracks.map(t => 1)`, résidu de la migration des tracks vers des pseudo-ids texte) au lieu de leurs ids réels — nextId retombait donc à ~2 à CHAQUE chargement Supabase. De nouveaux ajouts réutilisaient alors des ids déjà pris par d'anciennes entrées ; plusieurs entrées finissaient par partager le même id ; un clic "retirer" (filter par id) les supprimait toutes ensemble. Corrigé : nouveau computeNextId() qui prend le max sur albums + wishlist + trackWishlist + notesToReport, appliqué aux 5 points de chargement (localStorage, Supabase — collection pleine et vide —, restauration JSON, restauration de snapshot). Ajout de repairDuplicateIds() qui répare automatiquement les doublons déjà présents (réattribue un nouvel id aux entrées wishlist/trackWishlist/notesToReport arrivées après un doublon, sauvegarde immédiatement si une réparation a eu lieu) — donc corrige aussi les dégâts déjà causés par ce bug dans la collection actuelle, dès le prochain chargement. -->
+<!-- APP_VERSION: v2026.07.08-09 — Fix notation pistes d'album (Session notation + modale) : les demi-étoiles utilisaient des onclick inline avec id/titre encodés en base64 (sid()/unsid()) — remplacé par des attributs data-* + une écoute déléguée unique (document.addEventListener('click', ...)), plus robuste. Corrige au passage une comparaison stricte number/string (albums[].id est un nombre, l'id décodé était toujours une string) qui empêchait silencieusement l'alimentation de "Notes à reporter" pour les pistes d'album. Ajout demandé : la notation ALBUM dans la Session notation supporte désormais aussi les demi-étoiles (même widget hstar-* que les pistes, juste plus grand — bigHalfStarsHtml()), alors qu'elle n'acceptait auparavant que des étoiles entières (1 à 5). La notation des morceaux isolés reste en étoiles entières. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -463,6 +463,7 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .modal-star.on { color: var(--amber); }
 .hstars { display: inline-flex; gap: 1px; }
 .hstar-wrap { position: relative; display: inline-block; width: 15px; height: 15px; font-size: 15px; line-height: 1; }
+.hstar-wrap-lg { width: 34px; height: 34px; font-size: 34px; }
 .hstar-bg { position: absolute; top: 0; left: 0; color: var(--border2); }
 .hstar-fill { position: absolute; top: 0; left: 0; overflow: hidden; color: var(--amber); white-space: nowrap; pointer-events: none; }
 .hstar-hit { position: absolute; top: 0; bottom: 0; width: 50%; opacity: 0; border: none; padding: 0; margin: 0; cursor: pointer; background: none; }
@@ -711,7 +712,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-08</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-09</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -3729,6 +3730,12 @@ function renderAlbums() {
 
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Comme esc() mais échappe aussi les guillemets — pour un usage dans un attribut HTML
+// double-quoté (ex: data-title="...") où esc() seul ne suffit pas.
+function escAttr(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // Échappe un id (normalizeKey texte) pour usage dans un attribut onclick HTML
@@ -13151,7 +13158,6 @@ function renderRatingSession() {
   if (emptyEl) emptyEl.style.display = 'none';
   if (cardEl) cardEl.style.display = 'block';
 
-  const starsHtml = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   const sugEl = document.getElementById('rs-rym-suggestion');
   const tracklistWrapEl = document.getElementById('rs-album-tracklist-wrap');
 
@@ -13168,6 +13174,7 @@ function renderRatingSession() {
     document.getElementById('rs-plays').textContent = plays ? `${plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
     if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
     if (tracklistWrapEl) tracklistWrapEl.style.display = 'none';
+    document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   } else {
     const a = albums.find(x => x.id === queue[0]);
     if (!a) { ratingQueue.shift(); renderRatingSession(); return; }
@@ -13194,9 +13201,10 @@ function renderRatingSession() {
     const hasTracklist = (albumTracksCache[a.id] || []).some(t => t.source === 'musicbee');
     if (tracklistWrapEl) tracklistWrapEl.style.display = hasTracklist ? 'block' : 'none';
     if (hasTracklist) renderAlbumTracklistPanel(a.id, 'rs-album-tracklist-list');
-  }
 
-  document.getElementById('rs-stars').innerHTML = starsHtml;
+    // Notation album en demi-étoiles (comme les pistes), pas seulement des étoiles entières
+    document.getElementById('rs-stars').innerHTML = bigHalfStarsHtml(a.note || 0);
+  }
 }
 
 function rsRateCurrent(note) {
@@ -13358,19 +13366,49 @@ function trackNoteKey(albumId, title) {
   return albumId + '§' + normalizeKey('', title).replace('|||', '');
 }
 
-function halfStarsHtml(value, albumIdSid, titleSid) {
+// Widget demi-étoiles (piste d'album) — data-* + délégation d'événement plutôt que des onclick
+// inline avec ids/titres encodés en base64 (sid()/unsid()), pour éliminer tout risque d'échappement
+// et permettre un seul point d'écoute fiable quel que soit le conteneur (modale ou session).
+function halfStarsHtml(value, albumId, title) {
   let html = '';
   for (let i = 1; i <= 5; i++) {
     const fillPct = value >= i ? 100 : (value >= i - 0.5 ? 50 : 0);
     html += `<span class="hstar-wrap">
       <span class="hstar-bg">★</span>
       <span class="hstar-fill" style="width:${fillPct}%">★</span>
-      <button class="hstar-hit left" onclick="rateAlbumTrack('${albumIdSid}','${titleSid}',${i - 0.5})" title="${i - 0.5}★"></button>
-      <button class="hstar-hit right" onclick="rateAlbumTrack('${albumIdSid}','${titleSid}',${i})" title="${i}★"></button>
+      <button class="hstar-hit left" data-album-id="${escAttr(albumId)}" data-title="${escAttr(title)}" data-value="${i - 0.5}" title="${i - 0.5}★"></button>
+      <button class="hstar-hit right" data-album-id="${escAttr(albumId)}" data-title="${escAttr(title)}" data-value="${i}" title="${i}★"></button>
     </span>`;
   }
   return html;
 }
+
+// Widget demi-étoiles grand format pour la notation ALBUM de la Session notation (même mécanique
+// que halfStarsHtml, juste plus grand et sans album-id/title car la cible est déterminée par
+// rsRateCurrent() via la file en cours, pas par les data-*).
+function bigHalfStarsHtml(value) {
+  let html = '';
+  for (let i = 1; i <= 5; i++) {
+    const fillPct = value >= i ? 100 : (value >= i - 0.5 ? 50 : 0);
+    html += `<span class="hstar-wrap hstar-wrap-lg">
+      <span class="hstar-bg">★</span>
+      <span class="hstar-fill" style="width:${fillPct}%">★</span>
+      <button class="hstar-hit rs-star-hit left" data-value="${i - 0.5}" title="${i - 0.5}★"></button>
+      <button class="hstar-hit rs-star-hit right" data-value="${i}" title="${i}★"></button>
+    </span>`;
+  }
+  return html;
+}
+
+// Écoute déléguée unique pour tous les widgets demi-étoiles de l'app (modale tracklist, panneau
+// Session notation, gros widget album de la Session notation) — évite de ré-attacher des handlers
+// à chaque re-rendu et élimine les soucis d'échappement des onclick inline précédents.
+document.addEventListener('click', function(e) {
+  const rsBtn = e.target.closest('.rs-star-hit');
+  if (rsBtn) { rsRateCurrent(parseFloat(rsBtn.dataset.value)); return; }
+  const btn = e.target.closest('.hstar-hit');
+  if (btn) { rateAlbumTrack(btn.dataset.albumId, btn.dataset.title, parseFloat(btn.dataset.value)); }
+});
 
 function renderAlbumTracklistPanel(albumId, containerId) {
   containerId = containerId || 'modal-tracklist-list';
@@ -13384,28 +13422,27 @@ function renderAlbumTracklistPanel(albumId, containerId) {
     wrap.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:6px 2px">Aucune tracklist MusicBee associée à cet album (importez/associez le XML MusicBee).</div>';
     return;
   }
-  const albumIdSid = sid(albumId);
   wrap.innerHTML = mbTracks.map(t => {
     const key = trackNoteKey(albumId, t.title);
     const value = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (t.rating || 0);
-    const titleSid = sid(t.title);
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;border-bottom:1px solid var(--border)">
       <div style="font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1" title="${esc(t.title)}">${t.position ? esc(t.position) + '. ' : ''}${esc(t.title)}</div>
-      <div class="hstars">${halfStarsHtml(value, albumIdSid, titleSid)}</div>
+      <div class="hstars">${halfStarsHtml(value, albumId, t.title)}</div>
     </div>`;
   }).join('');
 }
 
-function rateAlbumTrack(albumIdSid, titleSid, value) {
-  const albumId = unsid(albumIdSid);
-  const title = unsid(titleSid);
+function rateAlbumTrack(albumId, title, value) {
   const key = trackNoteKey(albumId, title);
   const mbT = (albumTracksCache[albumId] || []).find(t => t.source === 'musicbee' && t.title === title);
   const current = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (mbT?.rating || 0);
   const newVal = current === value ? 0 : value; // reclic sur la même valeur → efface la note
   trackNoteOverrides[key] = newVal;
   invalidateCache(); // buildAlbumTracksList doit refléter le nouveau rating
-  const album = albums.find(x => x.id === albumId);
+  // Comparaison souple : albumId ici est toujours une string (attribut data-*), alors que
+  // albums[].id est un nombre (uid()) — l'ancienne version en === stricte ne matchait donc jamais,
+  // ce qui empêchait silencieusement l'alimentation de "Notes à reporter" pour les pistes d'album.
+  const album = albums.find(x => String(x.id) === String(albumId));
   if (newVal && album) queueNoteToReport('track', { artist: album.artist, title }, newVal);
   saveToStorage();
   // Rafraîchit les 2 emplacements possibles où cette tracklist peut être affichée (modale édition
