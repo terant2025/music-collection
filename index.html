@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-09 — Fix notation pistes d'album (Session notation + modale) : les demi-étoiles utilisaient des onclick inline avec id/titre encodés en base64 (sid()/unsid()) — remplacé par des attributs data-* + une écoute déléguée unique (document.addEventListener('click', ...)), plus robuste. Corrige au passage une comparaison stricte number/string (albums[].id est un nombre, l'id décodé était toujours une string) qui empêchait silencieusement l'alimentation de "Notes à reporter" pour les pistes d'album. Ajout demandé : la notation ALBUM dans la Session notation supporte désormais aussi les demi-étoiles (même widget hstar-* que les pistes, juste plus grand — bigHalfStarsHtml()), alors qu'elle n'acceptait auparavant que des étoiles entières (1 à 5). La notation des morceaux isolés reste en étoiles entières. -->
+<!-- APP_VERSION: v2026.07.08-10 — Nouveau bouton "☢️ Reset complet last.fm" (🩺 Diagnostic d'intégrité) pour un doublement d'écoutes qui persiste malgré une resync classique. Cause probable : une resync (même complète) recalcule un total correct en mémoire puis UPSERT vers Supabase (onConflict artist,track,album) — ça n'écrase que les lignes dont la clé correspond exactement, une ligne orpheline d'une variante de clé antérieure (résidu de l'ancien bug ListenBrainz corrigé en v2026.07.08-04, ou de toute autre source de duplication passée) reste en base et se rajoute au total via la consolidation par (artiste, titre) de l'écran "last.fm morceaux". cleanupLastfmDuplicates() (bouton existant "🧹 Doublons last.fm") ne peut rien pour ce cas précis : il ne fusionne que des clés différentes, pas un compteur déjà gonflé À L'INTÉRIEUR d'une même clé. resetLastfmCompletely() purge entièrement lastfm_data + lastfm_tracks côté Supabase et l'état local (compteurs, timestamps de sync, checkpoints), remet albums[].plays à 0, puis laisse l'utilisateur relancer "Sync last.fm" pour tout recharger depuis l'API sur une base garantie propre. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -712,7 +712,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-09</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-10</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2181,6 +2181,7 @@ input[type="file"] { display: none; }
       <button class="btn btn-sm" onclick="closeIntegrityModal();runDeduplication()">🔧 Fusionner les doublons</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openDupFinderModal()">🔍 Doublons potentiels</button>
       <button class="btn btn-sm" onclick="cleanupLastfmDuplicates()">🧹 Doublons last.fm</button>
+      <button class="btn btn-sm btn-danger" onclick="resetLastfmCompletely()" title="Efface tout (Supabase + local) et repart de zéro depuis l'API last.fm — pour des écoutes qui restent doublées malgré une resync classique">☢️ Reset complet last.fm</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();nav('assocreview');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
     </div>
     <div id="integrity-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
@@ -12046,6 +12047,47 @@ async function cleanupLastfmDuplicates() {
     toast(`✓ last.fm nettoyé : ${removedAlbums} doublon(s) albums, ${removedTracks} doublon(s) morceaux fusionnés`);
   } catch (e) {
     toast('Erreur nettoyage Supabase : ' + (e.message || e), 'error');
+  }
+}
+
+// ===================== RESET COMPLET LAST.FM (Supabase + local) =====================
+// cleanupLastfmDuplicates() ci-dessus ne fusionne que les entrées qui diffèrent par la CLÉ
+// (casse/ponctuation) — il ne peut rien pour une entrée dont le compteur .plays est déjà gonflé
+// À L'INTÉRIEUR d'une même clé (ex: ancien bug ListenBrainz corrigé en v2026.07.08-04, ou tout
+// autre résidu antérieur). Une resync classique (↺ Resync) recalcule bien un total correct en
+// mémoire, mais l'upsert Supabase (onConflict artist,track,album) n'écrase que les lignes dont la
+// clé correspond exactement — une éventuelle ligne orpheline d'une variante de clé antérieure (ex:
+// casse différente du tag album selon la source) reste en base et se rajoute au total affiché à la
+// prochaine consolidation par (artiste, titre). Seule une purge complète des tables AVANT resync
+// garantit un état propre, quelle que soit l'origine du résidu.
+async function resetLastfmCompletely() {
+  if (!confirm('Ceci va effacer TOUTES les données last.fm (albums + morceaux) côté Supabase et en local, puis repartir de zéro.\n\nÀ utiliser si des écoutes restent doublées malgré une resync classique (résidu d\'un bug déjà corrigé, ou de duplication de lignes en base).\n\nAprès la purge, relance manuellement "Sync last.fm" pour tout recharger depuis l\'API — ça peut prendre du temps selon la taille de ton historique.\n\nContinuer ?')) return;
+  closeIntegrityModal();
+  const status = document.getElementById('status-lastfm');
+  if (status) { status.textContent = 'Purge complète last.fm en cours…'; status.className = 'status'; }
+  try {
+    if (window._sb) {
+      await window._sb.from('lastfm_data').delete().neq('artist', '___never___');
+      await window._sb.from('lastfm_tracks').delete().neq('artist', '___never___');
+      await window._sb.from('meta').delete().in('key', ['lastfm_sync_ts', 'lb_sync_ts']);
+    }
+    lastfmData = [];
+    _lastfmCounts = {};
+    _lastfmTrackCounts = {};
+    albums.forEach(a => { a.plays = 0; });
+    localStorage.removeItem(LASTFM_SYNC_KEY);
+    localStorage.removeItem(LB_SYNC_KEY);
+    clearLastfmCheckpoint();
+    localStorage.removeItem('lb_checkpoint');
+    invalidateCache();
+    renderAlbums();
+    updateNavBadges();
+    saveToStorage();
+    if (status) { status.textContent = '✓ Purgé — clique "Sync last.fm" pour tout recharger depuis zéro.'; status.className = 'status ok'; }
+    toast('✓ last.fm entièrement purgé — relance "Sync last.fm" pour repartir de zéro');
+  } catch(e) {
+    if (status) { status.textContent = 'Erreur purge : ' + (e.message || e); status.className = 'status err'; }
+    toast('Erreur purge last.fm : ' + (e.message || e), 'error');
   }
 }
 
