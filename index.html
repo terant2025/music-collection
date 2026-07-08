@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-10 — Nouveau bouton "☢️ Reset complet last.fm" (🩺 Diagnostic d'intégrité) pour un doublement d'écoutes qui persiste malgré une resync classique. Cause probable : une resync (même complète) recalcule un total correct en mémoire puis UPSERT vers Supabase (onConflict artist,track,album) — ça n'écrase que les lignes dont la clé correspond exactement, une ligne orpheline d'une variante de clé antérieure (résidu de l'ancien bug ListenBrainz corrigé en v2026.07.08-04, ou de toute autre source de duplication passée) reste en base et se rajoute au total via la consolidation par (artiste, titre) de l'écran "last.fm morceaux". cleanupLastfmDuplicates() (bouton existant "🧹 Doublons last.fm") ne peut rien pour ce cas précis : il ne fusionne que des clés différentes, pas un compteur déjà gonflé À L'INTÉRIEUR d'une même clé. resetLastfmCompletely() purge entièrement lastfm_data + lastfm_tracks côté Supabase et l'état local (compteurs, timestamps de sync, checkpoints), remet albums[].plays à 0, puis laisse l'utilisateur relancer "Sync last.fm" pour tout recharger depuis l'API sur une base garantie propre. -->
+<!-- APP_VERSION: v2026.07.08-11 — Suite au retour "les demi-étoiles ne marchent toujours pas" : test isolé (jsdom, clic DOM réellement dispatché sur le bouton, pas un appel direct de fonction) confirmant que la mécanique clic → rateAlbumTrack() → trackNoteOverrides fonctionne correctement de bout en bout côté code. La capture montrait une icône flottante (losange/étincelle) juste au-dessus de la rangée d'étoiles de la 1ère piste, caractéristique d'une extension navigateur (assistant IA, traducteur, etc.) qui s'incruste au survol — probable interception du clic avant qu'il n'atteigne le bouton. Mesures défensives en attendant confirmation : cible de clic des demi-étoiles piste agrandie (15px → 18px), z-index explicite sur les boutons de clic pour gagner la priorité d'empilement dans les cas ambigus. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -462,11 +462,11 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .modal-star { font-size: 22px; cursor: pointer; color: var(--border2); transition: color 0.1s; background: none; border: none; }
 .modal-star.on { color: var(--amber); }
 .hstars { display: inline-flex; gap: 1px; }
-.hstar-wrap { position: relative; display: inline-block; width: 15px; height: 15px; font-size: 15px; line-height: 1; }
+.hstar-wrap { position: relative; display: inline-block; width: 18px; height: 18px; font-size: 18px; line-height: 1; }
 .hstar-wrap-lg { width: 34px; height: 34px; font-size: 34px; }
 .hstar-bg { position: absolute; top: 0; left: 0; color: var(--border2); }
 .hstar-fill { position: absolute; top: 0; left: 0; overflow: hidden; color: var(--amber); white-space: nowrap; pointer-events: none; }
-.hstar-hit { position: absolute; top: 0; bottom: 0; width: 50%; opacity: 0; border: none; padding: 0; margin: 0; cursor: pointer; background: none; }
+.hstar-hit { position: absolute; top: 0; bottom: 0; width: 50%; opacity: 0; border: none; padding: 0; margin: 0; cursor: pointer; background: none; z-index: 2; }
 .hstar-hit.left { left: 0; }
 .hstar-hit.right { right: 0; }
 
@@ -712,7 +712,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-10</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-11</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
