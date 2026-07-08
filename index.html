@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-01 — Nouveau mode "💿 Pistes d'albums" dans Session notation : jusqu'ici seuls les albums et les morceaux isolés (tracks[]) pouvaient y être notés, il n'y avait aucun moyen de noter piste par piste les morceaux appartenant à un album (déjà possible mais seulement un par un dans la modal album). Nouveau 3e onglet qui construit une file de toutes les pistes MusicBee/Discogs des albums possédés sans note (override trackNoteOverrides ou note importée), triée par écoutes last.fm décroissantes, réutilise le même flux de notation (étoiles 1-5, raccourcis clavier, passer, écouter sur YouTube Music) que les 2 autres modes. Écrit dans trackNoteOverrides comme le fait déjà rateAlbumTrack() depuis la modal album — même persistance, même file "Notes à reporter". -->
+<!-- APP_VERSION: v2026.07.08-03 — Nouvel onglet "🕐 Scrobbles récents" dans Session notation : liste live des derniers scrobbles last.fm (user.getrecenttracks), plus récents en premier, jamais persistée (la sync habituelle n'agrège que des compteurs, pas l'horodatage par scrobble — donc rien d'exploitable dans les données déjà stockées, ce panneau refait l'appel API à chaque ouverture/actualisation). Deux vues : "💿 Albums" (dédoublonnée par artiste+album en gardant le scrobble le plus récent de chacun — reconstitue une liste d'albums récemment écoutés) et "🎵 Morceaux" (liste brute de chaque scrobble individuel). Bouton "Charger plus" pour paginer (200 scrobbles/page, limite API last.fm). Lecture seule, pas de notation associée. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -708,7 +708,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-01</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-03</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -812,10 +812,21 @@ input[type="file"] { display: none; }
         </div>
       </div>
 
+      <div id="bulk-actions-bar" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="bulk-actions-count" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm" onclick="bulkAddToWishlist()" title="Ajouter les albums sélectionnés à la wishlist">🎯 Wishlist</button>
+        <button class="btn btn-sm" onclick="bulkMarkForSale()" title="Marquer les albums sélectionnés comme à vendre">💸 Marquer à vendre</button>
+        <button class="btn btn-sm" onclick="bulkUnmarkOk()" title="Retirer les albums sélectionnés du dossier Ok">✅ Retirer de Ok</button>
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteAlbums()" title="Supprimer les albums sélectionnés">✕ Supprimer</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearAlbumSelection()">Annuler la sélection</button>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:26px"><input type="checkbox" id="select-all-albums" onchange="toggleSelectAllAlbums(this.checked)" title="Sélectionner tout (page courante)"></th>
               <th>Artiste / Album</th>
               <th>Année</th>
               <th>Genre</th>
@@ -1702,8 +1713,9 @@ input[type="file"] { display: none; }
         <button class="covers-filter-btn active" id="rs-mode-btn-albums" onclick="setRatingSessionMode('albums')">🎵 Albums</button>
         <button class="covers-filter-btn" id="rs-mode-btn-tracks" onclick="setRatingSessionMode('tracks')">🎧 Morceaux isolés</button>
         <button class="covers-filter-btn" id="rs-mode-btn-albumtracks" onclick="setRatingSessionMode('albumtracks')">💿 Pistes d'albums</button>
+        <button class="covers-filter-btn" id="rs-mode-btn-scrobbles" onclick="setRatingSessionMode('scrobbles')">🕐 Scrobbles récents</button>
       </div>
-      <div class="rate-session-progress-wrap">
+      <div class="rate-session-progress-wrap" id="rs-progress-wrap">
         <div class="rate-session-progress-bar"><div class="rate-session-progress-fill" id="rs-progress-fill" style="width:0%"></div></div>
         <div id="rs-progress-label" style="font-size:12px;color:var(--text3);margin-top:6px">0 / 0 albums notés</div>
       </div>
@@ -1729,6 +1741,29 @@ input[type="file"] { display: none; }
               <button class="btn btn-sm" onclick="rsSkipCurrent()">⏭ Passer</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Panneau Scrobbles récents : lecture directe live de l'API last.fm (user.getrecenttracks),
+           rien n'est stocké ni persisté — la sync habituelle n'agrège que des compteurs, pas les
+           scrobbles individuels avec horodatage, donc pas d'autre moyen de les lister. -->
+      <div id="rs-scrobbles-wrap" style="display:none">
+        <div class="covers-toolbar" style="justify-content:center;margin-bottom:16px">
+          <button class="covers-filter-btn active" id="rs-scrobbles-view-albums" onclick="setScrobblesViewMode('albums')">💿 Albums</button>
+          <button class="covers-filter-btn" id="rs-scrobbles-view-tracks" onclick="setScrobblesViewMode('tracks')">🎵 Morceaux</button>
+        </div>
+        <div style="text-align:center;margin-bottom:14px">
+          <button class="btn btn-sm" id="rs-scrobbles-refresh-btn" onclick="loadRecentScrobbles(true)">🔄 Actualiser</button>
+          <span id="rs-scrobbles-status" style="font-size:12px;color:var(--text3);margin-left:8px"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead id="rs-scrobbles-thead"></thead>
+            <tbody id="rs-scrobbles-tbody"></tbody>
+          </table>
+        </div>
+        <div style="text-align:center;margin-top:16px">
+          <button class="btn btn-sm" id="rs-scrobbles-more-btn" onclick="loadRecentScrobbles(false)" style="display:none">Charger plus</button>
         </div>
       </div>
     </div>
@@ -3377,6 +3412,125 @@ function sortedAlbums(list) {
   });
 }
 
+// ===================== SÉLECTION MULTIPLE / ACTIONS GROUPÉES (Collection) =====================
+// Set d'ids réels (pas sid()) — persiste volontairement entre les pages pour permettre une
+// sélection à cheval sur plusieurs pages de résultats filtrés.
+let selectedAlbumIds = new Set();
+
+function toggleAlbumSelected(idSid, checked) {
+  const id = unsid(idSid);
+  const a = albums.find(x => x.id === id || x.id === String(id));
+  const realId = a ? a.id : id;
+  if (checked) selectedAlbumIds.add(realId); else selectedAlbumIds.delete(realId);
+  renderBulkActionsBar();
+}
+
+function toggleSelectAllAlbums(checked) {
+  document.querySelectorAll('#album-tbody .row-select').forEach(cb => {
+    cb.checked = checked;
+    const id = unsid(cb.dataset.id);
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    const realId = a ? a.id : id;
+    if (checked) selectedAlbumIds.add(realId); else selectedAlbumIds.delete(realId);
+  });
+  renderBulkActionsBar();
+}
+
+function clearAlbumSelection() {
+  selectedAlbumIds.clear();
+  document.querySelectorAll('#album-tbody .row-select').forEach(cb => { cb.checked = false; });
+  const selAllCb = document.getElementById('select-all-albums');
+  if (selAllCb) selAllCb.checked = false;
+  renderBulkActionsBar();
+}
+
+function renderBulkActionsBar() {
+  const bar = document.getElementById('bulk-actions-bar');
+  const countEl = document.getElementById('bulk-actions-count');
+  if (!bar) return;
+  const n = selectedAlbumIds.size;
+  if (countEl) countEl.textContent = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+function bulkAddToWishlist() {
+  if (!selectedAlbumIds.size) return;
+  let added = 0, skipped = 0;
+  selectedAlbumIds.forEach(id => {
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    if (!a) return;
+    const key = normalizeKey(a.artist, a.album);
+    if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) { skipped++; return; }
+    let prio = 'low';
+    if ((a.plays || 0) >= 50) prio = 'high'; else if ((a.plays || 0) >= 10) prio = 'mid';
+    wishlist.push({ id: uid(), artist: a.artist, album: a.album, year: a.year || '', source: 'manual',
+      prio, plays: a.plays || 0, rymRating: 0, notes: '', addedAt: Date.now() });
+    added++;
+  });
+  updateNavBadges();
+  saveToStorage();
+  renderAlbums();
+  clearAlbumSelection();
+  toast(`${added} album(s) ajouté(s) à la wishlist${skipped ? ` — ${skipped} déjà présent(s)` : ''}`);
+}
+
+function bulkMarkForSale() {
+  if (!selectedAlbumIds.size) return;
+  if (!confirm(`Marquer ${selectedAlbumIds.size} album(s) comme "à vendre" ?`)) return;
+  let n = 0;
+  selectedAlbumIds.forEach(id => {
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    if (!a) return;
+    a.forSale = true;
+    if (!a.folders) a.folders = [];
+    if (!a.folders.includes('forsale')) a.folders.push('forsale');
+    n++;
+  });
+  invalidateCache();
+  saveToStorage();
+  renderDiscographie();
+  renderForSale();
+  renderAlbums();
+  updateNavBadges();
+  clearAlbumSelection();
+  toast(`${n} album(s) marqué(s) à vendre`);
+}
+
+function bulkUnmarkOk() {
+  if (!selectedAlbumIds.size) return;
+  let n = 0;
+  selectedAlbumIds.forEach(id => {
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    if (!a || !a.okFolder) return;
+    a.okFolder = false;
+    if (a.folders) a.folders = a.folders.filter(f => f !== 'ok');
+    n++;
+  });
+  if (!n) { toast('Aucun album sélectionné n\u2019est dans Ok', 'warn'); return; }
+  invalidateCache();
+  saveToStorage();
+  renderOkAlbums();
+  renderAlbums();
+  updateNavBadges();
+  clearAlbumSelection();
+  toast(`${n} album(s) retiré(s) de Ok`);
+}
+
+function bulkDeleteAlbums() {
+  if (!selectedAlbumIds.size) return;
+  const n = selectedAlbumIds.size;
+  if (!confirm(`Supprimer définitivement ${n} album(s) ? Cette action est irréversible.`)) return;
+  albums = albums.filter(a => !selectedAlbumIds.has(a.id) && !selectedAlbumIds.has(String(a.id)));
+  stockItems = stockItems.filter(s => !selectedAlbumIds.has(s.id) && !selectedAlbumIds.has(String(s.id)));
+  invalidateCache();
+  saveToStorage();
+  renderAlbums();
+  renderStock();
+  updateNavBadges();
+  clearAlbumSelection();
+  toast(`${n} album(s) supprimé(s)`);
+}
+
 function renderAlbums() {
   updateStats();
   updateGenreFilter();
@@ -3398,8 +3552,9 @@ function renderAlbums() {
   const stockKeys = getStockKeysSet();
   const tbody = document.getElementById('album-tbody');
   if (!slice.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
     document.getElementById('page-info').textContent = '';
+    renderBulkActionsBar();
     return;
   }
 
@@ -3467,6 +3622,7 @@ function renderAlbums() {
       : '';
 
     return `<tr onclick="${onclickRow}" style="cursor:pointer">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${sid(a.id)}" ${selectedAlbumIds.has(a.id) ? 'checked' : ''} onchange="toggleAlbumSelected('${sid(a.id)}', this.checked)"></td>
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${albumAvatar(a)}</div>
@@ -3495,6 +3651,9 @@ function renderAlbums() {
   }).join('');
 
   document.getElementById('page-info').textContent = `Page ${currentPage} / ${pages} — ${total} albums`;
+  renderBulkActionsBar();
+  const selAllCb = document.getElementById('select-all-albums');
+  if (selAllCb) selAllCb.checked = slice.length > 0 && slice.every(a => selectedAlbumIds.has(a.id));
 }
 
 function esc(s) {
@@ -12525,6 +12684,121 @@ function buildRatingQueueAlbumTracks() {
   return queue;
 }
 
+// ===================== SCROBBLES RÉCENTS (Session notation) =====================
+// Lecture live de l'API last.fm (user.getrecenttracks) — volontairement non persistée : la sync
+// habituelle n'agrège que des compteurs (lastfmData/_lastfmTrackCounts), jamais l'horodatage par
+// scrobble individuel, donc impossible de reconstituer un historique chronologique depuis les
+// données déjà stockées. Chaque ouverture/actualisation refait un appel direct à l'API.
+let scrobblesViewMode = 'albums'; // 'albums' | 'tracks'
+let _scrobblesRaw = []; // [{ artist, title, album, ts }] — ordre = plus récent en premier (ordre natif de l'API)
+let _scrobblesPage = 1;
+let _scrobblesTotalPages = 1;
+let _scrobblesLoading = false;
+
+function setScrobblesViewMode(mode) {
+  scrobblesViewMode = mode;
+  const btnA = document.getElementById('rs-scrobbles-view-albums');
+  const btnT = document.getElementById('rs-scrobbles-view-tracks');
+  if (btnA) btnA.classList.toggle('active', mode === 'albums');
+  if (btnT) btnT.classList.toggle('active', mode === 'tracks');
+  renderScrobblesList();
+}
+
+async function loadRecentScrobbles(reset) {
+  if (_scrobblesLoading) return;
+  if (!_lastfmApiKey || !_lastfmUser) {
+    const st = document.getElementById('rs-scrobbles-status');
+    if (st) st.textContent = 'Identifiants last.fm non configurés (Import/Export).';
+    return;
+  }
+  _scrobblesLoading = true;
+  if (reset) { _scrobblesRaw = []; _scrobblesPage = 1; _scrobblesTotalPages = 1; }
+  const btn = document.getElementById('rs-scrobbles-refresh-btn');
+  const moreBtn = document.getElementById('rs-scrobbles-more-btn');
+  const status = document.getElementById('rs-scrobbles-status');
+  if (btn) btn.disabled = true;
+  if (moreBtn) moreBtn.disabled = true;
+  if (status) status.textContent = 'Chargement…';
+
+  try {
+    const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&limit=200&page=${_scrobblesPage}&extended=0`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.error) {
+      if (status) status.textContent = `Erreur last.fm : ${data.message || data.error}`;
+      return;
+    }
+    const rawTracks = data.recenttracks?.track || [];
+    _scrobblesTotalPages = parseInt(data.recenttracks?.['@attr']?.totalPages || 1);
+    rawTracks.forEach(t => {
+      if (t['@attr']?.nowplaying) return;
+      const artist = String(t.artist?.['#text'] || t.artist?.name || t.artist || '').trim();
+      const title  = String(t.name || '').trim();
+      const album  = String(t.album?.['#text'] || t.album?.name || (typeof t.album === 'string' ? t.album : '') || '').trim();
+      const ts = parseInt(t.date?.uts || 0);
+      if (!artist || !title) return;
+      _scrobblesRaw.push({ artist, title, album, ts });
+    });
+    if (status) status.textContent = `${_scrobblesRaw.length} scrobble(s) chargé(s) — page ${_scrobblesPage} / ${_scrobblesTotalPages}`;
+    if (moreBtn) moreBtn.style.display = _scrobblesPage < _scrobblesTotalPages ? 'inline-block' : 'none';
+    _scrobblesPage++;
+    renderScrobblesList();
+  } catch (e) {
+    if (status) status.textContent = `Erreur réseau : ${e.message}`;
+  } finally {
+    _scrobblesLoading = false;
+    if (btn) btn.disabled = false;
+    if (moreBtn) moreBtn.disabled = false;
+  }
+}
+
+function fmtScrobbleDate(ts) {
+  if (!ts) return '–';
+  return new Date(ts * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderScrobblesList() {
+  const thead = document.getElementById('rs-scrobbles-thead');
+  const tbody = document.getElementById('rs-scrobbles-tbody');
+  if (!thead || !tbody) return;
+
+  if (scrobblesViewMode === 'tracks') {
+    thead.innerHTML = '<tr><th>Titre</th><th>Artiste</th><th>Album</th><th style="width:150px">Écouté le</th></tr>';
+    if (!_scrobblesRaw.length) {
+      tbody.innerHTML = '<tr><td colspan="4"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = _scrobblesRaw.map(s => `<tr>
+      <td style="font-weight:500">${esc(s.title)}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(s.artist)}</td>
+      <td style="font-size:12px;color:var(--text3)">${esc(s.album || '–')}</td>
+      <td class="mono" style="font-size:11px;color:var(--text3)">${fmtScrobbleDate(s.ts)}</td>
+    </tr>`).join('');
+  } else {
+    // Vue Albums : dédoublonnée en conservant l'ordre d'apparition (donc le scrobble le plus
+    // récent) de chaque couple artiste/album — reconstitue une liste d'albums récemment écoutés.
+    thead.innerHTML = '<tr><th>Album</th><th>Artiste</th><th style="width:150px">Dernière écoute</th></tr>';
+    const seen = new Set();
+    const albumsList = [];
+    _scrobblesRaw.forEach(s => {
+      if (!s.album) return;
+      const key = normalizeKey(s.artist, s.album);
+      if (seen.has(key)) return;
+      seen.add(key);
+      albumsList.push(s);
+    });
+    if (!albumsList.length) {
+      tbody.innerHTML = '<tr><td colspan="3"><div class="empty"><div class="empty-icon">🕐</div>Aucun scrobble chargé</div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = albumsList.map(s => `<tr>
+      <td style="font-weight:500">${esc(s.album)}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(s.artist)}</td>
+      <td class="mono" style="font-size:11px;color:var(--text3)">${fmtScrobbleDate(s.ts)}</td>
+    </tr>`).join('');
+  }
+}
+
 function initRatingSession() {
   ratingQueue = buildRatingQueue();
   ratingQueueTracks = buildRatingQueueTracks();
@@ -12537,14 +12811,33 @@ function setRatingSessionMode(mode) {
   const btnA = document.getElementById('rs-mode-btn-albums');
   const btnT = document.getElementById('rs-mode-btn-tracks');
   const btnAT = document.getElementById('rs-mode-btn-albumtracks');
+  const btnS = document.getElementById('rs-mode-btn-scrobbles');
   if (btnA) btnA.classList.toggle('active', mode === 'albums');
   if (btnT) btnT.classList.toggle('active', mode === 'tracks');
   if (btnAT) btnAT.classList.toggle('active', mode === 'albumtracks');
+  if (btnS) btnS.classList.toggle('active', mode === 'scrobbles');
   renderRatingSession();
 }
 
 function renderRatingSession() {
   const mode = ratingSessionMode;
+
+  // Mode "Scrobbles récents" : panneau à part, pas de file de notation (lecture seule, live API)
+  const progressWrapEl = document.getElementById('rs-progress-wrap');
+  const scrobblesWrapEl = document.getElementById('rs-scrobbles-wrap');
+  if (mode === 'scrobbles') {
+    if (progressWrapEl) progressWrapEl.style.display = 'none';
+    const emptyEl0 = document.getElementById('rs-empty');
+    const cardEl0 = document.getElementById('rs-card-wrap');
+    if (emptyEl0) emptyEl0.style.display = 'none';
+    if (cardEl0) cardEl0.style.display = 'none';
+    if (scrobblesWrapEl) scrobblesWrapEl.style.display = 'block';
+    if (!_scrobblesRaw.length && !_scrobblesLoading) loadRecentScrobbles(true);
+    else renderScrobblesList();
+    return;
+  }
+  if (progressWrapEl) progressWrapEl.style.display = '';
+  if (scrobblesWrapEl) scrobblesWrapEl.style.display = 'none';
 
   // Retirer des files les entrées notées/supprimées entretemps ailleurs dans l'app
   ratingQueue = ratingQueue.filter(id => {
