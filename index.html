@@ -7,6 +7,8 @@
 <!-- APP_VERSION: v2026.07.08-11 — Suite au retour "les demi-étoiles ne marchent toujours pas" : test isolé (jsdom, clic DOM réellement dispatché sur le bouton, pas un appel direct de fonction) confirmant que la mécanique clic → rateAlbumTrack() → trackNoteOverrides fonctionne correctement de bout en bout côté code. La capture montrait une icône flottante (losange/étincelle) juste au-dessus de la rangée d'étoiles de la 1ère piste, caractéristique d'une extension navigateur (assistant IA, traducteur, etc.) qui s'incruste au survol — probable interception du clic avant qu'il n'atteigne le bouton. Mesures défensives en attendant confirmation : cible de clic des demi-étoiles piste agrandie (15px → 18px), z-index explicite sur les boutons de clic pour gagner la priorité d'empilement dans les cas ambigus. -->
 <!-- APP_VERSION: v2026.07.08-12 — Clarification du panneau "Scrobbles récents" (Session notation) suite à question sur le rapatriement des notes RYM : (1) colonne RYM ajoutée à côté de Note dans la vue Albums, car la notation d'un album depuis ce panneau sert avant tout à alimenter RYM via "Notes à reporter" — elle n'était jusqu'ici jamais affichée nulle part dans ce panneau ; (2) vue Morceaux : la notation n'est plus possible sur un scrobble sans correspondance réelle dans la collection (morceau isolé ou piste d'un album possédé) — cellule Note grisée/non cliquable sinon, au lieu de créer silencieusement une entrée "Notes à reporter" sans destination utile ; (3) "Notes à reporter" : ajout d'onglets de filtre Tout/Albums/Morceaux, regroupement visuel par type avec en-têtes de groupe rappelant la cible (Albums→RYM, Morceaux→MusicBee), compteur détaillé par type au lieu d'un total unique. -->
 <!-- APP_VERSION: v2026.07.08-13 — Suite à alerte Supabase (RLS désactivé sur toutes les tables) + dépassement du quota egress gratuit (6.26 Go / 5 Go) : (1) BUG EGRESS CORRIGÉ — renderSnapshotsList() (modale "Snapshots Supabase") sélectionnait la colonne `data` complète (tout le JSON de la collection sérialisé) pour CHACUN des 10 snapshots conservés à chaque ouverture de la modale, uniquement pour afficher un compteur "X albums · Y morceaux" ; remplacé par une colonne `counts` légère calculée une fois à la création du snapshot (_snapshotCounts) — la colonne `data` n'est plus jamais téléchargée que pour un seul snapshot précis, à la restauration ou à la comparaison Journal. Migration SQL : ajout colonne `counts` + backfill des anciens snapshots (calcul côté base, aucun egress client). (2) RLS : migration SQL livrée séparément (migration_v2026.07.08-13.sql) activant Row-Level Security + policies permissives sur les 11 tables, avec avertissement explicite que ça ne protège pas réellement les données tant que la clé anon reste publique dans le HTML statique (satisfait l'audit Supabase, zéro régression). -->
+<!-- APP_VERSION: v2026.07.08-14 — Suite au retour "je peux toujours pas noter" sur la Session notation (extension navigateur qui intercepte le clic, cf. v2026.07.08-11) : ajout d'une saisie numérique de la note (champ + bouton "✓ Noter", Entrée pour valider) comme alternative aux clics sur étoiles, pour l'album/morceau courant ET pour chaque piste de la tracklist embarquée (clic sur le titre de la piste → prompt() natif, contourne toute interception DOM). Refactor : _applyAlbumTrackRating() factorise la mutation entre le clic étoile (toggle) et la saisie clavier (valeur absolue). Mise en page : cadre élargi (420px → 820px), pochette réduite (260px → 140px), layout horizontal pochette/infos au lieu d'une colonne centrée, tracklist embarquée sur 2 colonnes (CSS multi-colonnes) — tient sur l'écran sans scroll pour la plupart des albums. -->
+
 
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
@@ -401,24 +403,43 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
 .rate-session-progress-wrap { max-width: 560px; margin: 0 auto 28px; }
 .rate-session-progress-bar { height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
 .rate-session-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.2s; }
+/* v2026.07.08-14 : cadre élargi + layout horizontal (pochette à gauche, infos à droite) au lieu
+   d'une colonne unique centrée — l'ancien format (420px, pochette 260px) obligeait à scroller
+   pour voir la tracklist. La pochette est réduite (140px, suffisant pour identifier l'album) et
+   l'espace récupéré sert à afficher la tracklist sur 2 colonnes sans quitter l'écran. */
 .rate-session-card {
-  max-width: 420px; margin: 0 auto; background: var(--bg2); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 28px; text-align: center;
+  max-width: 820px; margin: 0 auto; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 24px 28px; text-align: left;
+  display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap;
 }
 .rate-session-cover {
-  width: 260px; height: 260px; margin: 0 auto 20px; border-radius: 10px; background: var(--bg4);
-  display: flex; align-items: center; justify-content: center; font-size: 48px; color: var(--text3);
-  overflow: hidden;
+  width: 140px; height: 140px; margin: 0; border-radius: 10px; background: var(--bg4);
+  display: flex; align-items: center; justify-content: center; font-size: 32px; color: var(--text3);
+  overflow: hidden; flex-shrink: 0;
 }
 .rate-session-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rate-session-info { flex: 1; min-width: 260px; }
 .rate-session-title { font-size: 18px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
 .rate-session-artist { font-size: 14px; color: var(--text2); margin-bottom: 10px; }
 .rate-session-meta { font-size: 12px; color: var(--text3); margin-bottom: 6px; }
 .rate-session-plays { font-size: 12px; color: var(--text3); font-family: var(--mono); margin-bottom: 14px; }
 .rate-session-actions { margin-bottom: 18px; }
-.rate-session-stars { display: flex; justify-content: center; gap: 6px; margin-bottom: 6px; }
-.rate-session-stars .star { font-size: 34px; }
+.rate-session-stars { display: flex; justify-content: flex-start; gap: 6px; margin-bottom: 6px; }
+.rate-session-stars .star { font-size: 30px; }
 .rate-session-nav { margin-top: 18px; }
+/* Saisie numérique de la note — alternative aux clics sur étoiles, contournant les extensions
+   navigateur (icône flottante) qui interceptent parfois le clic avant qu'il n'atteigne le bouton. */
+.rs-numeric-rate { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.rs-numeric-rate input {
+  width: 90px; background: var(--bg4); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); padding: 6px 10px; font-family: var(--mono); font-size: 13px;
+}
+.rate-session-tracklist-full { flex-basis: 100%; }
+/* Tracklist embarquée sur 2 colonnes (CSS multi-colonnes) au lieu d'une liste verticale unique,
+   pour tenir sur l'écran sans scroll excessif même sur un album à 12-15 pistes. */
+#rs-album-tracklist-list { column-count: 2; column-gap: 28px; }
+#rs-album-tracklist-list .rs-track-row { break-inside: avoid; }
+
 
 /* MODAL */
 .modal-overlay {
@@ -715,7 +736,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-13</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-14</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1742,16 +1763,21 @@ input[type="file"] { display: none; }
               <button class="btn" id="rs-listen-btn" onclick="rsListenCurrent()">▶️ Écouter sur YouTube Music</button>
             </div>
             <div class="rate-session-stars" id="rs-stars"></div>
-            <div style="font-size:11px;color:var(--text3);margin-top:4px">Raccourcis clavier : touches 1 à 5 pour noter · S pour passer</div>
+            <div class="rs-numeric-rate">
+              <input type="text" id="rs-note-input" inputmode="decimal" placeholder="0 à 5" title="Note (0 à 5, demi-étoiles possibles)">
+              <button class="btn btn-sm" onclick="rsRateFromInput()">✓ Noter</button>
+            </div>
+            <div style="font-size:11px;color:var(--text3);margin-top:4px">Raccourcis clavier : touches 1 à 5 pour noter · S pour passer · ou saisis un chiffre ci-dessus (Entrée)</div>
             <div class="rate-session-nav">
               <button class="btn btn-sm" onclick="rsSkipCurrent()">⏭ Passer</button>
             </div>
-            <!-- Pistes de l'album courant, notables en demi-étoiles sans quitter la session
-                 (fusionné ici depuis l'ancien onglet "Pistes d'albums" séparé) -->
-            <div id="rs-album-tracklist-wrap" style="display:none;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
-              <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Pistes de l'album</div>
-              <div id="rs-album-tracklist-list" style="max-height:260px;overflow-y:auto"></div>
-            </div>
+          </div>
+          <!-- Pistes de l'album courant, notables sans quitter la session (fusionné ici depuis
+               l'ancien onglet "Pistes d'albums" séparé) — bloc pleine largeur sous cover+infos,
+               affiché sur 2 colonnes (voir CSS #rs-album-tracklist-list). -->
+          <div id="rs-album-tracklist-wrap" class="rate-session-tracklist-full" style="display:none;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Pistes de l'album — clique sur une piste pour saisir une note au clavier</div>
+            <div id="rs-album-tracklist-list" style="max-height:320px;overflow-y:auto"></div>
           </div>
         </div>
       </div>
@@ -13255,6 +13281,8 @@ function renderRatingSession() {
   }
   if (emptyEl) emptyEl.style.display = 'none';
   if (cardEl) cardEl.style.display = 'block';
+  const noteInputEl = document.getElementById('rs-note-input');
+  if (noteInputEl) noteInputEl.value = ''; // toujours vide au changement d'album/morceau courant
 
   const sugEl = document.getElementById('rs-rym-suggestion');
   const tracklistWrapEl = document.getElementById('rs-album-tracklist-wrap');
@@ -13329,6 +13357,23 @@ function rsRateCurrent(note) {
   }
   renderRatingSession();
 }
+
+// Saisie numérique de la note (album ou morceau isolé courant) — alternative aux clics sur les
+// étoiles pour contourner les extensions navigateur qui interceptent parfois le clic (voir note
+// v2026.07.08-11/-14). Demi-étoiles acceptées (ex: "3.5" ou "3,5"), arrondi au 0.5 le plus proche.
+function rsRateFromInput() {
+  const inp = document.getElementById('rs-note-input');
+  if (!inp) return;
+  const raw = inp.value.trim().replace(',', '.');
+  if (raw === '') { toast('Entre une note entre 0 et 5', 'warn'); return; }
+  const n = parseFloat(raw);
+  if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)', 'warn'); return; }
+  rsRateCurrent(Math.round(n * 2) / 2);
+}
+(function() {
+  const inp = document.getElementById('rs-note-input');
+  if (inp) inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); rsRateFromInput(); } });
+})();
 
 function rsSkipCurrent() {
   const queue = ratingSessionMode === 'tracks' ? ratingQueueTracks : ratingQueue;
@@ -13541,6 +13586,8 @@ function bigHalfStarsHtml(value) {
 document.addEventListener('click', function(e) {
   const rsBtn = e.target.closest('.rs-star-hit');
   if (rsBtn) { rsRateCurrent(parseFloat(rsBtn.dataset.value)); return; }
+  const trackLabel = e.target.closest('.rs-track-row-click');
+  if (trackLabel) { promptRateAlbumTrack(trackLabel.dataset.albumId, trackLabel.dataset.title); return; }
   const btn = e.target.closest('.hstar-hit');
   if (btn) { rateAlbumTrack(btn.dataset.albumId, btn.dataset.title, parseFloat(btn.dataset.value)); }
 });
@@ -13560,18 +13607,18 @@ function renderAlbumTracklistPanel(albumId, containerId) {
   wrap.innerHTML = mbTracks.map(t => {
     const key = trackNoteKey(albumId, t.title);
     const value = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (t.rating || 0);
-    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;border-bottom:1px solid var(--border)">
-      <div style="font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1" title="${esc(t.title)}">${t.position ? esc(t.position) + '. ' : ''}${esc(t.title)}</div>
+    return `<div class="rs-track-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;border-bottom:1px solid var(--border)">
+      <div class="rs-track-row-click" data-album-id="${escAttr(albumId)}" data-title="${escAttr(t.title)}" title="Cliquer pour saisir une note au clavier" style="cursor:pointer;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${t.position ? esc(t.position) + '. ' : ''}${esc(t.title)}</div>
       <div class="hstars">${halfStarsHtml(value, albumId, t.title)}</div>
     </div>`;
   }).join('');
 }
 
-function rateAlbumTrack(albumId, title, value) {
+// Mutation effective (note d'une piste d'album) + effets de bord (report, sauvegarde, re-rendu) —
+// factorisée pour être appelée à la fois par le clic étoile (toggle) et par la saisie clavier
+// (valeur absolue, pas de toggle) sans dupliquer la logique.
+function _applyAlbumTrackRating(albumId, title, newVal) {
   const key = trackNoteKey(albumId, title);
-  const mbT = (albumTracksCache[albumId] || []).find(t => t.source === 'musicbee' && t.title === title);
-  const current = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (mbT?.rating || 0);
-  const newVal = current === value ? 0 : value; // reclic sur la même valeur → efface la note
   trackNoteOverrides[key] = newVal;
   invalidateCache(); // buildAlbumTracksList doit refléter le nouveau rating
   // Comparaison souple : albumId ici est toujours une string (attribut data-*), alors que
@@ -13584,6 +13631,33 @@ function rateAlbumTrack(albumId, title, value) {
   // album, et panneau embarqué dans la Session notation) — chacun est un no-op si absent du DOM.
   renderAlbumTracklistPanel(albumId, 'modal-tracklist-list');
   renderAlbumTracklistPanel(albumId, 'rs-album-tracklist-list');
+}
+
+function rateAlbumTrack(albumId, title, value) {
+  const key = trackNoteKey(albumId, title);
+  const mbT = (albumTracksCache[albumId] || []).find(t => t.source === 'musicbee' && t.title === title);
+  const current = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (mbT?.rating || 0);
+  const newVal = current === value ? 0 : value; // reclic sur la même valeur → efface la note
+  _applyAlbumTrackRating(albumId, title, newVal);
+}
+
+// Saisie clavier de la note d'une piste (clic sur le titre plutôt que sur les étoiles) — contourne
+// les extensions navigateur qui interceptent parfois le clic sur les mini cibles étoile, et permet
+// de taper directement la valeur comme pour les scrobbles last.fm (rateScrobbleTrack).
+function promptRateAlbumTrack(albumId, title) {
+  const key = trackNoteKey(albumId, title);
+  const mbT = (albumTracksCache[albumId] || []).find(t => t.source === 'musicbee' && t.title === title);
+  const current = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (mbT?.rating || 0);
+  const raw = prompt(`Note pour "${title}" (0 à 5, demi-étoiles possibles) :`, current || '');
+  if (raw === null) return;
+  const trimmed = raw.trim().replace(',', '.');
+  let note = 0;
+  if (trimmed !== '') {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)', 'warn'); return; }
+    note = Math.round(n * 2) / 2;
+  }
+  _applyAlbumTrackRating(albumId, title, note);
 }
 
 // ===================== SCORE DE CONFIANCE VISIBLE (matching MB / RYM) =====================
