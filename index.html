@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terant Music Collection</title>
-<!-- APP_VERSION: v2026.07.08-07 — Refonte Session notation demandée : (1) l'ancien onglet séparé "💿 Pistes d'albums" est supprimé et fusionné dans le 1er onglet "🎵 Albums" — sous la pochette/étoiles de l'album en cours, un panneau affiche désormais sa tracklist MusicBee notable en demi-étoiles (renderAlbumTracklistPanel généralisée avec un containerId, réutilisée telle quelle dans la modale album ET ce panneau embarqué, rateAlbumTrack rafraîchit les deux). (2) Les 2 vues "🕐 Scrobbles récents" (Albums/Morceaux) ont maintenant une colonne Note cliquable (prompt 0-5, demi-étoiles) : si le scrobble correspond à un album/morceau déjà possédé, sa note est mise à jour normalement (album.note, morceau isolé, ou trackNoteOverrides pour une piste d'album) ; sinon la note est quand même envoyée dans "📋 Notes à reporter" pour ne pas la perdre. Toutes les notes posées depuis ces écrans (nouvelles ou existantes) continuent d'alimenter uniquement "Notes à reporter" et d'être persistées via saveToStorage()/Supabase comme le reste de l'app — aucun nouveau mécanisme de stockage introduit. -->
+<!-- APP_VERSION: v2026.07.08-08 — 🐛 Fix majeur : retirer un morceau de la wishlist en supprimait plusieurs d'un coup (même bug latent côté wishlist albums et Notes à reporter). Cause : nextId (compteur uid() partagé par wishlist/trackWishlist/notesToReport/albums) n'était recalculé, à chaque chargement, qu'à partir de albums/tracks — jamais des wishlist/trackWishlist/notesToReport qui utilisent pourtant aussi uid(). Pire, dans loadFromSupabase() la ligne de recalcul mappait chaque track sur la CONSTANTE 1 (`tracks.map(t => 1)`, résidu de la migration des tracks vers des pseudo-ids texte) au lieu de leurs ids réels — nextId retombait donc à ~2 à CHAQUE chargement Supabase. De nouveaux ajouts réutilisaient alors des ids déjà pris par d'anciennes entrées ; plusieurs entrées finissaient par partager le même id ; un clic "retirer" (filter par id) les supprimait toutes ensemble. Corrigé : nouveau computeNextId() qui prend le max sur albums + wishlist + trackWishlist + notesToReport, appliqué aux 5 points de chargement (localStorage, Supabase — collection pleine et vide —, restauration JSON, restauration de snapshot). Ajout de repairDuplicateIds() qui répare automatiquement les doublons déjà présents (réattribue un nouvel id aux entrées wishlist/trackWishlist/notesToReport arrivées après un doublon, sauvegarde immédiatement si une réparation a eu lieu) — donc corrige aussi les dégâts déjà causés par ce bug dans la collection actuelle, dès le prochain chargement. -->
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
 <!-- Supabase SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -711,7 +711,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-07</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-08</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2335,7 +2335,8 @@ function loadFromStorage() {
     trackWishlist = data.trackWishlist || [];
     notesToReport = data.notesToReport || [];
     trackNoteOverrides = data.trackNoteOverrides || {};
-    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+    nextId = Math.max(nextId, data.nextId || 0, computeNextId());
+    if (repairDuplicateIds()) saveToStorage();
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
     loadRymFromLocalStorage(); // écrase rymData si clé dédiée présente
@@ -2680,6 +2681,8 @@ async function loadFromSupabase() {
       loadLastfmFromSupabase();
       const { data: rym } = await window._sb.from('rym_data').select('*');
       rymData = (rym || []).map(d => ({ artist: d.artist, album: d.album, rating: d.rating, ownership: d.ownership || '', year: d.year || '', genre: d.genre || '' }));
+      nextId = Math.max(nextId, computeNextId());
+      if (repairDuplicateIds()) saveToStorage();
       setSaveIndicator('saved');
       return true; // succès — collection vide est un état valide
     }
@@ -2854,7 +2857,8 @@ async function loadFromSupabase() {
     loadAlbumTracks();
     loadMusicBeeTracks();
     setTimeout(() => fetchMissingCovers(), 3000);
-    nextId = Math.max(nextId, ...tracks.map(t => 1)) + 1; // tracks ont des pseudo-ids texte maintenant
+    nextId = Math.max(nextId, computeNextId());
+    if (repairDuplicateIds()) saveToStorage();
 
     setSaveIndicator('saved');
     return true;
@@ -3003,6 +3007,47 @@ setInterval(() => {
 
 
 function uid() { return nextId++; }
+
+// ===================== INTÉGRITÉ DES IDS (uid()) =====================
+// BUG CORRIGÉ (v2026.07.08-08) : nextId n'était recalculé qu'à partir de albums/tracks, jamais de
+// wishlist/trackWishlist/notesToReport/stockItems — qui utilisent pourtant tous uid() pour leurs
+// propres ids. Pire, dans loadFromSupabase() la ligne de recalcul mappait chaque track sur la
+// CONSTANTE 1 (`tracks.map(t => 1)`, résidu de la migration des tracks vers des pseudo-ids texte
+// qui a oublié de retirer le nextId basé dessus) au lieu de considérer les vrais ids numériques —
+// nextId retombait donc à ~2 à CHAQUE chargement Supabase, quel que soit le nombre d'entrées déjà
+// créées. Résultat : de nouveaux ajouts à la wishlist morceaux (et albums, et Notes à reporter)
+// réutilisaient des ids déjà pris par d'anciennes entrées → plusieurs entrées partageant le même
+// id → un seul clic "retirer" (filter par id) en supprimait plusieurs d'un coup.
+function computeNextId() {
+  const ids = [0];
+  const addIds = arr => arr.forEach(x => { if (typeof x.id === 'number' && isFinite(x.id)) ids.push(x.id); });
+  addIds(albums);
+  addIds(wishlist);
+  addIds(trackWishlist);
+  addIds(notesToReport);
+  return Math.max(...ids) + 1;
+}
+
+// Répare les ids dupliqués déjà présents (conséquence du bug ci-dessus) — ne touche jamais aux
+// albums (dérivation risquée avec stockItems, quasiment jamais concerné par ce bug précis) ; ne
+// réattribue un nouvel id qu'aux entrées wishlist/trackWishlist/notesToReport arrivées APRÈS un
+// doublon déjà vu, en conservant la première occurrence intacte.
+function repairDuplicateIds() {
+  let fixed = 0;
+  const seen = new Set();
+  const fixArray = arr => {
+    arr.forEach(item => {
+      if (typeof item.id !== 'number') return;
+      if (seen.has(item.id)) { item.id = uid(); fixed++; }
+      else seen.add(item.id);
+    });
+  };
+  fixArray(wishlist);
+  fixArray(trackWishlist);
+  fixArray(notesToReport);
+  if (fixed) console.warn(`[repairDuplicateIds] ${fixed} id(s) dupliqué(s) réattribué(s) (wishlist/trackWishlist/notesToReport)`);
+  return fixed;
+}
 
 function toast(msg, type = 'success') {
   const el = document.getElementById('toast');
@@ -11105,7 +11150,8 @@ async function reimportJSON(input) {
     rymData = data.rymData || [];
     associations = data.associations || [];
     rymAssociations = data.rymAssociations || [];
-    nextId = data.nextId || (Math.max(0, ...albums.map(a => a.id||0), ...tracks.map(t => t.id||0)) + 1);
+    nextId = Math.max(nextId, data.nextId || 0, computeNextId());
+    if (repairDuplicateIds()) saveToStorage();
 
     // lastfmData — peut être énorme, restaurer quand même
     if (data.lastfmData?.length) {
@@ -12597,6 +12643,8 @@ async function restoreSnapshot(id) {
       trackWishlist   = d.trackWishlist || [];
     }
 
+    nextId = Math.max(nextId, computeNextId());
+    repairDuplicateIds();
     invalidateCache();
     renderAlbums(); renderTracks(); updateNavBadges();
     toast('Restauration en cours — synchronisation Supabase…');
