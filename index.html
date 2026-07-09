@@ -12,6 +12,8 @@
 <!-- APP_VERSION: v2026.07.08-16 — Mode sélection multiple étendu aux tableaux Discographie, Stock, Wishlist albums et Morceaux isolés (jusqu'ici réservé à la Collection). Discographie réutilise directement selectedAlbumIds/bulk*() de la Collection (mêmes fiches album) : ajout d'une 2e barre d'actions groupées + case à cocher, synchronisées avec celles de la Collection (clearAlbumSelection() efface désormais les deux tableaux, renderBulkActionsBar() met à jour les deux barres, bulkAddToWishlist/bulkUnmarkOk/bulkDeleteAlbums rafraîchissent aussi renderDiscographie()). Stock : nouveau Set selectedStockIds + barre dédiée (→ Collecter, 🎯 Wishlist, ✕ Supprimer en masse), reprenant les actions déjà disponibles par ligne. Wishlist albums : nouveau Set selectedWishIds + barre dédiée (🔴🟡🟢 changement de priorité en masse, ✕ Supprimer) — pas de "marquer acquis" en masse, cette action ouvre un modal de pré-remplissage par nature unitaire. Morceaux isolés : nouveau Set selectedTrackIds + barre dédiée (✕ Supprimer uniquement, seule action existante par ligne). -->
 <!-- APP_VERSION: v2026.07.09-01 — Détection de conflits de synchronisation (section 3 "Robustesse Supabase"). Nouvelle table `sync_state` (1 ligne, migration SQL livrée séparément) : compteur `version` incrémenté atomiquement (update conditionnel WHERE version=expectedVersion) à chaque saveToSupabase() réussie, avec device_id/device_label du dernier écrivain. Avant tout sync : comparaison de la version distante à _localSyncVersion (fixée au chargement) — si elles divergent, le sync est bloqué AVANT toute écriture (aucune table touchée), l'indicateur passe en "⚠️ Conflit" (rouge, clignotant, cliquable), et une modale propose "🔄 Recharger la version distante" ou "⚠️ Forcer l'écrasement" (confirmation requise, bypass le check). Identité d'appareil : UUID + libellé auto-généré (plateforme + navigateur) dans localStorage, renommable depuis la modale de conflit. Vérification périodique (45s, lecture seule) en plus du check au moment du sync, pour détecter un conflit même sans sauvegarde en cours — utile car Antoine garde des onglets ouverts en parallèle sans les recharger. Dégradation gracieuse totale si la migration n'est pas appliquée (table absente) : _localSyncVersion reste null, aucune vérification, comportement strictement identique à avant. -->
 <!-- APP_VERSION: v2026.07.09-02 — Recherche globale unifiée (section 4, item historique de la todo). Nouveau bouton "🔎 Tout chercher" dans la topbar (+ raccourci Ctrl/Cmd+K depuis n'importe quel écran) ouvrant une modale dédiée, distincte du champ #global-search existant (qui reste un filtre local à la section affichée, comportement inchangé). Recherche en une fois dans albums (tous dossiers confondus), morceaux isolés, wishlist albums et wishlist morceaux ; résultats groupés par catégorie, triés par pertinence (exact > commence par > contient), limités à 6-8 par groupe. Chaque résultat cliquable navigue directement vers la bonne section ET ouvre la fiche concernée (editAlbum/openWishModal/openTrackWishModal quand une modale existe ; sinon la section est filtrée sur l'élément exact via le champ #global-search). Debounce 150ms sur la saisie, échap pour fermer. -->
+<!-- APP_VERSION: v2026.07.09-03 — La notation classique (rateAlbum : clic étoiles Collection, promptStockRating : saisie numérique, rateTrack : clic étoiles Morceaux isolés) alimente désormais "Notes à reporter" via queueNoteToReport(), jusqu'ici scopée à la Session notation (todo section 10, dernier point ⬜). Ne queue que sur une note strictement positive (une note remise à 0 par re-clic ne crée pas d'entrée), comportement identique à celui déjà en place pour les pistes de tracklist (_applyAlbumTrackRating). updateNavBadges() appelé pour rafraîchir immédiatement le badge sidebar. -->
+
 
 
 
@@ -749,7 +751,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-02</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-03</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -4233,7 +4235,15 @@ function updateArtistFilter() {
 function rateAlbum(id, note) {
   const realId = unsid(id);
   const a = albums.find(x => x.id === realId || x.id === String(realId));
-  if (a) { a.note = a.note === note ? 0 : note; renderAlbums(); saveToStorage(); }
+  if (a) {
+    a.note = a.note === note ? 0 : note;
+    // v2026.07.09 : la notation classique (clic étoiles Collection) alimente désormais
+    // "Notes à reporter" au même titre que la Session notation — jusqu'ici scopée à cette
+    // dernière (cf. todo section 10, "actuellement scopé à la Session notation uniquement").
+    if (a.note > 0) { queueNoteToReport('album', a, a.note); updateNavBadges(); }
+    renderAlbums();
+    saveToStorage();
+  }
 }
 
 function rateDiscogs(id, note) {
@@ -4278,6 +4288,7 @@ function promptStockRating(id) {
     if (isNaN(n) || n < 0 || n > 5) { toast('Valeur invalide (0 à 5)'); return; }
     a.note = Math.round(n * 2) / 2;
   }
+  if (a.note > 0) { queueNoteToReport('album', a, a.note); updateNavBadges(); }
   renderAlbums();
   if (typeof renderStock === 'function') renderStock();
   saveToStorage();
@@ -4436,7 +4447,12 @@ function renderTracks() {
 
 function rateTrack(id, note) {
   const t = tracks.find(x => x.id === id);
-  if (t) { t.note = t.note === note ? 0 : note; renderTracks(); saveToStorage(); }
+  if (t) {
+    t.note = t.note === note ? 0 : note;
+    if (t.note > 0) { queueNoteToReport('track', t, t.note); updateNavBadges(); }
+    renderTracks();
+    saveToStorage();
+  }
 }
 
 function deleteTrack(id) {
