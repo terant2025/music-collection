@@ -14,6 +14,7 @@
 <!-- APP_VERSION: v2026.07.09-02 — Recherche globale unifiée (section 4, item historique de la todo). Nouveau bouton "🔎 Tout chercher" dans la topbar (+ raccourci Ctrl/Cmd+K depuis n'importe quel écran) ouvrant une modale dédiée, distincte du champ #global-search existant (qui reste un filtre local à la section affichée, comportement inchangé). Recherche en une fois dans albums (tous dossiers confondus), morceaux isolés, wishlist albums et wishlist morceaux ; résultats groupés par catégorie, triés par pertinence (exact > commence par > contient), limités à 6-8 par groupe. Chaque résultat cliquable navigue directement vers la bonne section ET ouvre la fiche concernée (editAlbum/openWishModal/openTrackWishModal quand une modale existe ; sinon la section est filtrée sur l'élément exact via le champ #global-search). Debounce 150ms sur la saisie, échap pour fermer. -->
 <!-- APP_VERSION: v2026.07.09-03 — La notation classique (rateAlbum : clic étoiles Collection, promptStockRating : saisie numérique, rateTrack : clic étoiles Morceaux isolés) alimente désormais "Notes à reporter" via queueNoteToReport(), jusqu'ici scopée à la Session notation (todo section 10, dernier point ⬜). Ne queue que sur une note strictement positive (une note remise à 0 par re-clic ne crée pas d'entrée), comportement identique à celui déjà en place pour les pistes de tracklist (_applyAlbumTrackRating). updateNavBadges() appelé pour rafraîchir immédiatement le badge sidebar. -->
 <!-- APP_VERSION: v2026.07.09-04 — Filtres sauvegardés (section 4 de la todo, item "nouveau"). Vue Collection uniquement pour l'instant (vue la plus riche en filtres) : nouveau menu déroulant "💾 Filtres…" dans la barre d'outils + boutons 💾 (enregistrer la combinaison actuelle sous un nom, écrase si le nom existe déjà après confirmation) et ✕ (supprimer le préréglage sélectionné, confirmation requise). Couvre les 14 champs lus par filteredAlbums()/sortedAlbums() (artiste, album, support, dossier, genre, notes MB/DC/RYM avec opérateur+valeur, année, écoutes min, tri). Stockage localStorage (`terant_filter_presets_collection_v1`) plutôt que Supabase : c'est de l'état d'affichage local, pas une donnée de collection à synchroniser entre appareils. Appliquer un préréglage réutilise onNoteOpChange() pour ré-afficher/masquer correctement les champs valeur des filtres de note avant de relancer renderAlbums(). Discographie/Stock/Wishlist non couverts pour l'instant (todo laissée ⬜ pour l'extension). -->
+<!-- APP_VERSION: v2026.07.09-05 — Filtres sauvegardés généralisés à Discographie, Stock et Wishlist (suite de la v04, todo section 4). Mécanique factorisée en config par vue (FILTER_PRESET_VIEWS : liste de champs, select dédié, fonction de rendu à rappeler) au lieu du code mono-vue précédent ; toutes les fonctions (save/apply/delete/render) prennent désormais un paramètre viewKey. Stockage localStorage unifié (`terant_filter_presets_v2`, objet par vue) avec migration automatique et silencieuse des préréglages Collection existants depuis l'ancienne clé mono-vue. Discographie : 14 champs (mêmes catégories que Collection + filtre "type" compil/EP). Stock et Wishlist : sets de filtres plus courts (pas de notes/tri dédié), même mécanique bouton 💾/✕. -->
 
 
 
@@ -752,7 +753,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-04</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-05</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -851,11 +852,11 @@ input[type="file"] { display: none; }
           <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
-        <select id="filter-preset-select" onchange="applyFilterPreset()" title="Charger un préréglage de filtres enregistré">
+        <select id="filter-preset-select" onchange="applyFilterPreset('collection')" title="Charger un préréglage de filtres enregistré">
           <option value="">💾 Filtres…</option>
         </select>
-        <button class="btn btn-sm" onclick="saveCurrentFilterPreset()" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
-        <button class="btn btn-sm" onclick="deleteSelectedFilterPreset()" title="Supprimer le préréglage sélectionné">✕</button>
+        <button class="btn btn-sm" onclick="saveCurrentFilterPreset('collection')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
+        <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('collection')" title="Supprimer le préréglage sélectionné">✕</button>
         <div class="toolbar-right">
           <span id="albums-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportFilteredAlbumsCSV()">↓ CSV</button>
@@ -1059,6 +1060,11 @@ input[type="file"] { display: none; }
           <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
+        <select id="filter-preset-select-disco" onchange="applyFilterPreset('discographie')" title="Charger un préréglage de filtres enregistré">
+          <option value="">💾 Filtres…</option>
+        </select>
+        <button class="btn btn-sm" onclick="saveCurrentFilterPreset('discographie')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
+        <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('discographie')" title="Supprimer le préréglage sélectionné">✕</button>
         <button class="btn btn-sm" onclick="nav('albums');document.getElementById('modal-album').classList.add('open');openAlbumModal()">＋ Ajouter CD</button>
         <button class="btn btn-sm btn-accent" onclick="openCdAssocFinderModal()">🔗 Suggestions d'association</button>
         <button class="btn btn-sm" onclick="exportDiscoCSV()">↓ CSV</button>
@@ -1134,6 +1140,11 @@ input[type="file"] { display: none; }
           <option value="">Tous genres</option>
         </select>
         <input id="filter-stock-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4" oninput="renderStock()">
+        <select id="filter-preset-select-stock" onchange="applyFilterPreset('stock')" title="Charger un préréglage de filtres enregistré">
+          <option value="">💾 Filtres…</option>
+        </select>
+        <button class="btn btn-sm" onclick="saveCurrentFilterPreset('stock')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
+        <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('stock')" title="Supprimer le préréglage sélectionné">✕</button>
         <div class="toolbar-right">
           <button class="btn btn-accent" onclick="openStockModal()">＋ Ajouter au stock</button>
           <button class="btn btn-sm" onclick="exportStockCSV()">↓ Export</button>
@@ -1346,6 +1357,11 @@ input[type="file"] { display: none; }
           <option value="mid">🟡 Moyenne</option>
           <option value="low">🟢 Basse</option>
         </select>
+        <select id="filter-preset-select-wish" onchange="applyFilterPreset('wishlist')" title="Charger un préréglage de filtres enregistré">
+          <option value="">💾 Filtres…</option>
+        </select>
+        <button class="btn btn-sm" onclick="saveCurrentFilterPreset('wishlist')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
+        <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('wishlist')" title="Supprimer le préréglage sélectionné">✕</button>
         <div class="toolbar-right">
           <span id="wish-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportWishlistCSV()" title="Exporter CSV">⬇ CSV</button>
@@ -3841,35 +3857,86 @@ function onNoteOpChange(opId, valId) {
   inp.style.display = (op && op !== 'none' && op !== 'any') ? '' : 'none';
 }
 
-// ===================== FILTRES SAUVEGARDÉS (Collection) =====================
-// Préréglages nommés pour la barre de filtres de la Collection — évite de recomposer
-// à chaque fois les mêmes combinaisons (genre + note + dossier + tri, etc.). Stockés en
-// localStorage (état d'affichage local, pas une donnée de collection à synchroniser via
-// Supabase). Champs couverts = exactement ceux lus par filteredAlbums()/sortedAlbums().
-const FILTER_PRESETS_LS_KEY = 'terant_filter_presets_collection_v1';
-const FILTER_PRESET_FIELDS = [
-  'filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre',
-  'filter-note-op', 'filter-note-val', 'filter-dc-note-op', 'filter-dc-note-val',
-  'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'sort-col'
-];
+// ===================== FILTRES SAUVEGARDÉS (multi-vues) =====================
+// Préréglages nommés pour les barres de filtres — évite de recomposer à chaque fois
+// les mêmes combinaisons (genre + note + dossier + tri, etc.). Stockés en localStorage
+// (état d'affichage local, pas une donnée de collection à synchroniser via Supabase).
+// v2026.07.09-04 : Collection uniquement. v2026.07.09-05 : généralisé à Discographie,
+// Stock et Wishlist — même mécanique, config par vue (champs, select de préréglage,
+// fonction de rendu à rappeler après application).
+const FILTER_PRESETS_LS_KEY = 'terant_filter_presets_v2';
+const FILTER_PRESETS_LS_KEY_LEGACY_COLLECTION = 'terant_filter_presets_collection_v1';
 
-function loadFilterPresets() {
+const FILTER_PRESET_VIEWS = {
+  collection: {
+    selectId: 'filter-preset-select',
+    resetPage: true,
+    renderFn: () => renderAlbums(),
+    fields: ['filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre',
+      'filter-note-op', 'filter-note-val', 'filter-dc-note-op', 'filter-dc-note-val',
+      'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'sort-col'],
+    noteOpPairs: [['filter-note-op', 'filter-note-val'], ['filter-dc-note-op', 'filter-dc-note-val'], ['filter-rym-note-op', 'filter-rym-note-val']]
+  },
+  discographie: {
+    selectId: 'filter-preset-select-disco',
+    resetPage: false,
+    renderFn: () => renderDiscographie(),
+    fields: ['disco-filter', 'disco-filter-type', 'filter-disco-artist', 'filter-disco-album', 'filter-disco-year',
+      'filter-disco-genre', 'filter-disco-note-op', 'filter-disco-note-val', 'filter-disco-dc-op', 'filter-disco-dc-val',
+      'filter-disco-rym-op', 'filter-disco-rym-val', 'filter-disco-min-plays', 'disco-sort'],
+    noteOpPairs: [['filter-disco-note-op', 'filter-disco-note-val'], ['filter-disco-dc-op', 'filter-disco-dc-val'], ['filter-disco-rym-op', 'filter-disco-rym-val']]
+  },
+  stock: {
+    selectId: 'filter-preset-select-stock',
+    resetPage: false,
+    renderFn: () => renderStock(),
+    fields: ['filter-stock-artist', 'filter-stock-genre', 'filter-stock-year'],
+    noteOpPairs: []
+  },
+  wishlist: {
+    selectId: 'filter-preset-select-wish',
+    resetPage: false,
+    renderFn: () => renderWishlist(),
+    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio'],
+    noteOpPairs: []
+  }
+};
+
+function loadAllFilterPresets() {
   try {
     const raw = localStorage.getItem(FILTER_PRESETS_LS_KEY);
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
-  } catch (e) { return []; }
+    if (raw) {
+      const obj = JSON.parse(raw);
+      return (obj && typeof obj === 'object') ? obj : {};
+    }
+    // Migration ponctuelle depuis l'ancien stockage mono-vue (Collection uniquement, v04)
+    const legacy = localStorage.getItem(FILTER_PRESETS_LS_KEY_LEGACY_COLLECTION);
+    if (legacy) {
+      const arr = JSON.parse(legacy);
+      const migrated = { collection: Array.isArray(arr) ? arr : [] };
+      localStorage.setItem(FILTER_PRESETS_LS_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+  } catch (e) {}
+  return {};
 }
 
-function saveFilterPresetsToStorage(list) {
+function loadFilterPresets(viewKey) {
+  const all = loadAllFilterPresets();
+  return Array.isArray(all[viewKey]) ? all[viewKey] : [];
+}
+
+function saveFilterPresetsToStorage(viewKey, list) {
   try {
-    localStorage.setItem(FILTER_PRESETS_LS_KEY, JSON.stringify(list));
+    const all = loadAllFilterPresets();
+    all[viewKey] = list;
+    localStorage.setItem(FILTER_PRESETS_LS_KEY, JSON.stringify(all));
   } catch (e) { toast('Impossible d\'enregistrer le préréglage (stockage local plein ?)', 'error'); }
 }
 
-function captureCurrentFilterValues() {
+function captureCurrentFilterValues(viewKey) {
   const values = {};
-  FILTER_PRESET_FIELDS.forEach(id => {
+  (FILTER_PRESET_VIEWS[viewKey]?.fields || []).forEach(id => {
     const el = document.getElementById(id);
     if (el) values[id] = el.value;
   });
@@ -3880,72 +3947,82 @@ function isFilterValuesEmpty(values) {
   return Object.values(values || {}).every(v => !v);
 }
 
-function renderFilterPresetOptions(selectId) {
-  const sel = document.getElementById(selectId);
+function renderFilterPresetOptions(viewKey) {
+  const cfg = FILTER_PRESET_VIEWS[viewKey];
+  if (!cfg) return;
+  const sel = document.getElementById(cfg.selectId);
   if (!sel) return;
   const keepSelected = sel.value;
-  const presets = loadFilterPresets();
+  const presets = loadFilterPresets(viewKey);
   sel.innerHTML = '<option value="">💾 Filtres…</option>' +
     presets.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
   if (presets.some(p => p.id === keepSelected)) sel.value = keepSelected;
 }
 
-function saveCurrentFilterPreset() {
-  const values = captureCurrentFilterValues();
+function renderAllFilterPresetOptions() {
+  Object.keys(FILTER_PRESET_VIEWS).forEach(renderFilterPresetOptions);
+}
+
+function saveCurrentFilterPreset(viewKey) {
+  const cfg = FILTER_PRESET_VIEWS[viewKey];
+  if (!cfg) return;
+  const values = captureCurrentFilterValues(viewKey);
   if (isFilterValuesEmpty(values)) {
     toast('Aucun filtre actif à enregistrer', 'error');
     return;
   }
   const name = (prompt('Nom du préréglage de filtres :') || '').trim();
   if (!name) return;
-  const presets = loadFilterPresets();
+  const presets = loadFilterPresets(viewKey);
   const existing = presets.find(p => p.name.toLowerCase() === name.toLowerCase());
   if (existing) {
     if (!confirm(`Un préréglage "${existing.name}" existe déjà — le remplacer ?`)) return;
     existing.values = values;
     existing.updatedAt = new Date().toISOString();
-    saveFilterPresetsToStorage(presets);
-    renderFilterPresetOptions('filter-preset-select');
-    document.getElementById('filter-preset-select').value = existing.id;
+    saveFilterPresetsToStorage(viewKey, presets);
+    renderFilterPresetOptions(viewKey);
+    document.getElementById(cfg.selectId).value = existing.id;
     toast(`Préréglage "${existing.name}" mis à jour ✓`);
     return;
   }
   const preset = { id: 'fp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, values, createdAt: new Date().toISOString() };
   presets.push(preset);
-  saveFilterPresetsToStorage(presets);
-  renderFilterPresetOptions('filter-preset-select');
-  document.getElementById('filter-preset-select').value = preset.id;
+  saveFilterPresetsToStorage(viewKey, presets);
+  renderFilterPresetOptions(viewKey);
+  document.getElementById(cfg.selectId).value = preset.id;
   toast(`Préréglage "${name}" enregistré ✓`);
 }
 
-function applyFilterPreset() {
-  const sel = document.getElementById('filter-preset-select');
+function applyFilterPreset(viewKey) {
+  const cfg = FILTER_PRESET_VIEWS[viewKey];
+  if (!cfg) return;
+  const sel = document.getElementById(cfg.selectId);
   const id = sel?.value || '';
   if (!id) return;
-  const preset = loadFilterPresets().find(p => p.id === id);
+  const preset = loadFilterPresets(viewKey).find(p => p.id === id);
   if (!preset) return;
-  FILTER_PRESET_FIELDS.forEach(fieldId => {
+  cfg.fields.forEach(fieldId => {
     const el = document.getElementById(fieldId);
     if (el && fieldId in preset.values) el.value = preset.values[fieldId];
   });
-  onNoteOpChange('filter-note-op', 'filter-note-val');
-  onNoteOpChange('filter-dc-note-op', 'filter-dc-note-val');
-  onNoteOpChange('filter-rym-note-op', 'filter-rym-note-val');
-  currentPage = 1;
-  renderAlbums();
+  cfg.noteOpPairs.forEach(([opId, valId]) => onNoteOpChange(opId, valId));
+  if (cfg.resetPage) currentPage = 1;
+  cfg.renderFn();
   toast(`Préréglage "${preset.name}" appliqué`);
 }
 
-function deleteSelectedFilterPreset() {
-  const sel = document.getElementById('filter-preset-select');
+function deleteSelectedFilterPreset(viewKey) {
+  const cfg = FILTER_PRESET_VIEWS[viewKey];
+  if (!cfg) return;
+  const sel = document.getElementById(cfg.selectId);
   const id = sel?.value || '';
   if (!id) { toast('Choisissez d\'abord un préréglage à supprimer', 'error'); return; }
-  const presets = loadFilterPresets();
+  const presets = loadFilterPresets(viewKey);
   const preset = presets.find(p => p.id === id);
   if (!preset) return;
   if (!confirm(`Supprimer le préréglage "${preset.name}" ?`)) return;
-  saveFilterPresetsToStorage(presets.filter(p => p.id !== id));
-  renderFilterPresetOptions('filter-preset-select');
+  saveFilterPresetsToStorage(viewKey, presets.filter(p => p.id !== id));
+  renderFilterPresetOptions(viewKey);
   toast(`Préréglage "${preset.name}" supprimé ✓`);
 }
 
@@ -12993,7 +13070,7 @@ async function initApp() {
 // Appliqué après le chargement du DOM — remplace les oninput inline
 // pour toutes les fonctions de rendu coûteuses (300ms par défaut, 150ms pour les légères)
 document.addEventListener('DOMContentLoaded', () => {
-  renderFilterPresetOptions('filter-preset-select');
+  renderAllFilterPresetOptions();
   const rules = [
     // [id de l'input, fonction à appeler, délai ms]
     ['global-search',        () => onSearch(),                           200],
