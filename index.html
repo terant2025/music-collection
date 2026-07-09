@@ -9,6 +9,7 @@
 <!-- APP_VERSION: v2026.07.08-13 — Suite à alerte Supabase (RLS désactivé sur toutes les tables) + dépassement du quota egress gratuit (6.26 Go / 5 Go) : (1) BUG EGRESS CORRIGÉ — renderSnapshotsList() (modale "Snapshots Supabase") sélectionnait la colonne `data` complète (tout le JSON de la collection sérialisé) pour CHACUN des 10 snapshots conservés à chaque ouverture de la modale, uniquement pour afficher un compteur "X albums · Y morceaux" ; remplacé par une colonne `counts` légère calculée une fois à la création du snapshot (_snapshotCounts) — la colonne `data` n'est plus jamais téléchargée que pour un seul snapshot précis, à la restauration ou à la comparaison Journal. Migration SQL : ajout colonne `counts` + backfill des anciens snapshots (calcul côté base, aucun egress client). (2) RLS : migration SQL livrée séparément (migration_v2026.07.08-13.sql) activant Row-Level Security + policies permissives sur les 11 tables, avec avertissement explicite que ça ne protège pas réellement les données tant que la clé anon reste publique dans le HTML statique (satisfait l'audit Supabase, zéro régression). -->
 <!-- APP_VERSION: v2026.07.08-14 — Suite au retour "je peux toujours pas noter" sur la Session notation (extension navigateur qui intercepte le clic, cf. v2026.07.08-11) : ajout d'une saisie numérique de la note (champ + bouton "✓ Noter", Entrée pour valider) comme alternative aux clics sur étoiles, pour l'album/morceau courant ET pour chaque piste de la tracklist embarquée (clic sur le titre de la piste → prompt() natif, contourne toute interception DOM). Refactor : _applyAlbumTrackRating() factorise la mutation entre le clic étoile (toggle) et la saisie clavier (valeur absolue). Mise en page : cadre élargi (420px → 820px), pochette réduite (260px → 140px), layout horizontal pochette/infos au lieu d'une colonne centrée, tracklist embarquée sur 2 colonnes (CSS multi-colonnes) — tient sur l'écran sans scroll pour la plupart des albums. -->
 <!-- APP_VERSION: v2026.07.08-15 — Le clic sur le titre de piste (promptRateAlbumTrack, v14) restait trop peu visible et toujours vulnérable à l'interception d'extension navigateur sur la zone de la ligne. Remplacé/complété par un vrai champ <input> numérique TOUJOURS VISIBLE sur chaque ligne de piste (à côté des étoiles), avec bouton ✓ et Entrée pour valider — cible large, z-index dédié (.rs-track-note-inline) pour rester cliquable au-dessus d'une éventuelle icône flottante d'extension. Chemin de mutation partagé via submitAlbumTrackNoteInput() → _applyAlbumTrackRating(), identique pour le bouton ✓ et la touche Entrée. Le clic sur le titre (prompt natif) est conservé en complément. -->
+<!-- APP_VERSION: v2026.07.08-16 — Mode sélection multiple étendu aux tableaux Discographie, Stock, Wishlist albums et Morceaux isolés (jusqu'ici réservé à la Collection). Discographie réutilise directement selectedAlbumIds/bulk*() de la Collection (mêmes fiches album) : ajout d'une 2e barre d'actions groupées + case à cocher, synchronisées avec celles de la Collection (clearAlbumSelection() efface désormais les deux tableaux, renderBulkActionsBar() met à jour les deux barres, bulkAddToWishlist/bulkUnmarkOk/bulkDeleteAlbums rafraîchissent aussi renderDiscographie()). Stock : nouveau Set selectedStockIds + barre dédiée (→ Collecter, 🎯 Wishlist, ✕ Supprimer en masse), reprenant les actions déjà disponibles par ligne. Wishlist albums : nouveau Set selectedWishIds + barre dédiée (🔴🟡🟢 changement de priorité en masse, ✕ Supprimer) — pas de "marquer acquis" en masse, cette action ouvre un modal de pré-remplissage par nature unitaire. Morceaux isolés : nouveau Set selectedTrackIds + barre dédiée (✕ Supprimer uniquement, seule action existante par ligne). -->
 
 
 
@@ -742,7 +743,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-15</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-16</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -928,10 +929,19 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="openTrackModal()">＋ Morceau</button>
         </div>
       </div>
+
+      <div id="bulk-actions-bar-tracks" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="bulk-actions-count-tracks" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteTracks()" title="Supprimer les morceaux sélectionnés">✕ Supprimer</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearTrackSelection()">Annuler la sélection</button>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:26px"><input type="checkbox" id="select-all-tracks" onchange="toggleSelectAllTracks(this.checked)" title="Sélectionner tout"></th>
               <th>Titre</th>
               <th>Artiste</th>
               <th>Album</th>
@@ -1044,10 +1054,22 @@ input[type="file"] { display: none; }
         💡 Cliquez sur <strong style="color:var(--text2)">Associer</strong> pour lier manuellement un CD Discogs à son équivalent numérique MusicBee si la détection automatique ne les a pas rapprochés.
       </div>
 
+      <!-- Sélection multiple : réutilise selectedAlbumIds/bulk* (mêmes fiches album que la Collection) -->
+      <div id="bulk-actions-bar-disco" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="bulk-actions-count-disco" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm" onclick="bulkAddToWishlist()" title="Ajouter les albums sélectionnés à la wishlist">🎯 Wishlist</button>
+        <button class="btn btn-sm" onclick="bulkMarkForSale()" title="Marquer les albums sélectionnés comme à vendre">💸 Marquer à vendre</button>
+        <button class="btn btn-sm" onclick="bulkUnmarkOk()" title="Retirer les albums sélectionnés du dossier Ok">✅ Retirer de Ok</button>
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteAlbums()" title="Supprimer les albums sélectionnés">✕ Supprimer</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearAlbumSelection()">Annuler la sélection</button>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:26px"><input type="checkbox" id="select-all-disco" onchange="toggleSelectAllDisco(this.checked)" title="Sélectionner tout (page courante)"></th>
               <th>Artiste / Album</th>
               <th>Année</th>
               <th>Statut</th>
@@ -1102,10 +1124,21 @@ input[type="file"] { display: none; }
           <button class="btn btn-sm" onclick="exportStockCSV()">↓ Export</button>
         </div>
       </div>
+
+      <div id="bulk-actions-bar-stock" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="bulk-actions-count-stock" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm" onclick="bulkMoveStockToCollection()" title="Déplacer les albums sélectionnés vers la collection">→ Collecter</button>
+        <button class="btn btn-sm" onclick="bulkAddToWishlistFromStock()" title="Ajouter les albums sélectionnés à la wishlist">🎯 Wishlist</button>
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteStock()" title="Retirer les albums sélectionnés du stock">✕ Supprimer</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearStockSelection()">Annuler la sélection</button>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:26px"><input type="checkbox" id="select-all-stock" onchange="toggleSelectAllStock(this.checked)" title="Sélectionner tout"></th>
               <th>Artiste / Album</th>
               <th>Année</th>
               <th>Genre</th>
@@ -1304,10 +1337,22 @@ input[type="file"] { display: none; }
           <button class="btn btn-accent" onclick="openWishModal()">＋ Ajouter</button>
         </div>
       </div>
+
+      <div id="bulk-actions-bar-wish" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="bulk-actions-count-wish" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm" onclick="bulkSetWishPrio('high')" title="Priorité haute">🔴 Haute</button>
+        <button class="btn btn-sm" onclick="bulkSetWishPrio('mid')" title="Priorité moyenne">🟡 Moyenne</button>
+        <button class="btn btn-sm" onclick="bulkSetWishPrio('low')" title="Priorité basse">🟢 Basse</button>
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteWish()" title="Retirer les entrées sélectionnées de la wishlist">✕ Supprimer</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearWishSelection()">Annuler la sélection</button>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:26px"><input type="checkbox" id="select-all-wish" onchange="toggleSelectAllWish(this.checked)" title="Sélectionner tout"></th>
               <th>Artiste / Album</th>
               <th>Année</th>
               <th>Source</th>
@@ -3539,6 +3584,18 @@ function toggleAlbumSelected(idSid, checked) {
   renderBulkActionsBar();
 }
 
+// idem, mais pour le tableau Discographie — même Set, même logique de résolution d'id
+function toggleSelectAllDisco(checked) {
+  document.querySelectorAll('#disco-tbody .row-select').forEach(cb => {
+    cb.checked = checked;
+    const id = unsid(cb.dataset.id);
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    const realId = a ? a.id : id;
+    if (checked) selectedAlbumIds.add(realId); else selectedAlbumIds.delete(realId);
+  });
+  renderBulkActionsBar();
+}
+
 function toggleSelectAllAlbums(checked) {
   document.querySelectorAll('#album-tbody .row-select').forEach(cb => {
     cb.checked = checked;
@@ -3550,21 +3607,28 @@ function toggleSelectAllAlbums(checked) {
   renderBulkActionsBar();
 }
 
+// Sélection partagée entre Collection et Discographie (mêmes fiches album) : on efface
+// les cases à cocher des deux tableaux, qu'ils soient actuellement affichés ou non.
 function clearAlbumSelection() {
   selectedAlbumIds.clear();
-  document.querySelectorAll('#album-tbody .row-select').forEach(cb => { cb.checked = false; });
+  document.querySelectorAll('#album-tbody .row-select, #disco-tbody .row-select').forEach(cb => { cb.checked = false; });
   const selAllCb = document.getElementById('select-all-albums');
   if (selAllCb) selAllCb.checked = false;
+  const selAllDiscoCb = document.getElementById('select-all-disco');
+  if (selAllDiscoCb) selAllDiscoCb.checked = false;
   renderBulkActionsBar();
 }
 
 function renderBulkActionsBar() {
-  const bar = document.getElementById('bulk-actions-bar');
-  const countEl = document.getElementById('bulk-actions-count');
-  if (!bar) return;
   const n = selectedAlbumIds.size;
-  if (countEl) countEl.textContent = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
-  bar.style.display = n ? 'flex' : 'none';
+  const label = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  [['bulk-actions-bar', 'bulk-actions-count'], ['bulk-actions-bar-disco', 'bulk-actions-count-disco']].forEach(([barId, countId]) => {
+    const bar = document.getElementById(barId);
+    if (!bar) return;
+    const countEl = document.getElementById(countId);
+    if (countEl) countEl.textContent = label;
+    bar.style.display = n ? 'flex' : 'none';
+  });
 }
 
 function bulkAddToWishlist() {
@@ -3584,6 +3648,7 @@ function bulkAddToWishlist() {
   updateNavBadges();
   saveToStorage();
   renderAlbums();
+  renderDiscographie();
   clearAlbumSelection();
   toast(`${added} album(s) ajouté(s) à la wishlist${skipped ? ` — ${skipped} déjà présent(s)` : ''}`);
 }
@@ -3625,6 +3690,7 @@ function bulkUnmarkOk() {
   saveToStorage();
   renderOkAlbums();
   renderAlbums();
+  renderDiscographie();
   updateNavBadges();
   clearAlbumSelection();
   toast(`${n} album(s) retiré(s) de Ok`);
@@ -3640,6 +3706,7 @@ function bulkDeleteAlbums() {
   saveToStorage();
   renderAlbums();
   renderStock();
+  renderDiscographie();
   updateNavBadges();
   clearAlbumSelection();
   toast(`${n} album(s) supprimé(s)`);
@@ -3891,6 +3958,51 @@ function nextPage() {
 }
 
 // ===================== TRACKS =====================
+// ===================== SÉLECTION MULTIPLE / ACTIONS GROUPÉES (Morceaux isolés) =====================
+let selectedTrackIds = new Set();
+
+function toggleTrackSelected(id, checked) {
+  if (checked) selectedTrackIds.add(id); else selectedTrackIds.delete(id);
+  renderTrackBulkBar();
+}
+
+function toggleSelectAllTracks(checked) {
+  document.querySelectorAll('#tracks-tbody .row-select').forEach(cb => {
+    cb.checked = checked;
+    const id = parseInt(cb.dataset.id);
+    if (checked) selectedTrackIds.add(id); else selectedTrackIds.delete(id);
+  });
+  renderTrackBulkBar();
+}
+
+function clearTrackSelection() {
+  selectedTrackIds.clear();
+  document.querySelectorAll('#tracks-tbody .row-select').forEach(cb => { cb.checked = false; });
+  const selAllCb = document.getElementById('select-all-tracks');
+  if (selAllCb) selAllCb.checked = false;
+  renderTrackBulkBar();
+}
+
+function renderTrackBulkBar() {
+  const bar = document.getElementById('bulk-actions-bar-tracks');
+  const countEl = document.getElementById('bulk-actions-count-tracks');
+  if (!bar) return;
+  const n = selectedTrackIds.size;
+  if (countEl) countEl.textContent = n ? `${n} morceau${n > 1 ? 'x' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+function bulkDeleteTracks() {
+  if (!selectedTrackIds.size) return;
+  const n = selectedTrackIds.size;
+  if (!confirm(`Supprimer définitivement ${n} morceau${n > 1 ? 'x' : ''} isolé${n > 1 ? 's' : ''} ?`)) return;
+  tracks = tracks.filter(t => !selectedTrackIds.has(t.id));
+  clearTrackSelection();
+  renderTracks();
+  saveToStorage();
+  toast(`${n} morceau${n > 1 ? 'x' : ''} supprimé${n > 1 ? 's' : ''}`);
+}
+
 function renderTracks() {
   // Dédoublonner (titre+artiste)
   const seen = new Map();
@@ -3946,7 +4058,8 @@ function renderTracks() {
 
   const tbody = document.getElementById('tracks-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
+    renderTrackBulkBar();
     return;
   }
   const fmtBadge = { flac:'badge-flac', mp3:'badge-mp3', aac:'badge-digital', autre:'badge-digital' };
@@ -3964,6 +4077,7 @@ function renderTracks() {
     const lovedBadge = _lovedTracks.has(normalizeKey(t.artist, t.title))
       ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : '';
     return `<tr>
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${t.id}" ${selectedTrackIds.has(t.id) ? 'checked' : ''} onchange="toggleTrackSelected(${t.id}, this.checked)"></td>
       <td style="font-weight:500">${esc(t.title)}${lovedBadge}</td>
       <td style="color:var(--text2);font-size:13px">${esc(t.artist)}</td>
       <td style="color:var(--text3);font-size:12px">${esc(t.album||'–')}</td>
@@ -3974,6 +4088,9 @@ function renderTracks() {
       <td><button class="btn btn-sm btn-danger" onclick="deleteTrack(${t.id})">✕</button></td>
     </tr>`;
   }).join('');
+  renderTrackBulkBar();
+  const selAllCb = document.getElementById('select-all-tracks');
+  if (selAllCb) selAllCb.checked = list.length > 0 && list.every(t => selectedTrackIds.has(t.id));
 }
 
 function rateTrack(id, note) {
@@ -3984,6 +4101,7 @@ function rateTrack(id, note) {
 function deleteTrack(id) {
   if (!confirm('Supprimer ce morceau ?')) return;
   tracks = tracks.filter(t => t.id !== id);
+  selectedTrackIds.delete(id);
   renderTracks();
   saveToStorage();
   toast('Morceau supprimé');
@@ -8527,6 +8645,7 @@ function saveWish() {
 function deleteWish(id) {
   if (!confirm('Retirer de la wishlist ?')) return;
   wishlist = wishlist.filter(w => w.id !== id);
+  selectedWishIds.delete(id);
   renderWishlist(); updateNavBadges(); saveToStorage();
 }
 
@@ -9341,6 +9460,68 @@ function exportWishlistCSV() {
   toast(`${wishlist.length} entrées exportées`);
 }
 
+// ===================== SÉLECTION MULTIPLE / ACTIONS GROUPÉES (Wishlist albums) =====================
+let selectedWishIds = new Set();
+
+function toggleWishSelected(id, checked) {
+  if (checked) selectedWishIds.add(id); else selectedWishIds.delete(id);
+  renderWishBulkBar();
+}
+
+function toggleSelectAllWish(checked) {
+  document.querySelectorAll('#wish-tbody .row-select').forEach(cb => {
+    cb.checked = checked;
+    const id = parseInt(cb.dataset.id);
+    if (checked) selectedWishIds.add(id); else selectedWishIds.delete(id);
+  });
+  renderWishBulkBar();
+}
+
+function clearWishSelection() {
+  selectedWishIds.clear();
+  document.querySelectorAll('#wish-tbody .row-select').forEach(cb => { cb.checked = false; });
+  const selAllCb = document.getElementById('select-all-wish');
+  if (selAllCb) selAllCb.checked = false;
+  renderWishBulkBar();
+}
+
+function renderWishBulkBar() {
+  const bar = document.getElementById('bulk-actions-bar-wish');
+  const countEl = document.getElementById('bulk-actions-count-wish');
+  if (!bar) return;
+  const n = selectedWishIds.size;
+  if (countEl) countEl.textContent = n ? `${n} entrée${n > 1 ? 's' : ''} sélectionnée${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+function bulkDeleteWish() {
+  if (!selectedWishIds.size) return;
+  const n = selectedWishIds.size;
+  if (!confirm(`Retirer ${n} entrée(s) de la wishlist ?`)) return;
+  wishlist = wishlist.filter(w => !selectedWishIds.has(w.id));
+  clearWishSelection();
+  renderWishlist();
+  updateNavBadges();
+  saveToStorage();
+  toast(`${n} entrée(s) retirée(s) de la wishlist`);
+}
+
+function bulkSetWishPrio(prio) {
+  if (!selectedWishIds.size) return;
+  let n = 0;
+  selectedWishIds.forEach(id => {
+    const w = wishlist.find(x => x.id === id);
+    if (!w) return;
+    w.prio = prio;
+    n++;
+  });
+  clearWishSelection();
+  renderWishlist();
+  saveToStorage();
+  const prioLabel = { high: 'haute', mid: 'moyenne', low: 'basse' };
+  toast(`Priorité ${prioLabel[prio]} appliquée à ${n} entrée(s)`);
+}
+
 function renderWishlist() {
   pruneWishlistOwned();
   const q    = document.getElementById('global-search').value.toLowerCase();
@@ -9368,14 +9549,16 @@ function renderWishlist() {
 
   const tbody = document.getElementById('wish-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎯</div>' +
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">🎯</div>' +
       (wishlist.length ? 'Aucun résultat avec ces filtres.' : 'La wishlist est vide. Ajoutez des albums depuis last.fm, RYM ou le stock.') +
       '</div></td></tr>';
+    renderWishBulkBar();
     return;
   }
   const prioLabel = { high: '🔴 Haute', mid: '🟡 Moyenne', low: '🟢 Basse' };
   const srcLabel  = { lastfm: '🎵 last.fm', stock: '📦 Stock', rym: '⭐ RYM', manual: '✍️ Manuel' };
   tbody.innerHTML = list.map(w => `<tr>
+    <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${w.id}" ${selectedWishIds.has(w.id) ? 'checked' : ''} onchange="toggleWishSelected(${w.id}, this.checked)"></td>
     <td>
       <div style="font-weight:500">${esc(w.album)}</div>
       <div style="font-size:12px;color:var(--text2)">${esc(w.artist)}</div>
@@ -9391,6 +9574,9 @@ function renderWishlist() {
       <button class="btn btn-sm btn-danger" onclick="deleteWish(${w.id})" title="Supprimer">✕</button>
     </td>
   </tr>`).join('');
+  renderWishBulkBar();
+  const selAllCb = document.getElementById('select-all-wish');
+  if (selAllCb) selAllCb.checked = list.length > 0 && list.every(w => selectedWishIds.has(w.id));
 }
 
 // ===================== STOCK =====================
@@ -9460,6 +9646,7 @@ function deleteStockItem(id) {
   const realId = unsid(id);
   albums = albums.filter(a => a.id !== realId && a.id !== String(realId));
   stockItems = stockItems.filter(s => s.id !== realId && s.id !== String(realId));
+  selectedStockIds.delete(realId);
   invalidateCache();
   renderStock();
   if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
@@ -9478,10 +9665,104 @@ function moveStockToCollection(id) {
     note: s.note || 0, plays: 0, notes: s.notes || ''
   });
   stockItems = stockItems.filter(x => x.id !== realId);
+  selectedStockIds.delete(realId);
   invalidateCache();
   renderStock();
   saveToStorage();
   toast(`"${s.album}" déplacé vers la collection ✓`);
+}
+
+// ===================== SÉLECTION MULTIPLE / ACTIONS GROUPÉES (Stock) =====================
+let selectedStockIds = new Set();
+
+function toggleStockSelected(idSid, checked) {
+  const id = unsid(idSid);
+  const s = stockItems.find(x => x.id === id || x.id === String(id));
+  const realId = s ? s.id : id;
+  if (checked) selectedStockIds.add(realId); else selectedStockIds.delete(realId);
+  renderStockBulkBar();
+}
+
+function toggleSelectAllStock(checked) {
+  document.querySelectorAll('#stock-tbody .row-select').forEach(cb => {
+    cb.checked = checked;
+    const id = unsid(cb.dataset.id);
+    const s = stockItems.find(x => x.id === id || x.id === String(id));
+    const realId = s ? s.id : id;
+    if (checked) selectedStockIds.add(realId); else selectedStockIds.delete(realId);
+  });
+  renderStockBulkBar();
+}
+
+function clearStockSelection() {
+  selectedStockIds.clear();
+  document.querySelectorAll('#stock-tbody .row-select').forEach(cb => { cb.checked = false; });
+  const selAllCb = document.getElementById('select-all-stock');
+  if (selAllCb) selAllCb.checked = false;
+  renderStockBulkBar();
+}
+
+function renderStockBulkBar() {
+  const bar = document.getElementById('bulk-actions-bar-stock');
+  const countEl = document.getElementById('bulk-actions-count-stock');
+  if (!bar) return;
+  const n = selectedStockIds.size;
+  if (countEl) countEl.textContent = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+function bulkDeleteStock() {
+  if (!selectedStockIds.size) return;
+  const n = selectedStockIds.size;
+  if (!confirm(`Retirer ${n} album(s) du stock ?`)) return;
+  stockItems = stockItems.filter(s => !selectedStockIds.has(s.id) && !selectedStockIds.has(String(s.id)));
+  invalidateCache();
+  clearStockSelection();
+  renderStock();
+  if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
+  saveToStorage();
+  toast(`${n} album(s) retiré(s) du stock`);
+}
+
+function bulkAddToWishlistFromStock() {
+  if (!selectedStockIds.size) return;
+  let added = 0, skipped = 0;
+  selectedStockIds.forEach(id => {
+    const s = stockItems.find(x => x.id === id || x.id === String(id));
+    if (!s) return;
+    const key = normalizeKey(s.artist, s.album);
+    if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) { skipped++; return; }
+    addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, 0, s.notes || '');
+    added++;
+  });
+  clearStockSelection();
+  renderStock();
+  toast(`${added} album(s) ajouté(s) à la wishlist${skipped ? ` — ${skipped} déjà présent(s)` : ''}`);
+}
+
+function bulkMoveStockToCollection() {
+  if (!selectedStockIds.size) return;
+  const n = selectedStockIds.size;
+  if (!confirm(`Déplacer ${n} album(s) du stock vers la collection ?`)) return;
+  let moved = 0;
+  selectedStockIds.forEach(id => {
+    const s = stockItems.find(x => x.id === id || x.id === String(id));
+    if (!s) return;
+    const fmt = s.format || 'flac';
+    albums.push({
+      id: uid(), artist: s.artist, album: s.album, year: s.year || '', genre: s.genre || '',
+      cd: false, flac: fmt === 'flac', mp3: fmt === 'mp3', digital: fmt === 'digital' || fmt === 'autre',
+      note: s.note || 0, plays: 0, notes: s.notes || ''
+    });
+    moved++;
+  });
+  stockItems = stockItems.filter(s => !selectedStockIds.has(s.id) && !selectedStockIds.has(String(s.id)));
+  invalidateCache();
+  clearStockSelection();
+  renderStock();
+  renderAlbums();
+  saveToStorage();
+  toast(`${moved} album(s) déplacé(s) vers la collection ✓`);
 }
 
 function renderStock() {
@@ -9513,7 +9794,8 @@ function renderStock() {
 
   const tbody = document.getElementById('stock-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📦</div>Aucun album en stock</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">📦</div>Aucun album en stock</div></td></tr>';
+    renderStockBulkBar();
     return;
   }
 
@@ -9524,6 +9806,7 @@ function renderStock() {
 
   tbody.innerHTML = list.map(s => `
     <tr onclick="openStockModal('${sid(s.id)}')" style="cursor:pointer">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${sid(s.id)}" ${selectedStockIds.has(s.id) ? 'checked' : ''} onchange="toggleStockSelected('${sid(s.id)}', this.checked)"></td>
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${initials(s.artist)}</div>
@@ -9543,6 +9826,9 @@ function renderStock() {
         <button class="btn btn-sm btn-danger" onclick="deleteStockItem('${sid(s.id)}')">✕</button>
       </td>
     </tr>`).join('');
+  renderStockBulkBar();
+  const selAllCb = document.getElementById('select-all-stock');
+  if (selAllCb) selAllCb.checked = list.length > 0 && list.every(s => selectedStockIds.has(s.id));
 }
 
 function rateStock(id, note) {
@@ -9808,9 +10094,10 @@ function renderDiscographie() {
 
   const tbody = document.getElementById('disco-tbody');
   if (!slice.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
     document.getElementById('disco-page-info').textContent = '';
   // updateNavBadges called by saveToStorage
+    renderBulkActionsBar();
     return;
   }
 
@@ -9866,6 +10153,7 @@ function renderDiscographie() {
     </span>`;
 
     return `<tr onclick="editAlbum('${safeId}')" style="cursor:pointer">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${safeId}" ${selectedAlbumIds.has(a.id) ? 'checked' : ''} onchange="toggleAlbumSelected('${safeId}', this.checked)"></td>
       <td>
         <div class="artist-cell">
           <div class="artist-avatar">${albumAvatar(a)}</div>
@@ -9898,6 +10186,9 @@ function renderDiscographie() {
 
   document.getElementById('disco-page-info').textContent = `Page ${discoPage} / ${pages} — ${total} entrées`;
   updateNavBadges();
+  renderBulkActionsBar();
+  const selAllDiscoCb = document.getElementById('select-all-disco');
+  if (selAllDiscoCb) selAllDiscoCb.checked = slice.length > 0 && slice.every(a => selectedAlbumIds.has(a.id));
 }
 
 function prevDiscoPage() { if (discoPage > 1) { discoPage--; renderDiscographie(); } }
