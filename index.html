@@ -11,6 +11,8 @@
 <!-- APP_VERSION: v2026.07.08-15 — Le clic sur le titre de piste (promptRateAlbumTrack, v14) restait trop peu visible et toujours vulnérable à l'interception d'extension navigateur sur la zone de la ligne. Remplacé/complété par un vrai champ <input> numérique TOUJOURS VISIBLE sur chaque ligne de piste (à côté des étoiles), avec bouton ✓ et Entrée pour valider — cible large, z-index dédié (.rs-track-note-inline) pour rester cliquable au-dessus d'une éventuelle icône flottante d'extension. Chemin de mutation partagé via submitAlbumTrackNoteInput() → _applyAlbumTrackRating(), identique pour le bouton ✓ et la touche Entrée. Le clic sur le titre (prompt natif) est conservé en complément. -->
 <!-- APP_VERSION: v2026.07.08-16 — Mode sélection multiple étendu aux tableaux Discographie, Stock, Wishlist albums et Morceaux isolés (jusqu'ici réservé à la Collection). Discographie réutilise directement selectedAlbumIds/bulk*() de la Collection (mêmes fiches album) : ajout d'une 2e barre d'actions groupées + case à cocher, synchronisées avec celles de la Collection (clearAlbumSelection() efface désormais les deux tableaux, renderBulkActionsBar() met à jour les deux barres, bulkAddToWishlist/bulkUnmarkOk/bulkDeleteAlbums rafraîchissent aussi renderDiscographie()). Stock : nouveau Set selectedStockIds + barre dédiée (→ Collecter, 🎯 Wishlist, ✕ Supprimer en masse), reprenant les actions déjà disponibles par ligne. Wishlist albums : nouveau Set selectedWishIds + barre dédiée (🔴🟡🟢 changement de priorité en masse, ✕ Supprimer) — pas de "marquer acquis" en masse, cette action ouvre un modal de pré-remplissage par nature unitaire. Morceaux isolés : nouveau Set selectedTrackIds + barre dédiée (✕ Supprimer uniquement, seule action existante par ligne). -->
 <!-- APP_VERSION: v2026.07.09-01 — Détection de conflits de synchronisation (section 3 "Robustesse Supabase"). Nouvelle table `sync_state` (1 ligne, migration SQL livrée séparément) : compteur `version` incrémenté atomiquement (update conditionnel WHERE version=expectedVersion) à chaque saveToSupabase() réussie, avec device_id/device_label du dernier écrivain. Avant tout sync : comparaison de la version distante à _localSyncVersion (fixée au chargement) — si elles divergent, le sync est bloqué AVANT toute écriture (aucune table touchée), l'indicateur passe en "⚠️ Conflit" (rouge, clignotant, cliquable), et une modale propose "🔄 Recharger la version distante" ou "⚠️ Forcer l'écrasement" (confirmation requise, bypass le check). Identité d'appareil : UUID + libellé auto-généré (plateforme + navigateur) dans localStorage, renommable depuis la modale de conflit. Vérification périodique (45s, lecture seule) en plus du check au moment du sync, pour détecter un conflit même sans sauvegarde en cours — utile car Antoine garde des onglets ouverts en parallèle sans les recharger. Dégradation gracieuse totale si la migration n'est pas appliquée (table absente) : _localSyncVersion reste null, aucune vérification, comportement strictement identique à avant. -->
+<!-- APP_VERSION: v2026.07.09-02 — Recherche globale unifiée (section 4, item historique de la todo). Nouveau bouton "🔎 Tout chercher" dans la topbar (+ raccourci Ctrl/Cmd+K depuis n'importe quel écran) ouvrant une modale dédiée, distincte du champ #global-search existant (qui reste un filtre local à la section affichée, comportement inchangé). Recherche en une fois dans albums (tous dossiers confondus), morceaux isolés, wishlist albums et wishlist morceaux ; résultats groupés par catégorie, triés par pertinence (exact > commence par > contient), limités à 6-8 par groupe. Chaque résultat cliquable navigue directement vers la bonne section ET ouvre la fiche concernée (editAlbum/openWishModal/openTrackWishModal quand une modale existe ; sinon la section est filtrée sur l'élément exact via le champ #global-search). Debounce 150ms sur la saisie, échap pour fermer. -->
+
 
 
 
@@ -747,12 +749,13 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-01</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-02</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
       <input type="text" id="global-search" placeholder="Rechercher…" oninput="onSearch()">
     </div>
+    <button class="btn" title="Recherche globale — albums, morceaux, wishlist (Ctrl+K)" onclick="openGlobalSearchModal()" style="font-family:var(--mono);font-size:12px">🔎 Tout chercher</button>
     <button class="btn btn-accent" onclick="openAlbumModal()">＋ Album</button>
   </div>
 
@@ -2113,6 +2116,19 @@ input[type="file"] { display: none; }
       <button class="btn" onclick="resolveSyncConflict('reload')">🔄 Recharger la version distante</button>
       <button class="btn" style="color:var(--red);border-color:var(--red)" onclick="resolveSyncConflict('force')">⚠️ Forcer l'écrasement</button>
     </div>
+  </div>
+</div>
+
+<!-- Modal recherche globale (unifiée : albums + morceaux + wishlist) -->
+<div class="modal-overlay" id="modal-global-search">
+  <div class="modal" style="width:620px;max-height:80vh;display:flex;flex-direction:column">
+    <div class="modal-header">
+      <span>🔎 Recherche globale</span>
+      <button class="modal-close" onclick="closeGlobalSearchModal()">✕</button>
+    </div>
+    <input type="text" id="gs-input" placeholder="Artiste, album ou titre de morceau…" oninput="performGlobalSearch()"
+      style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 12px;border-radius:var(--radius);outline:none;width:100%;box-sizing:border-box;margin-bottom:10px">
+    <div id="gs-results" style="overflow-y:auto;flex:1"></div>
   </div>
 </div>
 
@@ -3565,6 +3581,150 @@ function onSearch() {
   if (active === 'album-tracks')  renderAlbumTracks();
   if (active === 'track-wishlist') renderTrackWishlist();
 }
+
+// ===================== RECHERCHE GLOBALE UNIFIÉE (v2026.07.09) =====================
+// Contrairement à #global-search (filtre la section actuellement affichée, existant),
+// cette recherche interroge en une fois albums + morceaux isolés + wishlist (albums et
+// morceaux) et présente des résultats groupés cliquables qui ouvrent directement la fiche
+// concernée — sans avoir à changer manuellement de section au préalable.
+function openGlobalSearchModal() {
+  document.getElementById('modal-global-search').classList.add('open');
+  const input = document.getElementById('gs-input');
+  input.value = '';
+  document.getElementById('gs-results').innerHTML = '<div class="empty" style="padding:24px 0"><div class="empty-icon">🔎</div>Tapez pour chercher dans toute la collection.</div>';
+  setTimeout(() => input.focus(), 50);
+}
+function closeGlobalSearchModal() {
+  document.getElementById('modal-global-search').classList.remove('open');
+}
+
+// Score simple : correspondance exacte > commence par > contient — pour faire remonter
+// les résultats les plus pertinents en tête de chaque groupe.
+function _gsScore(text, q) {
+  const t = (text || '').toLowerCase();
+  if (t === q) return 0;
+  if (t.startsWith(q)) return 1;
+  return 2;
+}
+
+const _gsDebounced = debounce(() => _gsRun(), 150);
+function performGlobalSearch() { _gsDebounced(); }
+
+function _gsRun() {
+  const raw = document.getElementById('gs-input').value.trim();
+  const q = raw.toLowerCase();
+  const results = document.getElementById('gs-results');
+  if (q.length < 2) {
+    results.innerHTML = '<div class="empty" style="padding:24px 0"><div class="empty-icon">🔎</div>Continuez à taper (2 caractères min.)…</div>';
+    return;
+  }
+
+  const albumMatches = albums
+    .filter(a => (a.artist + ' ' + a.album).toLowerCase().includes(q))
+    .sort((a, b) => _gsScore(a.artist + ' ' + a.album, q) - _gsScore(b.artist + ' ' + b.album, q))
+    .slice(0, 8);
+
+  const trackMatches = tracks
+    .filter(t => (t.artist + ' ' + t.title).toLowerCase().includes(q))
+    .sort((a, b) => _gsScore(a.artist + ' ' + a.title, q) - _gsScore(b.artist + ' ' + b.title, q))
+    .slice(0, 8);
+
+  const wishAlbumMatches = wishlist
+    .filter(w => (w.artist + ' ' + w.album).toLowerCase().includes(q))
+    .sort((a, b) => _gsScore(a.artist + ' ' + a.album, q) - _gsScore(b.artist + ' ' + b.album, q))
+    .slice(0, 6);
+
+  const wishTrackMatches = trackWishlist
+    .filter(w => (w.artist + ' ' + w.title).toLowerCase().includes(q))
+    .sort((a, b) => _gsScore(a.artist + ' ' + a.title, q) - _gsScore(b.artist + ' ' + b.title, q))
+    .slice(0, 6);
+
+  const total = albumMatches.length + trackMatches.length + wishAlbumMatches.length + wishTrackMatches.length;
+  if (!total) {
+    results.innerHTML = '<div class="empty" style="padding:24px 0"><div class="empty-icon">🕳️</div>Aucun résultat pour « ' + esc(raw) + ' ».</div>';
+    return;
+  }
+
+  const folderBadge = a => {
+    const f = a.folders || [];
+    if (f.includes('stock')) return '📦 Stock';
+    if (f.includes('forsale')) return '💸 À vendre';
+    if (f.includes('ok')) return '✅ Ok';
+    if (a.has_cd || a.cd) return '💿 CD';
+    return '💾 Numérique';
+  };
+
+  const section = (title, icon, rows) => !rows.length ? '' : `
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text3);margin:6px 0 4px;font-family:var(--mono)">${icon} ${esc(title)} (${rows.length})</div>
+      ${rows.join('')}
+    </div>`;
+
+  const gsRow = (title, sub, badge, onclick) => `
+    <div class="gs-row" onclick="${onclick}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--radius);cursor:pointer;transition:background 0.15s" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='transparent'">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
+        <div style="font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sub}</div>
+      </div>
+      ${badge ? `<span style="font-size:11px;color:var(--text3);flex-shrink:0">${badge}</span>` : ''}
+    </div>`;
+
+  results.innerHTML =
+    section('Albums', '💽', albumMatches.map(a =>
+      gsRow(esc(a.album), esc(a.artist) + (a.year ? ' · ' + a.year : ''), folderBadge(a), `jumpToGlobalSearchAlbum('${a.id}')`)
+    )) +
+    section('Morceaux isolés', '🎵', trackMatches.map(t =>
+      gsRow(esc(t.title), esc(t.artist) + (t.album ? ' · ' + esc(t.album) : ''), (t.note ? '★'.repeat(t.note) : ''), `jumpToGlobalSearchTrack(${t.id})`)
+    )) +
+    section('Wishlist — albums', '🎯', wishAlbumMatches.map(w =>
+      gsRow(esc(w.album), esc(w.artist) + (w.year ? ' · ' + w.year : ''), ({high:'🔴',mid:'🟡',low:'🟢'})[w.prio] || '', `jumpToGlobalSearchWishAlbum(${w.id})`)
+    )) +
+    section('Wishlist — morceaux', '🎯', wishTrackMatches.map(w =>
+      gsRow(esc(w.title), esc(w.artist), ({high:'🔴',mid:'🟡',low:'🟢'})[w.prio] || '', `jumpToGlobalSearchWishTrack(${w.id})`)
+    ));
+}
+
+function jumpToGlobalSearchAlbum(id) {
+  closeGlobalSearchModal();
+  const a = albums.find(x => x.id === id || x.id === String(id));
+  if (!a) return;
+  nav('albums');
+  document.getElementById('global-search').value = a.artist + ' ' + a.album;
+  renderAlbums();
+  editAlbum(sid(a.id));
+}
+function jumpToGlobalSearchTrack(id) {
+  closeGlobalSearchModal();
+  const t = tracks.find(x => x.id === id);
+  if (!t) return;
+  nav('tracks');
+  document.getElementById('global-search').value = t.artist + ' ' + t.title;
+  renderTracks();
+}
+function jumpToGlobalSearchWishAlbum(id) {
+  closeGlobalSearchModal();
+  nav('wishlist');
+  document.getElementById('global-search').value = '';
+  renderWishlist();
+  openWishModal(id);
+}
+function jumpToGlobalSearchWishTrack(id) {
+  closeGlobalSearchModal();
+  nav('track-wishlist');
+  document.getElementById('global-search').value = '';
+  renderTrackWishlist();
+  openTrackWishModal(id);
+}
+
+// Raccourci clavier Ctrl+K / Cmd+K — ouvre la recherche globale depuis n'importe où
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    openGlobalSearchModal();
+  } else if (e.key === 'Escape' && document.getElementById('modal-global-search')?.classList.contains('open')) {
+    closeGlobalSearchModal();
+  }
+});
 
 // ===================== ALBUMS =====================
 
