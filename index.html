@@ -13,6 +13,7 @@
 <!-- APP_VERSION: v2026.07.09-01 — Détection de conflits de synchronisation (section 3 "Robustesse Supabase"). Nouvelle table `sync_state` (1 ligne, migration SQL livrée séparément) : compteur `version` incrémenté atomiquement (update conditionnel WHERE version=expectedVersion) à chaque saveToSupabase() réussie, avec device_id/device_label du dernier écrivain. Avant tout sync : comparaison de la version distante à _localSyncVersion (fixée au chargement) — si elles divergent, le sync est bloqué AVANT toute écriture (aucune table touchée), l'indicateur passe en "⚠️ Conflit" (rouge, clignotant, cliquable), et une modale propose "🔄 Recharger la version distante" ou "⚠️ Forcer l'écrasement" (confirmation requise, bypass le check). Identité d'appareil : UUID + libellé auto-généré (plateforme + navigateur) dans localStorage, renommable depuis la modale de conflit. Vérification périodique (45s, lecture seule) en plus du check au moment du sync, pour détecter un conflit même sans sauvegarde en cours — utile car Antoine garde des onglets ouverts en parallèle sans les recharger. Dégradation gracieuse totale si la migration n'est pas appliquée (table absente) : _localSyncVersion reste null, aucune vérification, comportement strictement identique à avant. -->
 <!-- APP_VERSION: v2026.07.09-02 — Recherche globale unifiée (section 4, item historique de la todo). Nouveau bouton "🔎 Tout chercher" dans la topbar (+ raccourci Ctrl/Cmd+K depuis n'importe quel écran) ouvrant une modale dédiée, distincte du champ #global-search existant (qui reste un filtre local à la section affichée, comportement inchangé). Recherche en une fois dans albums (tous dossiers confondus), morceaux isolés, wishlist albums et wishlist morceaux ; résultats groupés par catégorie, triés par pertinence (exact > commence par > contient), limités à 6-8 par groupe. Chaque résultat cliquable navigue directement vers la bonne section ET ouvre la fiche concernée (editAlbum/openWishModal/openTrackWishModal quand une modale existe ; sinon la section est filtrée sur l'élément exact via le champ #global-search). Debounce 150ms sur la saisie, échap pour fermer. -->
 <!-- APP_VERSION: v2026.07.09-03 — La notation classique (rateAlbum : clic étoiles Collection, promptStockRating : saisie numérique, rateTrack : clic étoiles Morceaux isolés) alimente désormais "Notes à reporter" via queueNoteToReport(), jusqu'ici scopée à la Session notation (todo section 10, dernier point ⬜). Ne queue que sur une note strictement positive (une note remise à 0 par re-clic ne crée pas d'entrée), comportement identique à celui déjà en place pour les pistes de tracklist (_applyAlbumTrackRating). updateNavBadges() appelé pour rafraîchir immédiatement le badge sidebar. -->
+<!-- APP_VERSION: v2026.07.09-04 — Filtres sauvegardés (section 4 de la todo, item "nouveau"). Vue Collection uniquement pour l'instant (vue la plus riche en filtres) : nouveau menu déroulant "💾 Filtres…" dans la barre d'outils + boutons 💾 (enregistrer la combinaison actuelle sous un nom, écrase si le nom existe déjà après confirmation) et ✕ (supprimer le préréglage sélectionné, confirmation requise). Couvre les 14 champs lus par filteredAlbums()/sortedAlbums() (artiste, album, support, dossier, genre, notes MB/DC/RYM avec opérateur+valeur, année, écoutes min, tri). Stockage localStorage (`terant_filter_presets_collection_v1`) plutôt que Supabase : c'est de l'état d'affichage local, pas une donnée de collection à synchroniser entre appareils. Appliquer un préréglage réutilise onNoteOpChange() pour ré-afficher/masquer correctement les champs valeur des filtres de note avant de relancer renderAlbums(). Discographie/Stock/Wishlist non couverts pour l'instant (todo laissée ⬜ pour l'extension). -->
 
 
 
@@ -751,7 +752,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-03</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-04</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -850,6 +851,11 @@ input[type="file"] { display: none; }
           <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
+        <select id="filter-preset-select" onchange="applyFilterPreset()" title="Charger un préréglage de filtres enregistré">
+          <option value="">💾 Filtres…</option>
+        </select>
+        <button class="btn btn-sm" onclick="saveCurrentFilterPreset()" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
+        <button class="btn btn-sm" onclick="deleteSelectedFilterPreset()" title="Supprimer le préréglage sélectionné">✕</button>
         <div class="toolbar-right">
           <span id="albums-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportFilteredAlbumsCSV()">↓ CSV</button>
@@ -3833,6 +3839,114 @@ function onNoteOpChange(opId, valId) {
   const inp = document.getElementById(valId);
   if (!inp) return;
   inp.style.display = (op && op !== 'none' && op !== 'any') ? '' : 'none';
+}
+
+// ===================== FILTRES SAUVEGARDÉS (Collection) =====================
+// Préréglages nommés pour la barre de filtres de la Collection — évite de recomposer
+// à chaque fois les mêmes combinaisons (genre + note + dossier + tri, etc.). Stockés en
+// localStorage (état d'affichage local, pas une donnée de collection à synchroniser via
+// Supabase). Champs couverts = exactement ceux lus par filteredAlbums()/sortedAlbums().
+const FILTER_PRESETS_LS_KEY = 'terant_filter_presets_collection_v1';
+const FILTER_PRESET_FIELDS = [
+  'filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre',
+  'filter-note-op', 'filter-note-val', 'filter-dc-note-op', 'filter-dc-note-val',
+  'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'sort-col'
+];
+
+function loadFilterPresets() {
+  try {
+    const raw = localStorage.getItem(FILTER_PRESETS_LS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+
+function saveFilterPresetsToStorage(list) {
+  try {
+    localStorage.setItem(FILTER_PRESETS_LS_KEY, JSON.stringify(list));
+  } catch (e) { toast('Impossible d\'enregistrer le préréglage (stockage local plein ?)', 'error'); }
+}
+
+function captureCurrentFilterValues() {
+  const values = {};
+  FILTER_PRESET_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) values[id] = el.value;
+  });
+  return values;
+}
+
+function isFilterValuesEmpty(values) {
+  return Object.values(values || {}).every(v => !v);
+}
+
+function renderFilterPresetOptions(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const keepSelected = sel.value;
+  const presets = loadFilterPresets();
+  sel.innerHTML = '<option value="">💾 Filtres…</option>' +
+    presets.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  if (presets.some(p => p.id === keepSelected)) sel.value = keepSelected;
+}
+
+function saveCurrentFilterPreset() {
+  const values = captureCurrentFilterValues();
+  if (isFilterValuesEmpty(values)) {
+    toast('Aucun filtre actif à enregistrer', 'error');
+    return;
+  }
+  const name = (prompt('Nom du préréglage de filtres :') || '').trim();
+  if (!name) return;
+  const presets = loadFilterPresets();
+  const existing = presets.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    if (!confirm(`Un préréglage "${existing.name}" existe déjà — le remplacer ?`)) return;
+    existing.values = values;
+    existing.updatedAt = new Date().toISOString();
+    saveFilterPresetsToStorage(presets);
+    renderFilterPresetOptions('filter-preset-select');
+    document.getElementById('filter-preset-select').value = existing.id;
+    toast(`Préréglage "${existing.name}" mis à jour ✓`);
+    return;
+  }
+  const preset = { id: 'fp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, values, createdAt: new Date().toISOString() };
+  presets.push(preset);
+  saveFilterPresetsToStorage(presets);
+  renderFilterPresetOptions('filter-preset-select');
+  document.getElementById('filter-preset-select').value = preset.id;
+  toast(`Préréglage "${name}" enregistré ✓`);
+}
+
+function applyFilterPreset() {
+  const sel = document.getElementById('filter-preset-select');
+  const id = sel?.value || '';
+  if (!id) return;
+  const preset = loadFilterPresets().find(p => p.id === id);
+  if (!preset) return;
+  FILTER_PRESET_FIELDS.forEach(fieldId => {
+    const el = document.getElementById(fieldId);
+    if (el && fieldId in preset.values) el.value = preset.values[fieldId];
+  });
+  onNoteOpChange('filter-note-op', 'filter-note-val');
+  onNoteOpChange('filter-dc-note-op', 'filter-dc-note-val');
+  onNoteOpChange('filter-rym-note-op', 'filter-rym-note-val');
+  currentPage = 1;
+  renderAlbums();
+  toast(`Préréglage "${preset.name}" appliqué`);
+}
+
+function deleteSelectedFilterPreset() {
+  const sel = document.getElementById('filter-preset-select');
+  const id = sel?.value || '';
+  if (!id) { toast('Choisissez d\'abord un préréglage à supprimer', 'error'); return; }
+  const presets = loadFilterPresets();
+  const preset = presets.find(p => p.id === id);
+  if (!preset) return;
+  if (!confirm(`Supprimer le préréglage "${preset.name}" ?`)) return;
+  saveFilterPresetsToStorage(presets.filter(p => p.id !== id));
+  renderFilterPresetOptions('filter-preset-select');
+  toast(`Préréglage "${preset.name}" supprimé ✓`);
 }
 
 function filteredAlbums() {
@@ -12879,6 +12993,7 @@ async function initApp() {
 // Appliqué après le chargement du DOM — remplace les oninput inline
 // pour toutes les fonctions de rendu coûteuses (300ms par défaut, 150ms pour les légères)
 document.addEventListener('DOMContentLoaded', () => {
+  renderFilterPresetOptions('filter-preset-select');
   const rules = [
     // [id de l'input, fonction à appeler, délai ms]
     ['global-search',        () => onSearch(),                           200],
