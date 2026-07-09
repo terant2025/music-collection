@@ -10,6 +10,8 @@
 <!-- APP_VERSION: v2026.07.08-14 — Suite au retour "je peux toujours pas noter" sur la Session notation (extension navigateur qui intercepte le clic, cf. v2026.07.08-11) : ajout d'une saisie numérique de la note (champ + bouton "✓ Noter", Entrée pour valider) comme alternative aux clics sur étoiles, pour l'album/morceau courant ET pour chaque piste de la tracklist embarquée (clic sur le titre de la piste → prompt() natif, contourne toute interception DOM). Refactor : _applyAlbumTrackRating() factorise la mutation entre le clic étoile (toggle) et la saisie clavier (valeur absolue). Mise en page : cadre élargi (420px → 820px), pochette réduite (260px → 140px), layout horizontal pochette/infos au lieu d'une colonne centrée, tracklist embarquée sur 2 colonnes (CSS multi-colonnes) — tient sur l'écran sans scroll pour la plupart des albums. -->
 <!-- APP_VERSION: v2026.07.08-15 — Le clic sur le titre de piste (promptRateAlbumTrack, v14) restait trop peu visible et toujours vulnérable à l'interception d'extension navigateur sur la zone de la ligne. Remplacé/complété par un vrai champ <input> numérique TOUJOURS VISIBLE sur chaque ligne de piste (à côté des étoiles), avec bouton ✓ et Entrée pour valider — cible large, z-index dédié (.rs-track-note-inline) pour rester cliquable au-dessus d'une éventuelle icône flottante d'extension. Chemin de mutation partagé via submitAlbumTrackNoteInput() → _applyAlbumTrackRating(), identique pour le bouton ✓ et la touche Entrée. Le clic sur le titre (prompt natif) est conservé en complément. -->
 <!-- APP_VERSION: v2026.07.08-16 — Mode sélection multiple étendu aux tableaux Discographie, Stock, Wishlist albums et Morceaux isolés (jusqu'ici réservé à la Collection). Discographie réutilise directement selectedAlbumIds/bulk*() de la Collection (mêmes fiches album) : ajout d'une 2e barre d'actions groupées + case à cocher, synchronisées avec celles de la Collection (clearAlbumSelection() efface désormais les deux tableaux, renderBulkActionsBar() met à jour les deux barres, bulkAddToWishlist/bulkUnmarkOk/bulkDeleteAlbums rafraîchissent aussi renderDiscographie()). Stock : nouveau Set selectedStockIds + barre dédiée (→ Collecter, 🎯 Wishlist, ✕ Supprimer en masse), reprenant les actions déjà disponibles par ligne. Wishlist albums : nouveau Set selectedWishIds + barre dédiée (🔴🟡🟢 changement de priorité en masse, ✕ Supprimer) — pas de "marquer acquis" en masse, cette action ouvre un modal de pré-remplissage par nature unitaire. Morceaux isolés : nouveau Set selectedTrackIds + barre dédiée (✕ Supprimer uniquement, seule action existante par ligne). -->
+<!-- APP_VERSION: v2026.07.09-01 — Détection de conflits de synchronisation (section 3 "Robustesse Supabase"). Nouvelle table `sync_state` (1 ligne, migration SQL livrée séparément) : compteur `version` incrémenté atomiquement (update conditionnel WHERE version=expectedVersion) à chaque saveToSupabase() réussie, avec device_id/device_label du dernier écrivain. Avant tout sync : comparaison de la version distante à _localSyncVersion (fixée au chargement) — si elles divergent, le sync est bloqué AVANT toute écriture (aucune table touchée), l'indicateur passe en "⚠️ Conflit" (rouge, clignotant, cliquable), et une modale propose "🔄 Recharger la version distante" ou "⚠️ Forcer l'écrasement" (confirmation requise, bypass le check). Identité d'appareil : UUID + libellé auto-généré (plateforme + navigateur) dans localStorage, renommable depuis la modale de conflit. Vérification périodique (45s, lecture seule) en plus du check au moment du sync, pour détecter un conflit même sans sauvegarde en cours — utile car Antoine garde des onglets ouverts en parallèle sans les recharger. Dégradation gracieuse totale si la migration n'est pas appliquée (table absente) : _localSyncVersion reste null, aucune vérification, comportement strictement identique à avant. -->
+
 
 
 
@@ -559,6 +561,8 @@ input[type="file"] { display: none; }
 .save-indicator.saved { color: var(--accent); }
 .save-indicator.error .save-dot { background: var(--red); }
 .save-indicator.error { color: var(--red); }
+.save-indicator.conflict .save-dot { background: var(--red); animation: pulse 1s infinite; }
+.save-indicator.conflict { color: var(--red); cursor: pointer; font-weight: 600; }
 
 /* Filtre note inline */
 .note-filter {
@@ -743,7 +747,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.08-16</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-01</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -2093,6 +2097,25 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
+<!-- Modal conflit de synchronisation -->
+<div class="modal-overlay" id="modal-sync-conflict">
+  <div class="modal" style="width:480px">
+    <div class="modal-header">
+      <span>⚠️ Conflit de synchronisation</span>
+      <button class="modal-close" onclick="closeSyncConflictModal()">✕</button>
+    </div>
+    <p id="sync-conflict-detail" style="font-size:13px;color:var(--text2);line-height:1.5"></p>
+    <p style="font-size:12px;color:var(--text3);line-height:1.5">
+      Cet appareil : <b id="sync-device-label"></b>
+      — <a href="#" onclick="renameDevice();return false" style="color:var(--accent)">renommer</a>
+    </p>
+    <div class="modal-footer" style="flex-wrap:wrap;gap:8px">
+      <button class="btn" onclick="resolveSyncConflict('reload')">🔄 Recharger la version distante</button>
+      <button class="btn" style="color:var(--red);border-color:var(--red)" onclick="resolveSyncConflict('force')">⚠️ Forcer l'écrasement</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal diff tracklist -->
 <div class="modal-overlay" id="modal-tracklist-diff">
   <div class="modal" style="width:700px;max-height:80vh;overflow-y:auto">
@@ -2432,6 +2455,109 @@ function loadFromStorage() {
   } catch(e) { return false; }
 }
 
+// ===================== SYNC CONFLICT DETECTION (v2026.07.09) =====================
+// Compteur atomique meta.sync_state.version : chaque saveToSupabase() réussie l'incrémente.
+// _localSyncVersion = dernière version connue par CET onglet (fixée au chargement et après
+// chaque sauvegarde réussie). Si au moment de sauvegarder la version distante a changé (un
+// autre onglet/appareil a sauvegardé entre-temps), on bloque le sync destructeur au lieu
+// d'écraser silencieusement — cf. section 3 de ameliorations-collection.md.
+// Dégrade gracieusement si la table sync_state n'existe pas encore (migration non appliquée) :
+// _localSyncVersion reste null, aucune vérification n'est faite, comportement identique à avant.
+let _localSyncVersion = null;
+let _syncConflict = null; // { remoteVersion, remoteDeviceLabel, remoteAt } quand un conflit est détecté
+let _syncTableMissing = false;
+
+function getDeviceId() {
+  let id = localStorage.getItem('device_uuid');
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    localStorage.setItem('device_uuid', id);
+  }
+  return id;
+}
+function getDeviceLabel() {
+  let label = localStorage.getItem('device_label');
+  if (!label) {
+    const ua = navigator.userAgent || '';
+    const browser = ua.includes('Firefox') ? 'Firefox' : ua.includes('Edg') ? 'Edge' : ua.includes('Chrome') ? 'Chrome' : ua.includes('Safari') ? 'Safari' : 'Navigateur';
+    label = (navigator.platform || 'Appareil') + ' · ' + browser;
+    localStorage.setItem('device_label', label);
+  }
+  return label;
+}
+function renameDevice() {
+  const cur = getDeviceLabel();
+  const next = prompt('Nom de cet appareil (affiché en cas de conflit de synchronisation) :', cur);
+  if (next && next.trim()) {
+    localStorage.setItem('device_label', next.trim());
+    const el = document.getElementById('sync-device-label');
+    if (el) el.textContent = next.trim();
+    toast('Appareil renommé ✓');
+  }
+}
+
+// Récupère { version, device_label, updated_at } depuis sync_state, ou null si la table
+// n'existe pas (migration non appliquée) ou en cas d'erreur réseau.
+async function fetchSyncState() {
+  if (!window._sb) return null;
+  try {
+    const { data, error } = await window._sb.from('sync_state').select('version,device_label,updated_at').eq('id', 1).single();
+    if (error) {
+      if (error.code === 'PGRST205' || error.message?.includes('does not exist') || error.code === '42P01') {
+        _syncTableMissing = true;
+      }
+      return null;
+    }
+    _syncTableMissing = false;
+    return data;
+  } catch (e) { return null; }
+}
+
+// Appelé après un load() réussi : fixe la référence locale sans jamais bloquer.
+async function syncVersionAfterLoad() {
+  const st = await fetchSyncState();
+  _localSyncVersion = st ? st.version : (_syncTableMissing ? null : 0);
+  _syncConflict = null;
+}
+
+// Vérification périodique légère (n'écrit rien) : détecte un conflit même sans sauvegarde
+// en cours, utile car Antoine garde des onglets ouverts en parallèle sans les recharger.
+async function pollSyncVersion() {
+  if (!window._sb || _localSyncVersion === null || _syncConflict || _savingToSupabase) return;
+  const st = await fetchSyncState();
+  if (st && st.version !== _localSyncVersion) {
+    _syncConflict = { remoteVersion: st.version, remoteDeviceLabel: st.device_label || 'un autre appareil', remoteAt: st.updated_at };
+    setSaveIndicator('conflict');
+  }
+}
+setInterval(pollSyncVersion, 45000);
+
+function openSyncConflictModal() {
+  if (!_syncConflict) return;
+  const when = _syncConflict.remoteAt ? new Date(_syncConflict.remoteAt).toLocaleString('fr-FR') : '';
+  document.getElementById('sync-conflict-detail').textContent =
+    `Une autre session (${_syncConflict.remoteDeviceLabel}) a sauvegardé la collection${when ? ' le ' + when : ''}, après le dernier chargement de cet onglet. Vos modifications locales n'ont pas encore été écrasées, mais la synchronisation automatique est en pause pour éviter de perdre des données.`;
+  const devEl = document.getElementById('sync-device-label');
+  if (devEl) devEl.textContent = getDeviceLabel();
+  document.getElementById('modal-sync-conflict').classList.add('open');
+}
+function closeSyncConflictModal() {
+  document.getElementById('modal-sync-conflict').classList.remove('open');
+}
+async function resolveSyncConflict(mode) {
+  if (mode === 'reload') {
+    closeSyncConflictModal();
+    toast('Rechargement de la version distante…');
+    const ok = await loadFromSupabase();
+    if (ok) toast('Version distante rechargée ✓');
+  } else if (mode === 'force') {
+    if (!confirm('Écraser la version distante avec les données de cet onglet ? Les modifications faites ailleurs depuis le dernier chargement seront perdues.')) return;
+    closeSyncConflictModal();
+    _syncConflict = null;
+    await saveToSupabase({ force: true });
+  }
+}
+
 // ===================== SUPABASE =====================
 const SUPABASE_URL = 'https://mjedlmumiljdrmjobefm.supabase.co';
 const EDGE_FN_URL  = 'https://mjedlmumiljdrmjobefm.supabase.co/functions/v1/get-release-info';
@@ -2582,12 +2708,27 @@ function deduplicateAlbums() {
 }
 
 let _savingToSupabase = false;
-async function saveToSupabase() {
+async function saveToSupabase(opts) {
+  const force = !!(opts && opts.force);
   if (!window._sb) return;
   if (_savingToSupabase) { 
     // Relancer après la sauvegarde en cours
-    setTimeout(() => saveToSupabase(), 1000);
+    setTimeout(() => saveToSupabase(opts), 1000);
     return;
+  }
+  // ── Détection de conflit (v2026.07.09) ──────────────────────────────────────
+  // Si un autre onglet/appareil a sauvegardé depuis notre dernier chargement, on bloque
+  // le sync destructeur (DELETE des absents, etc.) plutôt que d'écraser silencieusement.
+  // `force` (bouton "Forcer l'écrasement" de la modale de conflit) court-circuite ce check.
+  let expectedVersion = null;
+  if (!force) {
+    const remoteState = await fetchSyncState();
+    if (remoteState && _localSyncVersion !== null && remoteState.version !== _localSyncVersion) {
+      _syncConflict = { remoteVersion: remoteState.version, remoteDeviceLabel: remoteState.device_label || 'un autre appareil', remoteAt: remoteState.updated_at };
+      setSaveIndicator('conflict');
+      return; // sync bloqué — aucune table modifiée
+    }
+    if (remoteState) expectedVersion = remoteState.version;
   }
   _savingToSupabase = true;
   setSaveIndicator('saving');
@@ -2722,6 +2863,41 @@ async function saveToSupabase() {
       { key: 'track_note_overrides_data', value: JSON.stringify(trackNoteOverrides) },
     ], { onConflict: 'key' });
 
+    // ── Bump atomique du compteur de version (v2026.07.09) ────────────────────
+    // Update conditionnel (WHERE version = expectedVersion) : si une autre écriture s'est
+    // glissée entre le check du début et maintenant, 0 ligne est modifiée — on retombe sur
+    // un simple re-fetch (dernier écrivain gagne pour cette fenêtre étroite, comme avant),
+    // sans bloquer l'utilisateur puisque ses propres données viennent d'être écrites avec succès.
+    if (!_syncTableMissing) {
+      try {
+        const bumpPayload = { updated_at: now, device_id: getDeviceId(), device_label: getDeviceLabel() };
+        let newVersion = null;
+        if (expectedVersion !== null) {
+          const { data: bumped } = await window._sb.from('sync_state')
+            .update({ version: expectedVersion + 1, ...bumpPayload })
+            .eq('id', 1).eq('version', expectedVersion)
+            .select('version').single();
+          newVersion = bumped ? bumped.version : null;
+        }
+        if (newVersion === null) {
+          // Pas de version attendue (1ère connexion) ou update conditionnel raté (course) :
+          // on relit puis on force l'incrément pour rester cohérent.
+          const cur = await fetchSyncState();
+          const base = cur ? cur.version : 0;
+          const { data: bumped2 } = await window._sb.from('sync_state')
+            .update({ version: base + 1, ...bumpPayload })
+            .eq('id', 1).select('version').single();
+          newVersion = bumped2 ? bumped2.version : base + 1;
+        }
+        _localSyncVersion = newVersion;
+        _syncConflict = null;
+      } catch (e) {
+        // Table sync_state absente (migration non appliquée) ou erreur réseau ponctuelle :
+        // dégradation gracieuse, pas de blocage de la sauvegarde qui a déjà réussi.
+        _syncTableMissing = true;
+      }
+    }
+
     setSaveIndicator('saved', now);
   } catch(e) {
     setSaveIndicator('error');
@@ -2771,6 +2947,7 @@ async function loadFromSupabase() {
       rymData = (rym || []).map(d => ({ artist: d.artist, album: d.album, rating: d.rating, ownership: d.ownership || '', year: d.year || '', genre: d.genre || '' }));
       nextId = Math.max(nextId, computeNextId());
       if (repairDuplicateIds()) saveToStorage();
+      await syncVersionAfterLoad();
       setSaveIndicator('saved');
       return true; // succès — collection vide est un état valide
     }
@@ -2948,6 +3125,7 @@ async function loadFromSupabase() {
     nextId = Math.max(nextId, computeNextId());
     if (repairDuplicateIds()) saveToStorage();
 
+    await syncVersionAfterLoad();
     setSaveIndicator('saved');
     return true;
   } catch(e) {
@@ -3081,9 +3259,12 @@ function setSaveIndicator(state, isoDate) {
     } else { label.textContent = prefix + 'Synchronisé'; }
   } else if (state === 'error') {
     label.textContent = isSupa ? '🟢 Erreur sync' : 'Erreur sauvegarde';
+  } else if (state === 'conflict') {
+    label.textContent = '⚠️ Conflit — cliquer pour résoudre';
   } else {
     label.textContent = 'Aucune sauvegarde';
   }
+  el.onclick = (state === 'conflict') ? openSyncConflictModal : null;
 }
 
 setInterval(() => {
