@@ -395,6 +395,7 @@ async function saveToSupabase(opts) {
       mb_refreshed_at: a.mb_refreshed_at || null,
       mb_release_type: a.mb_release_type || null,
       mb_release_secondary_types: a.mb_release_secondary_types?.length ? JSON.stringify(a.mb_release_secondary_types) : null,
+      discogs_master_year: a.discogs_master_year || null,
       youtube_url:    a.youtube_url || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
@@ -618,6 +619,7 @@ async function loadFromSupabase() {
         mb_refreshed_at: a.mb_refreshed_at || undefined,
         mb_release_type: a.mb_release_type || undefined,
         mb_release_secondary_types: (() => { try { return a.mb_release_secondary_types ? JSON.parse(a.mb_release_secondary_types) : undefined; } catch(e) { return undefined; } })(),
+        discogs_master_year: a.discogs_master_year || undefined,
         youtube_url:   a.youtube_url || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
@@ -1937,7 +1939,7 @@ function renderAlbums() {
           </div>
         </div>
       </td>
-      <td class="mono">${a.year || '–'}${a.mb_original_year && String(a.mb_original_year) !== String(a.year) ? ` <span title="Année de première parution selon MusicBrainz : ${a.mb_original_year}" style="font-size:10px;color:var(--text3);cursor:help">(orig. ${a.mb_original_year})</span>` : ''}</td>
+      <td class="mono">${a.year || '–'}${origYearBadge(a)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(a.genre||'–')}</td>
       <td><div class="badges-cell">${badges || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
         <td>${noteCell}</td>
@@ -1982,6 +1984,26 @@ function mbTypeBadge(a) {
   (a.mb_release_secondary_types || []).forEach(t => parts.push(MB_SECONDARY_LABELS[t] || t));
   if (!parts.length) return '';
   return ` <span title="Type MusicBrainz : ${escAttr([a.mb_release_type, ...(a.mb_release_secondary_types||[])].filter(Boolean).join(', '))}" style="font-size:9px;color:var(--purple);border:1px solid rgba(176,140,255,0.3);border-radius:3px;padding:1px 4px;margin-left:4px;vertical-align:middle">${esc([...new Set(parts)].join(' · '))}</span>`;
+}
+
+// Badge année d'édition originale (todo section 6, "croisement master release Discogs comme
+// 2e source") : croise mb_original_year (release-group MusicBrainz, déjà en place) avec
+// discogs_master_year (master release Discogs, nouveau). N'affiche rien si les deux sont
+// absents ou si l'année d'origine == année de l'édition en collection (rien à signaler).
+// Si les deux sources sont présentes et divergent, le signale en ambre plutôt que de choisir
+// silencieusement l'une des deux — comme le reste des comparaisons multi-source de l'app.
+function origYearBadge(a) {
+  const mb = a.mb_original_year ? String(a.mb_original_year) : '';
+  const dc = a.discogs_master_year ? String(a.discogs_master_year) : '';
+  if (!mb && !dc) return '';
+  const year = String(a.year || '');
+  if (mb && dc && mb !== dc) {
+    return ` <span title="Année de première parution : MusicBrainz dit ${mb}, Discogs (master release) dit ${dc} — sources en désaccord" style="font-size:10px;color:var(--amber);cursor:help">(orig. MB:${mb} ≠ DC:${dc} ⚠️)</span>`;
+  }
+  const orig = mb || dc;
+  if (orig === year) return '';
+  const srcLabel = mb && dc ? 'MusicBrainz + Discogs' : (mb ? 'MusicBrainz' : 'Discogs (master release)');
+  return ` <span title="Année de première parution selon ${srcLabel} : ${orig}" style="font-size:10px;color:var(--text3);cursor:help">(orig. ${orig})</span>`;
 }
 
 // Échappe un id (normalizeKey texte) pour usage dans un attribut onclick HTML
@@ -5803,6 +5825,7 @@ async function fetchDiscogsRelease(discogsId) {
   return {
     tracklist: (data.tracklist || []).map(t => ({ ...t, source: 'discogs' })),
     release_date: data.release_date || '',
+    master_year: data.master_year || '', // année d'édition originale (master release Discogs) — 2e source, à croiser avec mb_original_year
     cover_url: data.cover_url || '',
     genres: data.genres || [],
     styles: data.styles || [],
@@ -6062,6 +6085,7 @@ async function fetchAllTracklists(onlyMissing = true) {
       if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; changed = true; }
       if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive') && !isManualField(album, 'cover_url')) { album.cover_url = rel.cover_url; setProvenance(album, 'cover_url', 'discogs'); changed = true; }
       if (!album.genre && rel.genres?.length && !isManualField(album, 'genre'))      { album.genre = rel.genres[0]; setProvenance(album, 'genre', 'discogs'); changed = true; }
+      if (rel.master_year && album.discogs_master_year !== rel.master_year) { album.discogs_master_year = rel.master_year; changed = true; }
       if (changed) saveToStorage();
       done++;
     } catch(e) {
@@ -8358,7 +8382,7 @@ function renderDiscographie() {
           </div>
         </div>
       </td>
-      <td class="mono">${a.year || '–'}${a.mb_original_year && String(a.mb_original_year) !== String(a.year) ? ` <span title="Année de première parution selon MusicBrainz : ${a.mb_original_year}" style="font-size:10px;color:var(--text3);cursor:help">(orig. ${a.mb_original_year})</span>` : ''}</td>
+      <td class="mono">${a.year || '–'}${origYearBadge(a)}</td>
       <td>${statusBadge}</td>
            <td><div class="badges-cell">${numBadges.join('') || '<span style="color:var(--text3);font-size:11px">–</span>'}</div></td>
       <td>${noteCell}</td>
@@ -12351,6 +12375,9 @@ async function refreshAlbumFromSource() {
       }
       if (rel.label && !isManualField(a, 'label') && a.label !== rel.label) {
         a.label = rel.label; setProvenance(a, 'label', 'discogs'); updated.add('label');
+      }
+      if (rel.master_year && a.discogs_master_year !== rel.master_year) {
+        a.discogs_master_year = rel.master_year; updated.add('année d\'origine Discogs');
       }
     } catch(e) { console.warn('Rafraîchissement Discogs:', e.message); }
   }
