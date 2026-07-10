@@ -19,6 +19,7 @@
 <!-- Migration SQL à appliquer : migration_v2026.07.10-01.sql (ALTER TABLE albums ADD COLUMN field_provenance TEXT) -->
 <!-- APP_VERSION: v2026.07.10-02 — 3 correctifs suite retour utilisateur. (1) BUG CORRIGÉ — note MusicBee par piste (tag XML "Rating") perdue au reload : calculée en mémoire par importMusicBeeTracklists() mais jamais persistée dans `album_tracks` (colonne absente de saveTracklist/loadAlbumTracks, contrairement à musicbee_tracks qui l'avait déjà) ; ajoutée aux deux + migration_v2026.07.10-02.sql. Un ré-import du XML MusicBee est nécessaire après la migration pour backfiller les pistes déjà en base. (2) BUG CORRIGÉ — note RYM absente en Wishlist albums pour les entrées ajoutées manuellement/depuis un album/le stock : ces 3 chemins figeaient `rymRating: 0` sans jamais appeler lookupRym(). renderWishlist() fait désormais un lookup RYM live (wishRymEntry()) au lieu de se fier au snapshot figé à l'ajout ; les 3 chemins d'ajout calculent aussi correctement rymRating pour le tri/CSV. (3) Wishlist albums : nouvelles colonnes "Note MB"/"Note DC" (wishOwnedMatch() — fiche déjà possédée dans un autre format, ex. vinyle en collection/CD recherché) en plus de "Note RYM", + export CSV mis à jour en conséquence. -->
 <!-- Migration SQL à appliquer : migration_v2026.07.10-02.sql (ALTER TABLE album_tracks ADD COLUMN rating INTEGER) puis ré-importer le XML MusicBee -->
+<!-- APP_VERSION: v2026.07.10-03 — Retrait de tous les boutons d'ajout/suppression manuels d'albums et de morceaux, conformément au principe : ajouts/suppressions passent uniquement par les imports MusicBee/Discogs (une entrée disparue du XML/CSV disparaît de la collection au réimport, cf. gestion des "ghostAlbums"). Retirés : "+ Album" (topbar), "+ Ajouter CD" (Discographie), "+ Ajouter au stock" (Stock), "+ Morceau" (Morceaux isolés), "✕ Supprimer" par ligne et en masse (Collection/Discographie/Stock/Morceaux isolés), "+ Ajouter" (bouton ✕) partout où il ouvrait la modale d'ajout manuel d'album (Morceaux manquants, écrans RYM missing/orphans/audit ownership). Fonctions JS désormais orphelines supprimées avec leurs boutons (deleteAlbum, bulkDeleteAlbums, deleteStockItem, bulkDeleteStock, deleteTrack, bulkDeleteTracks, openAlbumModal, openTrackModal + modale modal-track entière, addFromMissing, addFromRYM et ses 3 variantes idx). Wishlist albums : bouton "+ Ajouter" et "✓ Acquis" retirés (ce dernier ouvrait aussi la modale d'ajout manuel) — pruneWishlistOwned() généralisée à toutes les sources (plus seulement lastfm/rym) pour que le nettoyage automatique après réimport MB/DC remplace ce bouton. Seules les suppressions de wishlist restent possibles (deleteWish, bulkDeleteWish, deleteTrackWish), conformément à la demande. -->
 
 
 
@@ -757,14 +758,13 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-02</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-03</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
       <input type="text" id="global-search" placeholder="Rechercher…" oninput="onSearch()">
     </div>
     <button class="btn" title="Recherche globale — albums, morceaux, wishlist (Ctrl+K)" onclick="openGlobalSearchModal()" style="font-family:var(--mono);font-size:12px">🔎 Tout chercher</button>
-    <button class="btn btn-accent" onclick="openAlbumModal()">＋ Album</button>
   </div>
 
   <div class="content">
@@ -872,7 +872,6 @@ input[type="file"] { display: none; }
         <button class="btn btn-sm" onclick="bulkAddToWishlist()" title="Ajouter les albums sélectionnés à la wishlist">🎯 Wishlist</button>
         <button class="btn btn-sm" onclick="bulkMarkForSale()" title="Marquer les albums sélectionnés comme à vendre">💸 Marquer à vendre</button>
         <button class="btn btn-sm" onclick="bulkUnmarkOk()" title="Retirer les albums sélectionnés du dossier Ok">✅ Retirer de Ok</button>
-        <button class="btn btn-sm btn-danger" onclick="bulkDeleteAlbums()" title="Supprimer les albums sélectionnés">✕ Supprimer</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearAlbumSelection()">Annuler la sélection</button>
       </div>
@@ -946,13 +945,11 @@ input[type="file"] { display: none; }
         <div class="toolbar-right">
           <span id="tracks-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportFilteredTracksCSV()">↓ CSV</button>
-          <button class="btn btn-accent" onclick="openTrackModal()">＋ Morceau</button>
         </div>
       </div>
 
       <div id="bulk-actions-bar-tracks" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
         <span id="bulk-actions-count-tracks" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
-        <button class="btn btn-sm btn-danger" onclick="bulkDeleteTracks()" title="Supprimer les morceaux sélectionnés">✕ Supprimer</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearTrackSelection()">Annuler la sélection</button>
       </div>
@@ -969,7 +966,6 @@ input[type="file"] { display: none; }
               <th>Bitrate</th>
               <th>Écoutes</th>
               <th>Note MB</th>
-              <th style="width:50px"></th>
             </tr>
           </thead>
           <tbody id="tracks-tbody"></tbody>
@@ -1069,7 +1065,6 @@ input[type="file"] { display: none; }
         </select>
         <button class="btn btn-sm" onclick="saveCurrentFilterPreset('discographie')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
         <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('discographie')" title="Supprimer le préréglage sélectionné">✕</button>
-        <button class="btn btn-sm" onclick="nav('albums');document.getElementById('modal-album').classList.add('open');openAlbumModal()">＋ Ajouter CD</button>
         <button class="btn btn-sm btn-accent" onclick="openCdAssocFinderModal()">🔗 Suggestions d'association</button>
         <button class="btn btn-sm" onclick="exportDiscoCSV()">↓ CSV</button>
       </div>
@@ -1085,7 +1080,6 @@ input[type="file"] { display: none; }
         <button class="btn btn-sm" onclick="bulkAddToWishlist()" title="Ajouter les albums sélectionnés à la wishlist">🎯 Wishlist</button>
         <button class="btn btn-sm" onclick="bulkMarkForSale()" title="Marquer les albums sélectionnés comme à vendre">💸 Marquer à vendre</button>
         <button class="btn btn-sm" onclick="bulkUnmarkOk()" title="Retirer les albums sélectionnés du dossier Ok">✅ Retirer de Ok</button>
-        <button class="btn btn-sm btn-danger" onclick="bulkDeleteAlbums()" title="Supprimer les albums sélectionnés">✕ Supprimer</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearAlbumSelection()">Annuler la sélection</button>
       </div>
@@ -1150,7 +1144,6 @@ input[type="file"] { display: none; }
         <button class="btn btn-sm" onclick="saveCurrentFilterPreset('stock')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
         <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('stock')" title="Supprimer le préréglage sélectionné">✕</button>
         <div class="toolbar-right">
-          <button class="btn btn-accent" onclick="openStockModal()">＋ Ajouter au stock</button>
           <button class="btn btn-sm" onclick="exportStockCSV()">↓ Export</button>
         </div>
       </div>
@@ -1159,7 +1152,6 @@ input[type="file"] { display: none; }
         <span id="bulk-actions-count-stock" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
         <button class="btn btn-sm" onclick="bulkMoveStockToCollection()" title="Déplacer les albums sélectionnés vers la collection">→ Collecter</button>
         <button class="btn btn-sm" onclick="bulkAddToWishlistFromStock()" title="Ajouter les albums sélectionnés à la wishlist">🎯 Wishlist</button>
-        <button class="btn btn-sm btn-danger" onclick="bulkDeleteStock()" title="Retirer les albums sélectionnés du stock">✕ Supprimer</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearStockSelection()">Annuler la sélection</button>
       </div>
@@ -1369,7 +1361,6 @@ input[type="file"] { display: none; }
         <div class="toolbar-right">
           <span id="wish-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportWishlistCSV()" title="Exporter CSV">⬇ CSV</button>
-          <button class="btn btn-accent" onclick="openWishModal()">＋ Ajouter</button>
         </div>
       </div>
 
@@ -2024,51 +2015,8 @@ input[type="file"] { display: none; }
 </div>
 
 <!-- MODAL TRACK -->
-<div class="modal-overlay" id="modal-track">
-  <div class="modal">
-    <h2>Ajouter un morceau isolé</h2>
-    <input type="hidden" id="t-edit-id">
-    <div class="form-row">
-      <label>Titre</label>
-      <input type="text" id="t-title" placeholder="ex. One More Time">
-    </div>
-    <div class="form-row">
-      <label>Artiste</label>
-      <input type="text" id="t-artist" placeholder="ex. Daft Punk">
-    </div>
-    <div class="form-row">
-      <label>Album source (optionnel)</label>
-      <input type="text" id="t-album" placeholder="ex. Discovery">
-    </div>
-    <div class="form-row">
-      <label>Format</label>
-      <select id="t-format">
-        <option value="flac">FLAC</option>
-        <option value="mp3">MP3</option>
-        <option value="aac">AAC</option>
-        <option value="autre">Autre</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <label>Durée (mm:ss)</label>
-      <input type="text" id="t-duration" placeholder="3:45" style="width:100px">
-    </div>
-    <div class="form-row">
-      <label>Note</label>
-      <div class="modal-stars" id="track-modal-stars">
-        <button class="modal-star" onclick="setTrackNote(1)">★</button>
-        <button class="modal-star" onclick="setTrackNote(2)">★</button>
-        <button class="modal-star" onclick="setTrackNote(3)">★</button>
-        <button class="modal-star" onclick="setTrackNote(4)">★</button>
-        <button class="modal-star" onclick="setTrackNote(5)">★</button>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeTrackModal()">Annuler</button>
-      <button class="btn btn-accent" onclick="saveTrack()">Enregistrer</button>
-    </div>
-  </div>
-</div>
+<!-- modal-track (ajout manuel d'un morceau isolé) supprimée (v2026.07.10-03) — plus
+     aucun bouton n'y mène ; les morceaux isolés proviennent uniquement de l'import XML MusicBee. -->
 
 <!-- MODAL STOCK -->
 <div class="modal-overlay" id="modal-stock">
@@ -4242,21 +4190,7 @@ function bulkUnmarkOk() {
   toast(`${n} album(s) retiré(s) de Ok`);
 }
 
-function bulkDeleteAlbums() {
-  if (!selectedAlbumIds.size) return;
-  const n = selectedAlbumIds.size;
-  if (!confirm(`Supprimer définitivement ${n} album(s) ? Cette action est irréversible.`)) return;
-  albums = albums.filter(a => !selectedAlbumIds.has(a.id) && !selectedAlbumIds.has(String(a.id)));
-  stockItems = stockItems.filter(s => !selectedAlbumIds.has(s.id) && !selectedAlbumIds.has(String(s.id)));
-  invalidateCache();
-  saveToStorage();
-  renderAlbums();
-  renderStock();
-  renderDiscographie();
-  updateNavBadges();
-  clearAlbumSelection();
-  toast(`${n} album(s) supprimé(s)`);
-}
+// bulkDeleteAlbums supprimée (v2026.07.10-03) — idem, plus aucun bouton n'y mène.
 
 function renderAlbums() {
   updateStats();
@@ -4325,15 +4259,13 @@ function renderAlbums() {
     const onclickRow = isStock ? `openStockModal('${sid(a.id)}')` : `editAlbum('${sid(a.id)}')`;
 
     // Bouton d'action contextuel selon le dossier filtré
+    // Suppression album/stock retirée : le principe de l'app est que les ajouts/
+    // suppressions passent uniquement par les imports MusicBee/Discogs.
     let actionBtn = '';
     if (ff === 'ok' && isOk) {
       actionBtn = `<button class="btn btn-sm" onclick="markOkDone('${sid(a.id)}');event.stopPropagation()" title="Retirer de Ok">✕ Ok</button>`;
     } else if (ff === 'forsale' && isForSale) {
       actionBtn = `<button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}');event.stopPropagation()" title="Vendu">✓</button>`;
-    } else if (ff === 'stock' || isStock) {
-      actionBtn = `<button class="btn btn-sm btn-danger" onclick="deleteStockItem('${sid(a.id)}');event.stopPropagation()" title="Supprimer du stock">✕</button>`;
-    } else {
-      actionBtn = `<button class="btn btn-sm btn-danger" onclick="deleteAlbum('${sid(a.id)}');event.stopPropagation()" title="Supprimer">✕</button>`;
     }
 
     // Wishlist — uniquement pour les albums en stock ou dans Ok/
@@ -4497,14 +4429,10 @@ function promptStockRating(id) {
   saveToStorage();
 }
 
-function deleteAlbum(id) {
-  if (!confirm('Supprimer cet album ?')) return;
-  const realId = unsid(id);
-  albums = albums.filter(a => a.id !== realId && a.id !== String(realId));
-  renderAlbums();
-  saveToStorage();
-  toast('Album supprimé');
-}
+// deleteAlbum supprimée (v2026.07.10-03) — plus aucun bouton n'y mène ; les
+// suppressions d'albums passent désormais uniquement par le réimport MusicBee/Discogs
+// (un album qui disparaît du XML/CSV disparaît de la collection au réimport, cf.
+// gestion des "ghostAlbums" dans l'import XML).
 
 function prevPage() { if (currentPage > 1) { currentPage--; renderAlbums(); } }
 function nextPage() {
@@ -4547,16 +4475,7 @@ function renderTrackBulkBar() {
   bar.style.display = n ? 'flex' : 'none';
 }
 
-function bulkDeleteTracks() {
-  if (!selectedTrackIds.size) return;
-  const n = selectedTrackIds.size;
-  if (!confirm(`Supprimer définitivement ${n} morceau${n > 1 ? 'x' : ''} isolé${n > 1 ? 's' : ''} ?`)) return;
-  tracks = tracks.filter(t => !selectedTrackIds.has(t.id));
-  clearTrackSelection();
-  renderTracks();
-  saveToStorage();
-  toast(`${n} morceau${n > 1 ? 'x' : ''} supprimé${n > 1 ? 's' : ''}`);
-}
+// bulkDeleteTracks supprimée (v2026.07.10-03) — idem.
 
 function renderTracks() {
   // Dédoublonner (titre+artiste)
@@ -4613,7 +4532,7 @@ function renderTracks() {
 
   const tbody = document.getElementById('tracks-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
     renderTrackBulkBar();
     return;
   }
@@ -4640,7 +4559,6 @@ function renderTracks() {
       <td>${bitrateHtml}</td>
       <td>${playsHtml}</td>
       <td><div class="stars">${stars}</div></td>
-      <td><button class="btn btn-sm btn-danger" onclick="deleteTrack(${t.id})">✕</button></td>
     </tr>`;
   }).join('');
   renderTrackBulkBar();
@@ -4658,14 +4576,7 @@ function rateTrack(id, note) {
   }
 }
 
-function deleteTrack(id) {
-  if (!confirm('Supprimer ce morceau ?')) return;
-  tracks = tracks.filter(t => t.id !== id);
-  selectedTrackIds.delete(id);
-  renderTracks();
-  saveToStorage();
-  toast('Morceau supprimé');
-}
+// deleteTrack supprimée (v2026.07.10-03) — idem.
 
 // ===================== CACHE =====================
 let _cache = {};
@@ -4968,7 +4879,6 @@ function renderMissing() {
           <button class="btn btn-sm ${st==='ignored'?'btn-accent':''}" data-idx="${idx}" data-action="ignored" title="Ignorer">🚫</button>
           <button class="btn btn-sm ${st==='to_listen'?'btn-accent':''}" data-idx="${idx}" data-action="to_listen" title="À écouter">👂</button>
           <button class="btn btn-sm ${st==='wishlist'?'btn-accent':''}" data-idx="${idx}" data-action="wishlist" title="Wishlist">🎯</button>
-          <button class="btn btn-sm btn-accent" data-idx="${idx}" data-action="add">＋</button>
           <button class="btn btn-sm" data-idx="${idx}" data-action="youtube" title="Chercher sur YouTube Music">▶️</button>
         </div>`;
       frag.appendChild(div);
@@ -5482,18 +5392,11 @@ function addTrackFromMissing(encodedArtist, encodedTitle) {
   toast(`Ajouté : ${artist} — ${title}`);
 }
 
-function addFromMissing(artist, album) {
-  document.getElementById('f-artist').value = decodeURIComponent(artist);
-  document.getElementById('f-album').value = decodeURIComponent(album);
-  document.getElementById('edit-id').value = '';
-  setModalNote(0);
-  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
-  document.getElementById('modal-album').classList.add('open');
-  nav('albums');
-}
+// addFromMissing (ajout manuel depuis Morceaux manquants) supprimée (v2026.07.10-03)
+// — cohérence avec le principe "ajouts uniquement via imports MusicBee/Discogs".
 
 // ===================== MODALS =====================
-let _modalNote = 0, _trackNote = 0;
+let _modalNote = 0;
 
 function updateDiscogsLink() {
   const id = document.getElementById('f-discogs-id').value.trim();
@@ -5506,16 +5409,9 @@ function updateDiscogsLink() {
   }
 }
 
-function openAlbumModal() {
-  document.getElementById('edit-id').value = '';
-  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
-  ['artist','album','year','genre','plays','notes'].forEach(f => document.getElementById('f-'+f).value = '');
-  ['cd','flac','mp3','digital'].forEach(f => document.getElementById('f-'+f).checked = false);
-  document.getElementById('f-discogs-id').value = '';
-  document.getElementById('f-discogs-link').textContent = '';
-  setModalNote(0);
-  document.getElementById('modal-album').classList.add('open');
-}
+// openAlbumModal (ajout manuel d'un album) supprimée (v2026.07.10-03) — plus aucun
+// bouton n'y mène, l'ajout d'albums passe uniquement par les imports MusicBee/Discogs.
+// La modale reste utilisée en édition (editAlbum ci-dessous).
 
 function editAlbum(id) {
   const realId = unsid(id);
@@ -5982,46 +5878,11 @@ function saveAlbum() {
   saveToStorage();
 }
 
-function openTrackModal() {
-  document.getElementById('t-edit-id').value = '';
-  ['title','artist','album','duration'].forEach(f => document.getElementById('t-'+f).value = '');
-  setTrackNote(0);
-  document.getElementById('modal-track').classList.add('open');
-}
-
-function closeTrackModal() { document.getElementById('modal-track').classList.remove('open'); }
-
-function setTrackNote(n) {
-  _trackNote = n;
-  document.querySelectorAll('#track-modal-stars .modal-star').forEach((s, i) => s.classList.toggle('on', i < n));
-}
-
-function saveTrack() {
-  const title = document.getElementById('t-title').value.trim();
-  const artist = document.getElementById('t-artist').value.trim();
-  if (!title || !artist) { toast('Titre et artiste requis', 'error'); return; }
-  const eid = document.getElementById('t-edit-id').value;
-  const data = {
-    title, artist,
-    album: document.getElementById('t-album').value.trim(),
-    format: document.getElementById('t-format').value,
-    duration: document.getElementById('t-duration').value.trim(),
-    note: _trackNote,
-  };
-  if (eid) {
-    const idx = tracks.findIndex(t => t.id == eid);
-    if (idx !== -1) tracks[idx] = { ...tracks[idx], ...data };
-  } else {
-    tracks.push({ id: uid(), ...data });
-    toast('Morceau ajouté ✓');
-  }
-  closeTrackModal();
-  renderTracks();
-  saveToStorage();
-}
+// openTrackModal / closeTrackModal / setTrackNote / saveTrack supprimées (v2026.07.10-03)
+// avec la modale modal-track — plus aucun bouton n'y mène.
 
 // Close modals on overlay click
-['modal-album','modal-track'].forEach(id => {
+['modal-album'].forEach(id => {
   document.getElementById(id).addEventListener('click', function(e) {
     if (e.target === this) this.classList.remove('open');
   });
@@ -9168,17 +9029,18 @@ function wishlistOwnedSet() {
 // "cet album me manque"). Les ajouts manuels/stock (source 'manual'/'stock', ex: "je veux
 // aussi le CD d'un album que j'ai déjà en numérique") ne sont JAMAIS auto-retirés, car
 // l'utilisateur les a ajoutés en sachant déjà qu'il possède l'album dans un autre format.
+// Retire automatiquement de la wishlist tout album devenu possédé, quelle que soit
+// sa source d'ajout (lastfm/rym/stock/manual) — auparavant limité à lastfm/rym.
+// Généralisé en v2026.07.10-03 suite au retrait du bouton "✓ Acquis" (qui ouvrait la
+// modale d'ajout manuel) : sans lui, c'est ce nettoyage automatique après réimport
+// MusicBee/Discogs qui fait disparaître une entrée une fois réellement acquise.
 function pruneWishlistOwned() {
   if (!wishlist.length) return 0;
   const owned = wishlistOwnedSet();
   const before = wishlist.length;
-  const toRemove = wishlist.filter(w =>
-    (w.source === 'lastfm' || w.source === 'rym') && owned.has(normalizeKey(w.artist, w.album))
-  );
+  const toRemove = wishlist.filter(w => owned.has(normalizeKey(w.artist, w.album)));
   if (toRemove.length) console.warn('pruneWishlistOwned: entrées retirées (déjà possédées)', toRemove.map(w => `${w.artist} — ${w.album}`));
-  wishlist = wishlist.filter(w =>
-    !((w.source === 'lastfm' || w.source === 'rym') && owned.has(normalizeKey(w.artist, w.album)))
-  );
+  wishlist = wishlist.filter(w => !owned.has(normalizeKey(w.artist, w.album)));
   const removed = before - wishlist.length;
   if (removed) saveToStorage();
   return removed;
@@ -9289,22 +9151,11 @@ function deleteWish(id) {
   renderWishlist(); updateNavBadges(); saveToStorage();
 }
 
-function markWishAcquired(id) {
-  const w = wishlist.find(x => x.id === id);
-  if (!w) return;
-  // Ouvrir le modal d'ajout album pré-rempli
-  document.getElementById('f-artist').value = w.artist;
-  document.getElementById('f-album').value  = w.album;
-  document.getElementById('f-year').value   = w.year || '';
-  document.getElementById('edit-id').value  = '';
-  setModalNote(0);
-  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
-  document.getElementById('modal-album').classList.add('open');
-  nav('albums');
-  // Retirer de la wishlist après confirmation dans le modal
-  wishlist = wishlist.filter(x => x.id !== id);
-  saveToStorage();
-}
+// markWishAcquired supprimée (v2026.07.10-03) : ouvrait la modale d'ajout manuel
+// d'album, retirée pour cohérence avec le principe "ajouts/suppressions uniquement
+// via imports MusicBee/Discogs". Une fois l'album réellement acquis et réimporté,
+// pruneWishlistOwned() (généralisée à toutes les sources, cf. plus bas) retire
+// automatiquement l'entrée de la wishlist.
 
 // ===================== OK ALBUMS =====================
 function renderOkAlbums() {
@@ -10236,7 +10087,6 @@ function renderWishlist() {
     <td class="mono">${owned?.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(owned.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono" style="color:var(--amber)">${rymEntry?.rating ? rymEntry.rating.toFixed(2) + '★' : '–'}</td>
     <td style="display:flex;gap:4px">
-      <button class="btn btn-sm" onclick="markWishAcquired(${w.id})" title="Acquis">✓</button>
       <button class="btn btn-sm" onclick="openWishModal(${w.id})" title="Modifier">✎</button>
       <button class="btn btn-sm btn-danger" onclick="deleteWish(${w.id})" title="Supprimer">✕</button>
     </td>
@@ -10309,18 +10159,7 @@ function saveStockItem() {
   saveToStorage();
 }
 
-function deleteStockItem(id) {
-  if (!confirm('Retirer cet album du stock ?')) return;
-  const realId = unsid(id);
-  albums = albums.filter(a => a.id !== realId && a.id !== String(realId));
-  stockItems = stockItems.filter(s => s.id !== realId && s.id !== String(realId));
-  selectedStockIds.delete(realId);
-  invalidateCache();
-  renderStock();
-  if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
-  saveToStorage();
-  toast('Retiré du stock');
-}
+// deleteStockItem supprimée (v2026.07.10-03) — idem.
 
 function moveStockToCollection(id) {
   const realId = unsid(id);
@@ -10379,18 +10218,7 @@ function renderStockBulkBar() {
   bar.style.display = n ? 'flex' : 'none';
 }
 
-function bulkDeleteStock() {
-  if (!selectedStockIds.size) return;
-  const n = selectedStockIds.size;
-  if (!confirm(`Retirer ${n} album(s) du stock ?`)) return;
-  stockItems = stockItems.filter(s => !selectedStockIds.has(s.id) && !selectedStockIds.has(String(s.id)));
-  invalidateCache();
-  clearStockSelection();
-  renderStock();
-  if (document.getElementById('filter-support')?.value === 'stock') renderAlbums();
-  saveToStorage();
-  toast(`${n} album(s) retiré(s) du stock`);
-}
+// bulkDeleteStock supprimée (v2026.07.10-03) — idem.
 
 function bulkAddToWishlistFromStock() {
   if (!selectedStockIds.size) return;
@@ -10491,7 +10319,6 @@ function renderStock() {
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px">
         <button class="btn btn-sm" onclick="moveStockToCollection('${sid(s.id)}')" title="Déplacer vers la collection">→ Collecter</button>
         <button class="btn btn-sm" onclick="addToWishlistFromStock('${sid(s.id)}')" title="Ajouter à la wishlist">🎯</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteStockItem('${sid(s.id)}')">✕</button>
       </td>
     </tr>`).join('');
   renderStockBulkBar();
@@ -11101,16 +10928,8 @@ function openRYMUnlinkedAssocIdx(idx) {
   if (!r) return;
   openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
 }
-function addFromRYMOrphanIdx(idx) {
-  const r = _rymOrphansCache[idx];
-  if (!r) return;
-  addFromRYM(r.artist, r.album, r.year || '', r.genre || '');
-}
-function addFromRYMIdx(idx) {
-  const r = _rymMissingCache[idx];
-  if (!r) return;
-  addFromRYM(r.artist, r.album, r.year || '', r.genre || '');
-}
+// addFromRYMOrphanIdx / addFromRYMIdx (ajout manuel depuis les écrans RYM) supprimées
+// (v2026.07.10-03) — idem, plus aucun bouton n'y mène.
 
 function openRYMAssocModal(rymKey, artist, album, rating) {
   _rymAssocTarget = rymKey;
@@ -11484,7 +11303,6 @@ function renderRYMOwnershipAuditList() {
       actionsHtml = `
         <div style="display:flex;gap:6px;margin-top:6px">
           <button class="btn btn-sm" onclick="openRYMOwnershipAuditAssocIdx(${idx})" title="Associer à un album de la collection">🔗 Associer</button>
-          <button class="btn btn-sm btn-accent" onclick="addFromRYMOwnershipAuditIdx(${idx})">＋ Ajouter</button>
         </div>`;
     }
     const own = `<span class="badge badge-cd" style="font-size:10px">${esc(r.ownership)}</span>`;
@@ -11514,13 +11332,7 @@ function openRYMOwnershipAuditAssocIdx(idx) {
   openRYMAssocModal(normalizeKey(r.artist, r.album), r.artist, r.album, r.rating || 0);
 }
 
-function addFromRYMOwnershipAuditIdx(idx) {
-  const row = _rymOwnershipAuditCache[idx];
-  if (!row) return;
-  const { r } = row;
-  closeRYMOwnershipAuditModal();
-  addFromRYM(r.artist, r.album, r.year || '', r.genre || '');
-}
+// addFromRYMOwnershipAuditIdx (ajout manuel depuis l'audit RYM) supprimée (v2026.07.10-03).
 
 function rymStars(rating) {
   // RYM note sur 5 avec demi-étoiles
@@ -11576,7 +11388,6 @@ function renderRYM() {
           ${rymStars(r.rating)}
           <button class="btn btn-sm" onclick="openRYMAssocModalIdx(${missing.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
           ${wishBtn}
-          <button class="btn btn-sm" onclick="addFromRYMIdx(${missing.indexOf(r)})">＋ Ajouter</button>
         </div>
         ${r.genre ? `<div style="font-size:11px;color:var(--text3)">${esc(r.genre)}</div>` : ''}
       </div>`;
@@ -11632,7 +11443,6 @@ function renderRYM() {
           </div>
           <div style="display:flex;gap:5px;flex-shrink:0">
             <button class="btn btn-sm" onclick="openRYMOrphanAssocIdx(${orphans.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
-            <button class="btn btn-sm btn-accent" onclick="addFromRYMOrphanIdx(${orphans.indexOf(r)})">＋ Ajouter</button>
           </div>
         </div>`;
     }).join('');
@@ -11688,17 +11498,8 @@ function renderRYM() {
   updateNavBadges();
 }
 
-function addFromRYM(artist, album, year, genre) {
-  document.getElementById('f-artist').value = artist;
-  document.getElementById('f-album').value = album;
-  document.getElementById('f-year').value = year || '';
-  document.getElementById('f-genre').value = decodeURIComponent(genre);
-  document.getElementById('edit-id').value = '';
-  setModalNote(0);
-  document.getElementById('modal-album-title').textContent = 'Ajouter un album';
-  document.getElementById('modal-album').classList.add('open');
-  nav('albums');
-}
+// addFromRYM (ouvrait la modale d'ajout manuel) supprimée (v2026.07.10-03) — dernière
+// des fonctions "ajout manuel d'album", retirée avec tous ses appelants ci-dessus.
 
 // ===================== RYM HTML IMPORT =====================
 async function importRYMHtml(input) {
@@ -13240,7 +13041,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const idx    = parseInt(btn.dataset.idx);
     const action = btn.dataset.action;
     if (action === 'assoc')          associateFromMissingIdx(idx);
-    else if (action === 'add')       { const m = _missingListCache[idx]; if(m) addFromMissing(encodeURIComponent(m.artist), encodeURIComponent(m.album)); }
     else if (action === 'wishlist')  setLastfmStatusWishlist(idx);
     else if (action === 'youtube')   { const m = _missingListCache[idx]; if(m) openYouTubeMusicSearch(m.artist, m.album); }
     else                             setLastfmStatusFromMissing(idx, action);
