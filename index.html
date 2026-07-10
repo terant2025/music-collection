@@ -15,6 +15,10 @@
 <!-- APP_VERSION: v2026.07.09-03 — La notation classique (rateAlbum : clic étoiles Collection, promptStockRating : saisie numérique, rateTrack : clic étoiles Morceaux isolés) alimente désormais "Notes à reporter" via queueNoteToReport(), jusqu'ici scopée à la Session notation (todo section 10, dernier point ⬜). Ne queue que sur une note strictement positive (une note remise à 0 par re-clic ne crée pas d'entrée), comportement identique à celui déjà en place pour les pistes de tracklist (_applyAlbumTrackRating). updateNavBadges() appelé pour rafraîchir immédiatement le badge sidebar. -->
 <!-- APP_VERSION: v2026.07.09-04 — Filtres sauvegardés (section 4 de la todo, item "nouveau"). Vue Collection uniquement pour l'instant (vue la plus riche en filtres) : nouveau menu déroulant "💾 Filtres…" dans la barre d'outils + boutons 💾 (enregistrer la combinaison actuelle sous un nom, écrase si le nom existe déjà après confirmation) et ✕ (supprimer le préréglage sélectionné, confirmation requise). Couvre les 14 champs lus par filteredAlbums()/sortedAlbums() (artiste, album, support, dossier, genre, notes MB/DC/RYM avec opérateur+valeur, année, écoutes min, tri). Stockage localStorage (`terant_filter_presets_collection_v1`) plutôt que Supabase : c'est de l'état d'affichage local, pas une donnée de collection à synchroniser entre appareils. Appliquer un préréglage réutilise onNoteOpChange() pour ré-afficher/masquer correctement les champs valeur des filtres de note avant de relancer renderAlbums(). Discographie/Stock/Wishlist non couverts pour l'instant (todo laissée ⬜ pour l'extension). -->
 <!-- APP_VERSION: v2026.07.09-05 — Filtres sauvegardés généralisés à Discographie, Stock et Wishlist (suite de la v04, todo section 4). Mécanique factorisée en config par vue (FILTER_PRESET_VIEWS : liste de champs, select dédié, fonction de rendu à rappeler) au lieu du code mono-vue précédent ; toutes les fonctions (save/apply/delete/render) prennent désormais un paramètre viewKey. Stockage localStorage unifié (`terant_filter_presets_v2`, objet par vue) avec migration automatique et silencieuse des préréglages Collection existants depuis l'ancienne clé mono-vue. Discographie : 14 champs (mêmes catégories que Collection + filtre "type" compil/EP). Stock et Wishlist : sets de filtres plus courts (pas de notes/tri dédié), même mécanique bouton 💾/✕. -->
+<!-- APP_VERSION: v2026.07.10-01 — Provenance des champs (todo section 2, item "nouveau"). Nouveau champ album.field_provenance = { [champ]: { source, synced_at } } pour year/genre/cover_url/label, stocké en TEXT/JSON.stringify côté Supabase (migration_v2026.07.10-01.sql, colonne albums.field_provenance) comme les autres champs JSON-as-text de l'app (folders, meta.notes_to_report_data...). Remplace le pattern "if (!album.genre) album.genre = ..." sans traçabilité aux points d'écriture concernés (enrichissement MusicBrainz, fetchAllTracklists Discogs/MB, cover picker, imports CSV MusicBee génériques) : un champ verrouillé 🔒 "manuel" (édité depuis la modale album ou choisi manuellement dans le picker pochette) n'est plus jamais écrasé par ces sources auto. Les deux imports authoritatifs existants (Discogs CSV → year, MusicBee XML → year/genre) gardent leur comportement volontaire d'écrasement systématique (décision antérieure pour ne pas rester bloqué sur une valeur périmée) — ils enregistrent la provenance mais ignorent le verrou. Nouveau panneau "Provenance des champs" dans la fiche album (source + fraîcheur relative + bouton verrou par champ) et bouton générique "🔄 Rafraîchir depuis la source" (recontacte Discogs/MusicBrainz selon les IDs liés, ignore les champs verrouillés) — remplace le besoin de futurs boutons ad hoc par champ, refreshMbYearGenres reste en place séparément pour le backfill en masse. mergeAlbumsManual (fusion manuelle de fiches) reporte la provenance des champs copiés depuis la fiche source. -->
+<!-- Migration SQL à appliquer : migration_v2026.07.10-01.sql (ALTER TABLE albums ADD COLUMN field_provenance TEXT) -->
+<!-- APP_VERSION: v2026.07.10-02 — 3 correctifs suite retour utilisateur. (1) BUG CORRIGÉ — note MusicBee par piste (tag XML "Rating") perdue au reload : calculée en mémoire par importMusicBeeTracklists() mais jamais persistée dans `album_tracks` (colonne absente de saveTracklist/loadAlbumTracks, contrairement à musicbee_tracks qui l'avait déjà) ; ajoutée aux deux + migration_v2026.07.10-02.sql. Un ré-import du XML MusicBee est nécessaire après la migration pour backfiller les pistes déjà en base. (2) BUG CORRIGÉ — note RYM absente en Wishlist albums pour les entrées ajoutées manuellement/depuis un album/le stock : ces 3 chemins figeaient `rymRating: 0` sans jamais appeler lookupRym(). renderWishlist() fait désormais un lookup RYM live (wishRymEntry()) au lieu de se fier au snapshot figé à l'ajout ; les 3 chemins d'ajout calculent aussi correctement rymRating pour le tri/CSV. (3) Wishlist albums : nouvelles colonnes "Note MB"/"Note DC" (wishOwnedMatch() — fiche déjà possédée dans un autre format, ex. vinyle en collection/CD recherché) en plus de "Note RYM", + export CSV mis à jour en conséquence. -->
+<!-- Migration SQL à appliquer : migration_v2026.07.10-02.sql (ALTER TABLE album_tracks ADD COLUMN rating INTEGER) puis ré-importer le XML MusicBee -->
 
 
 
@@ -753,7 +757,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.09-05</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-02</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1389,6 +1393,8 @@ input[type="file"] { display: none; }
               <th>Source</th>
               <th>Priorité</th>
               <th>Écoutes</th>
+              <th>Note MB</th>
+              <th>Note DC</th>
               <th>Note RYM</th>
               <th style="width:120px"></th>
             </tr>
@@ -1995,6 +2001,10 @@ input[type="file"] { display: none; }
     <div class="form-row" style="grid-column:1/-1">
       <label>Confiance du matching automatique</label>
       <div id="modal-match-confidence" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
+    </div>
+    <div class="form-row" style="grid-column:1/-1">
+      <label>Provenance des champs <button class="btn btn-sm" type="button" onclick="refreshAlbumFromSource()" id="btn-refresh-provenance" title="Recontacte Discogs/MusicBrainz pour rafraîchir année/genre/pochette/label — ignore les champs verrouillés 🔒 (manuels)">🔄 Rafraîchir depuis la source</button></label>
+      <div id="modal-field-provenance" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
     </div>
     <div class="form-row" style="grid-column:1/-1">
       <label>Pochette</label>
@@ -2801,6 +2811,7 @@ async function saveToSupabase(opts) {
       catno:          a.catno || null,
       is_compilation: !!a.isCompilation,
 	  primary_folder: a.primaryFolder || 'album',
+      field_provenance: a.field_provenance ? JSON.stringify(a.field_provenance) : null,
       updated_at:     now,
     }));
     // Remplacement complet : DELETE absents puis upsert
@@ -3021,6 +3032,7 @@ async function loadFromSupabase() {
         catno:         a.catno || undefined,
         isCompilation: !!a.is_compilation,
 		primaryFolder: a.primary_folder || 'album',
+        field_provenance: (() => { try { return a.field_provenance ? JSON.parse(a.field_provenance) : undefined; } catch(e) { return undefined; } })(),
 		
         // Compat lecture ancienne UI
         cd:      !!a.has_cd,
@@ -5531,6 +5543,7 @@ function editAlbum(id) {
   setModalNote(a.note || 0);
   renderAlbumTracklistPanel(realId);
   renderMatchConfidencePanel(realId);
+  renderProvenancePanel(realId);
   document.getElementById('modal-album').classList.add('open');
 }
 
@@ -5570,6 +5583,7 @@ async function fetchMissingCovers(albumList) {
       const imgUrl = img?.['#text'];
       if (imgUrl && !imgUrl.includes('2a96cbd8b46e442fc41c2b86b821562f')) {
         album.cover_url = imgUrl;
+        setProvenance(album, 'cover_url', 'lastfm');
         fetched++;
         // Mettre à jour avatars dans le DOM
         document.querySelectorAll(`[data-album-id="${album.id}"]`).forEach(el => {
@@ -5852,14 +5866,18 @@ async function fetchCoverCandidates(a) {
 function renderCoverChoiceGrid(candidates) {
   const grid = document.getElementById('cover-choice-grid');
   grid.innerHTML = candidates.map(c => `
-    <div class="cover-choice-item ${c.url === _coverChoiceSelected ? 'selected' : ''}" onclick="selectCoverCandidate('${esc(c.url).replace(/'/g,"\\'")}')">
+    <div class="cover-choice-item ${c.url === _coverChoiceSelected ? 'selected' : ''}" onclick="selectCoverCandidate('${esc(c.url).replace(/'/g,"\\'")}', '${esc(c.label).replace(/'/g,"\\'")}')">
       <img src="${esc(c.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.style.opacity=0.35">
       <div class="src-label">${esc(c.label)}</div>
     </div>`).join('');
 }
 
-function selectCoverCandidate(url) {
+// label affiché du candidat sélectionné (Discogs/Last.fm/Manuelle/Actuelle) → provenance à l'enregistrement
+let _coverChoiceSelectedLabel = '';
+
+function selectCoverCandidate(url, label) {
   _coverChoiceSelected = url;
+  _coverChoiceSelectedLabel = label || '';
   document.querySelectorAll('.cover-choice-item').forEach(el => {
     el.classList.toggle('selected', el.querySelector('img')?.src === url);
   });
@@ -5869,6 +5887,7 @@ function previewManualCoverUrl() {
   const url = document.getElementById('cover-choice-manual-url').value.trim();
   if (!url) return;
   _coverChoiceSelected = url;
+  _coverChoiceSelectedLabel = 'Manuelle';
   const grid = document.getElementById('cover-choice-grid');
   const existing = Array.from(grid.querySelectorAll('.cover-choice-item img')).map(img => ({ url: img.src }));
   renderCoverChoiceGrid([{ url, label: 'Manuelle' }, ...existing.filter(c => c.url !== url).map(c => ({ ...c, label: c.label || '' }))]);
@@ -5878,11 +5897,21 @@ async function saveCoverChoice() {
   const a = albums.find(x => x.id === _coverChoiceAlbumId || x.id === String(_coverChoiceAlbumId));
   if (!a) return;
   a.cover_url = _coverChoiceSelected || undefined;
+  // Provenance : un choix "Manuelle" verrouille le champ (jamais réécrasé par un
+  // enrichissement auto) ; un choix "Discogs"/"Last.fm" reste rafraîchissable ;
+  // "Actuelle" (garder la pochette déjà en place) ne modifie pas la provenance existante.
+  if (a.cover_url) {
+    if (_coverChoiceSelectedLabel === 'Manuelle') setProvenance(a, 'cover_url', 'manual');
+    else if (_coverChoiceSelectedLabel === 'Discogs') setProvenance(a, 'cover_url', 'discogs');
+    else if (_coverChoiceSelectedLabel === 'Last.fm') setProvenance(a, 'cover_url', 'lastfm');
+  } else if (a.field_provenance) {
+    delete a.field_provenance.cover_url;
+  }
   _cache.coverDimsChecked?.delete(a.id);
   _cache.lowResCovers?.delete(a.id);
   saveToStorage();
   if (window._sb) {
-    try { await window._sb.from('albums').update({ cover_url: a.cover_url || null }).eq('id', a.id); } catch(e) { /* ignore */ }
+    try { await window._sb.from('albums').update({ cover_url: a.cover_url || null, field_provenance: a.field_provenance || null }).eq('id', a.id); } catch(e) { /* ignore */ }
   }
   document.querySelectorAll(`[data-album-id="${a.id}"]`).forEach(el => { el.innerHTML = albumAvatar(a); });
   invalidateCache();
@@ -5894,6 +5923,7 @@ async function saveCoverChoice() {
 
 function clearCoverChoice() {
   _coverChoiceSelected = '';
+  _coverChoiceSelectedLabel = '';
   saveCoverChoice();
 }
 
@@ -5931,9 +5961,18 @@ function saveAlbum() {
   };
   if (eid) {
     const idx = albums.findIndex(a => a.id == eid);
-    if (idx !== -1) albums[idx] = { ...albums[idx], ...data };
+    if (idx !== -1) {
+      const before = albums[idx];
+      // Verrouille en 'manual' (jamais réécrasé par un import/enrichissement auto)
+      // tout champ suivi que l'utilisateur a réellement changé depuis cette modale.
+      ['year', 'genre', 'cover_url'].forEach(f => {
+        if ((data[f] || '') !== (before[f] || '')) setProvenance(data, f, 'manual');
+      });
+      albums[idx] = { ...before, ...data, field_provenance: { ...before.field_provenance, ...data.field_provenance } };
+    }
     toast('Album mis à jour');
   } else {
+    ['year', 'genre', 'cover_url'].forEach(f => { if (data[f]) setProvenance(data, f, 'manual'); });
     albums.push({ id: uid(), ...data });
     toast('Album ajouté ✓');
   }
@@ -6069,7 +6108,7 @@ async function importDiscogs(input) {
         // discogsId donné) — sans ça, une année stockée par erreur (ex: héritée d'une
         // fusion homonyme incorrecte) ne pouvait jamais être corrigée par un réimport,
         // contrairement à l'import MusicBee XML qui, lui, réécrit toujours depuis le tag.
-        if (year) existing.year = year.slice(0, 4);
+        if (year) { existing.year = year.slice(0, 4); setProvenance(existing, 'year', 'discogs'); }
         if (discogsId && !existing.discogsId) {
           existing.discogsId = discogsId;
           // Si d'autres albums ont le même normalizeKey, s'assurer que cet existing a un ID unique
@@ -6078,7 +6117,7 @@ async function importDiscogs(input) {
             existing.id = baseKey + '|||dc:' + discogsId;
           }
         }
-        if (label && !existing.label) existing.label = label;
+        if (label && !existing.label && !isManualField(existing, 'label')) { existing.label = label; setProvenance(existing, 'label', 'discogs'); }
         if (catno && !existing.catno) existing.catno = catno;
         if (existing.artist !== artist && cleanDiscogsArtist(existing.artist) === cleanDiscogsArtist(existing.artist)) {
           existing.artistRaw = artistRaw;
@@ -6086,13 +6125,16 @@ async function importDiscogs(input) {
         updated++;
       } else {
         const newId = trueCollision ? baseKey + '|||dc:' + discogsId : baseKey;
-        albums.push({
+        const newAlbum = {
           id: newId, artist, artistRaw, album,
           year: year.slice(0, 4), genre: '',
           cd: isCd, flac: false, mp3: false, digital: false,
           note: 0, discogsRating: Math.min(5, rating) || 0, plays: 0,
           discogsId, label, catno
-        });
+        };
+        if (year) setProvenance(newAlbum, 'year', 'discogs');
+        if (label) setProvenance(newAlbum, 'label', 'discogs');
+        albums.push(newAlbum);
         added++;
       }
     });
@@ -6558,8 +6600,8 @@ async function importMusicBeeXML(input) {
 
       if (existing) {
         // Mettre à jour toujours depuis XML
-        if (g.year)  existing.year  = g.year;
-        if (g.genre) existing.genre = g.genre;
+        if (g.year)  { existing.year  = g.year;  setProvenance(existing, 'year',  'musicbee'); }
+        if (g.genre) { existing.genre = g.genre; setProvenance(existing, 'genre', 'musicbee'); }
         const newNote = g.albumRating;
         if (newNote) existing.note = newNote;
         if (fmt) existing.format = fmt;
@@ -6915,11 +6957,14 @@ async function importMusicBee(input) {
         if (flac) existing.flac = true;
         if (mp3) existing.mp3 = true;
         if (plays) existing.plays = (existing.plays || 0) + plays;
-        if (genre && !existing.genre) existing.genre = genre;
+        if (genre && !existing.genre && !isManualField(existing, 'genre')) { existing.genre = genre; setProvenance(existing, 'genre', 'musicbee'); }
         if (note && !existing.note) existing.note = note; // n'écrase pas une note existante
         updated++;
       } else {
-        albums.push({ id: uid(), artist: g.artist, album: g.album, year: year.slice(0, 4), genre, cd: false, flac, mp3, digital: !flac && !mp3, note, plays });
+        const newAlbum = { id: uid(), artist: g.artist, album: g.album, year: year.slice(0, 4), genre, cd: false, flac, mp3, digital: !flac && !mp3, note, plays };
+        if (year) setProvenance(newAlbum, 'year', 'musicbee');
+        if (genre) setProvenance(newAlbum, 'genre', 'musicbee');
+        albums.push(newAlbum);
         added++;
       }
     });
@@ -8302,6 +8347,7 @@ async function saveTracklist(albumId, tracks_) {
     isrc:            t.isrc||null,
     mb_recording_id: t.mb_recording_id||null,
     disc_number:     t.disc_number||null,
+    rating:          t.rating||null,
   }));
   for (let i = 0; i < rows.length; i += 100) {
     const { error } = await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
@@ -8309,6 +8355,51 @@ async function saveTracklist(albumId, tracks_) {
   }
   albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
     .filter(t => t.source !== source).concat(tracks_);
+}
+
+// ===================== PROVENANCE DES CHAMPS =====================
+// Todo section 2 : year/genre/cover_url/label sont remplis au fil de l'eau par
+// plusieurs sources sans traçabilité. field_provenance = { [champ]: { source, synced_at } }
+// distingue une valeur manuelle (jamais écrasée par un import/enrichissement auto)
+// d'une valeur auto (rafraîchissable, avec indicateur de fraîcheur).
+const PROVENANCE_FIELDS = ['year', 'genre', 'cover_url', 'label'];
+const PROVENANCE_SOURCE_LABELS = {
+  manual:      'Manuel',
+  discogs:     'Discogs',
+  musicbrainz: 'MusicBrainz',
+  musicbee:    'MusicBee',
+  lastfm:      'Last.fm',
+};
+
+// Enregistre la source/date d'une valeur auto.
+function setProvenance(album, field, source) {
+  if (!album.field_provenance) album.field_provenance = {};
+  album.field_provenance[field] = { source, synced_at: new Date().toISOString() };
+}
+// Un champ verrouillé manuellement n'est plus jamais écrasé par les patterns
+// auto "if (!album.x) album.x = ..." (MusicBrainz, Discogs, Last.fm, imports CSV génériques).
+// Les imports authoritatifs existants (Discogs CSV → year, MusicBee XML → year/genre,
+// décision volontaire antérieure pour ne pas rester bloqué sur une valeur périmée)
+// restent inchangés et continuent d'écraser même un champ verrouillé.
+function isManualField(album, field) {
+  return album.field_provenance?.[field]?.source === 'manual';
+}
+// Reporte la provenance d'un champ lors d'une fusion manuelle de fiches (mergeAlbumsManual)
+function carryProvenance(tgt, src, field) {
+  const p = src.field_provenance?.[field];
+  if (!p) return;
+  if (!tgt.field_provenance) tgt.field_provenance = {};
+  tgt.field_provenance[field] = { ...p };
+}
+function formatProvenanceAge(iso) {
+  if (!iso) return '';
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (days <= 0) return "aujourd'hui";
+  if (days === 1) return 'hier';
+  if (days < 30) return `il y a ${days}j`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `il y a ${months} mois`;
+  return `il y a ${Math.floor(months / 12)} an(s)`;
 }
 
 // Appliquer l'enrichissement MusicBrainz (année d'origine + genre) à un album,
@@ -8322,8 +8413,9 @@ function applyMbEnrichment(album, rel) {
       changed = true;
     }
   }
-  if (!album.genre && rel.genres?.length) {
+  if (!album.genre && rel.genres?.length && !isManualField(album, 'genre')) {
     album.genre = rel.genres[0];
+    setProvenance(album, 'genre', 'musicbrainz');
     changed = true;
   }
   if (rel.youtube_url && album.youtube_url !== rel.youtube_url) {
@@ -8432,8 +8524,8 @@ async function fetchAllTracklists(onlyMissing = true) {
       // Enrichir l'album avec les infos Discogs
       let changed = false;
       if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; changed = true; }
-      if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive')) { album.cover_url = rel.cover_url; changed = true; }
-      if (!album.genre && rel.genres?.length)      { album.genre = rel.genres[0];          changed = true; }
+      if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive') && !isManualField(album, 'cover_url')) { album.cover_url = rel.cover_url; setProvenance(album, 'cover_url', 'discogs'); changed = true; }
+      if (!album.genre && rel.genres?.length && !isManualField(album, 'genre'))      { album.genre = rel.genres[0]; setProvenance(album, 'genre', 'discogs'); changed = true; }
       if (changed) saveToStorage();
       done++;
     } catch(e) {
@@ -8456,7 +8548,7 @@ async function fetchAllTracklists(onlyMissing = true) {
           await saveTracklist(album.id, rel.tracklist);
         }
         if (!album.release_date && rel.release_date) { album.release_date = rel.release_date; saveToStorage(); }
-        if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive')) { album.cover_url = rel.cover_url; saveToStorage(); }
+        if (!album.cover_url && rel.cover_url && !rel.cover_url.includes('coverartarchive') && !isManualField(album, 'cover_url')) { album.cover_url = rel.cover_url; setProvenance(album, 'cover_url', 'musicbrainz'); saveToStorage(); }
         applyMbEnrichment(album, rel);
       } else {
         // Recherche — nettoyer le nom Discogs avant MusicBrainz
@@ -8467,7 +8559,7 @@ async function fetchAllTracklists(onlyMissing = true) {
           album.mb_release_id = best.mb_release_id;
           album.mb_match_score = best.score; // conservé pour revalidation ultérieure (score de confiance visible)
           if (!album.release_date && best.release_date) album.release_date = best.release_date;
-          if (!album.cover_url && best.cover_url && !best.cover_url.includes('coverartarchive')) album.cover_url = best.cover_url;
+          if (!album.cover_url && best.cover_url && !best.cover_url.includes('coverartarchive') && !isManualField(album, 'cover_url')) { album.cover_url = best.cover_url; setProvenance(album, 'cover_url', 'musicbrainz'); }
           saveToStorage();
           // 2e appel pour la tracklist complète
           await new Promise(r => setTimeout(r, 1200));
@@ -8871,7 +8963,7 @@ async function loadAlbumTracks() {
     let all = [], page = 0;
     while (true) {
       const { data, error } = await window._sb.from('album_tracks')
-        .select('album_id,position,title,duration,source,bitrate,sample_rate,file_size,play_count,last_played,date_added,composer,isrc,mb_recording_id,disc_number')
+        .select('album_id,position,title,duration,source,bitrate,sample_rate,file_size,play_count,last_played,date_added,composer,isrc,mb_recording_id,disc_number,rating')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error) {
         const ignorable = ['PGRST205', '42501', 'PGRST301'];
@@ -8898,7 +8990,7 @@ async function loadAlbumTracks() {
           bitrate: t.bitrate, sample_rate: t.sample_rate, file_size: t.file_size,
           play_count: t.play_count, last_played: t.last_played, date_added: t.date_added,
           composer: t.composer, isrc: t.isrc, mb_recording_id: t.mb_recording_id,
-          disc_number: t.disc_number,
+          disc_number: t.disc_number, rating: t.rating || 0,
         });
       });
       console.log(`Album tracks chargés : ${all.length} pistes pour ${Object.keys(albumTracksCache).length} albums`);
@@ -9184,7 +9276,7 @@ function saveWish() {
     if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
       toast('Déjà dans la wishlist', 'warn'); return;
     }
-    wishlist.push({ id: uid(), artist, album, year, source: 'manual', prio, plays: 0, rymRating: 0, notes, addedAt: Date.now() });
+    wishlist.push({ id: uid(), artist, album, year, source: 'manual', prio, plays: 0, rymRating: (lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album))?.rating || 0, notes, addedAt: Date.now() });
   }
   document.getElementById('modal-wish').classList.remove('open');
   renderWishlist(); updateNavBadges(); saveToStorage();
@@ -9978,25 +10070,29 @@ function addToWishlistFromAlbumId(albumId) {
   const realId = unsid(albumId);
   const a = albums.find(x => x.id === realId);
   if (!a) return;
-  addToWishlist(a.artist, a.album, a.year || '', 'manual', a.plays || 0, 0, '');
+  const rymR = (lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album))?.rating || 0;
+  addToWishlist(a.artist, a.album, a.year || '', 'manual', a.plays || 0, rymR, '');
 }
 
 function addToWishlistFromStock(stockId) {
   const realId = unsid(stockId);
   const s = stockItems.find(x => x.id === realId || x.id === String(realId));
   if (!s) return;
-  addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, 0, s.notes || '');
+  const rymR = (lookupRym(s.artist, s.album) || lookupRym(cleanDiscogsArtist(s.artist), s.album))?.rating || 0;
+  addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, rymR, s.notes || '');
 }
 
 function exportWishlistCSV() {
   const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
   const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', manual: 'Manuel' };
   const lfIndex   = new Map(lastfmData.map(d => [normalizeKey(d.artist, d.album), d.plays]));
-  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note RYM','Notes']];
+  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes']];
   wishlist.forEach(w => {
     const plays = lfIndex.get(normalizeKey(w.artist, w.album)) || w.plays || '';
+    const owned = wishOwnedMatch(w);
+    const rymEntry = wishRymEntry(w);
     rows.push([w.artist, w.album, w.year||'', srcLabel[w.source]||w.source,
-      prioLabel[w.prio]||w.prio, plays, w.rymRating||'', w.notes||'']);
+      prioLabel[w.prio]||w.prio, plays, owned?.note||'', owned?.discogsRating||'', rymEntry?.rating||'', w.notes||'']);
   });
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8' });
@@ -10070,6 +10166,18 @@ function bulkSetWishPrio(prio) {
   toast(`Priorité ${prioLabel[prio]} appliquée à ${n} entrée(s)`);
 }
 
+// Note RYM live (pas de snapshot figé) — mêmes variantes artiste que la Collection
+function wishRymEntry(w) {
+  return lookupRym(w.artist, w.album) || lookupRym(cleanDiscogsArtist(w.artist), w.album);
+}
+// Fiche déjà possédée correspondant à cette entrée wishlist (ex : vinyle en collection,
+// CD recherché) — sert à afficher les notes MB/DC déjà connues plutôt que de les
+// dupliquer/re-saisir.
+function wishOwnedMatch(w) {
+  const key = normalizeKey(w.artist, w.album);
+  return albums.find(a => normalizeKey(a.artist, a.album) === key || normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key);
+}
+
 function renderWishlist() {
   pruneWishlistOwned();
   const q    = document.getElementById('global-search').value.toLowerCase();
@@ -10097,7 +10205,7 @@ function renderWishlist() {
 
   const tbody = document.getElementById('wish-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">🎯</div>' +
+    tbody.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="empty-icon">🎯</div>' +
       (wishlist.length ? 'Aucun résultat avec ces filtres.' : 'La wishlist est vide. Ajoutez des albums depuis last.fm, RYM ou le stock.') +
       '</div></td></tr>';
     renderWishBulkBar();
@@ -10105,7 +10213,16 @@ function renderWishlist() {
   }
   const prioLabel = { high: '🔴 Haute', mid: '🟡 Moyenne', low: '🟢 Basse' };
   const srcLabel  = { lastfm: '🎵 last.fm', stock: '📦 Stock', rym: '⭐ RYM', manual: '✍️ Manuel' };
-  tbody.innerHTML = list.map(w => `<tr>
+  tbody.innerHTML = list.map(w => {
+    // Note RYM : lookup live (pas le snapshot rymRating figé à l'ajout — cf. bug
+    // "note RYM absente en wishlist alors qu'elle existe" côté ajout manuel/stock,
+    // qui n'appelait jamais lookupRym et laissait rymRating à 0).
+    const rymEntry = wishRymEntry(w);
+    // Notes MB (MusicBee) / DC (Discogs) : uniquement si l'album correspond déjà à une
+    // fiche possédée (ex : vinyle en collection, CD en wishlist) — cas fréquent vu le
+    // fonctionnement "à acquérir dans un autre format" de cette wishlist.
+    const owned = wishOwnedMatch(w);
+    return `<tr>
     <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${w.id}" ${selectedWishIds.has(w.id) ? 'checked' : ''} onchange="toggleWishSelected(${w.id}, this.checked)"></td>
     <td>
       <div style="font-weight:500">${esc(w.album)}</div>
@@ -10115,13 +10232,16 @@ function renderWishlist() {
     <td style="font-size:12px">${srcLabel[w.source] || w.source}</td>
     <td><span style="font-size:12px">${prioLabel[w.prio] || w.prio}</span></td>
     <td class="mono" style="color:var(--accent)">${w.plays || '–'}</td>
-    <td class="mono" style="color:var(--amber)">${w.rymRating ? w.rymRating.toFixed(2) + '★' : '–'}</td>
+    <td class="mono">${owned?.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${owned.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
+    <td class="mono">${owned?.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(owned.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
+    <td class="mono" style="color:var(--amber)">${rymEntry?.rating ? rymEntry.rating.toFixed(2) + '★' : '–'}</td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="markWishAcquired(${w.id})" title="Acquis">✓</button>
       <button class="btn btn-sm" onclick="openWishModal(${w.id})" title="Modifier">✎</button>
       <button class="btn btn-sm btn-danger" onclick="deleteWish(${w.id})" title="Supprimer">✕</button>
     </td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
   renderWishBulkBar();
   const selAllCb = document.getElementById('select-all-wish');
   if (selAllCb) selAllCb.checked = list.length > 0 && list.every(w => selectedWishIds.has(w.id));
@@ -12482,15 +12602,15 @@ function mergeAlbumsManual(sourceId, targetId) {
   if (!tgt.format && src.format) tgt.format = src.format;
 
   // Métadonnées manquantes
-  if (!tgt.year  && src.year)  tgt.year  = src.year;
-  if (!tgt.genre && src.genre) tgt.genre = src.genre;
+  if (!tgt.year  && src.year)  { tgt.year  = src.year;  carryProvenance(tgt, src, 'year'); }
+  if (!tgt.genre && src.genre) { tgt.genre = src.genre; carryProvenance(tgt, src, 'genre'); }
   if (!tgt.note  && src.note)  tgt.note  = src.note; // note MB (MusicBee)
   if (!tgt.discogsRating && src.discogsRating) tgt.discogsRating = src.discogsRating;
   if (!tgt.discogsId     && src.discogsId)     tgt.discogsId     = src.discogsId;
   if (!tgt.mb_release_id && src.mb_release_id) tgt.mb_release_id = src.mb_release_id;
-  if (!tgt.label  && src.label)  tgt.label  = src.label;
+  if (!tgt.label  && src.label)  { tgt.label  = src.label;  carryProvenance(tgt, src, 'label'); }
   if (!tgt.catno  && src.catno)  tgt.catno  = src.catno;
-  if (!tgt.cover_url && src.cover_url) tgt.cover_url = src.cover_url;
+  if (!tgt.cover_url && src.cover_url) { tgt.cover_url = src.cover_url; carryProvenance(tgt, src, 'cover_url'); }
   if (src.notes) tgt.notes = tgt.notes ? (tgt.notes + '\n' + src.notes) : src.notes;
 
   tgt.plays = (tgt.plays || 0) + (src.plays || 0);
@@ -14596,6 +14716,107 @@ function resetMbMatch(albumIdSid) {
   saveToStorage();
   renderMatchConfidencePanel(albumId);
   toast('Lien MusicBrainz effacé — un nouveau matching pourra être relancé');
+}
+
+// ===================== PANNEAU PROVENANCE DES CHAMPS =====================
+// Todo section 2 — remplace le besoin de boutons ad hoc par champ/source (comme
+// refreshMbYearGenres) par un panneau générique dans la fiche album.
+const PROVENANCE_FIELD_LABELS = { year: 'Année', genre: 'Genre', cover_url: 'Pochette', label: 'Label' };
+
+function renderProvenancePanel(albumId) {
+  const wrap = document.getElementById('modal-field-provenance');
+  if (!wrap) return;
+  const a = albums.find(x => x.id === albumId || x.id === String(albumId));
+  if (!a) { wrap.innerHTML = ''; return; }
+  const rows = PROVENANCE_FIELDS.map(f => {
+    if (!a[f]) return `<div style="opacity:0.5">${PROVENANCE_FIELD_LABELS[f]} : vide</div>`;
+    const p = a.field_provenance?.[f];
+    if (!p) return `<div style="opacity:0.7">${PROVENANCE_FIELD_LABELS[f]} : source inconnue (valeur antérieure à ce suivi) — <button class="btn btn-sm" onclick="toggleFieldLock('${sid(a.id)}','${f}')" title="Verrouiller manuellement">🔓</button></div>`;
+    const isManual = p.source === 'manual';
+    const srcLabel = PROVENANCE_SOURCE_LABELS[p.source] || p.source;
+    const age = formatProvenanceAge(p.synced_at);
+    return `<div style="display:flex;align-items:center;gap:6px">
+      <span>${PROVENANCE_FIELD_LABELS[f]} : ${srcLabel}${age ? ` — ${age}` : ''}</span>
+      <button class="btn btn-sm" onclick="toggleFieldLock('${sid(a.id)}','${f}')" title="${isManual ? 'Déverrouiller (redevient rafraîchissable automatiquement)' : 'Verrouiller manuellement (ne sera plus jamais écrasé par un import/enrichissement auto)'}">${isManual ? '🔒' : '🔓'}</button>
+    </div>`;
+  }).join('');
+  wrap.innerHTML = rows;
+}
+
+function toggleFieldLock(albumIdSid, field) {
+  const albumId = unsid(albumIdSid);
+  const a = albums.find(x => x.id === albumId || x.id === String(albumId));
+  if (!a) return;
+  if (isManualField(a, field)) {
+    if (a.field_provenance) delete a.field_provenance[field]; // déverrouille — source oubliée, redevient rafraîchissable
+  } else {
+    setProvenance(a, field, 'manual');
+  }
+  saveToStorage();
+  renderProvenancePanel(a.id);
+}
+
+// Bouton générique "🔄 Rafraîchir depuis la source" — recontacte Discogs/MusicBrainz
+// pour l'album en cours d'édition et met à jour genre/pochette/label, en ignorant
+// tout champ verrouillé 🔒 manuellement. Remplace le besoin de boutons ad hoc par
+// champ (l'ancien refreshMbYearGenres reste disponible séparément pour le backfill
+// en masse année/genre/youtube depuis Import/Export).
+async function refreshAlbumFromSource() {
+  const eid = document.getElementById('edit-id').value;
+  const a = albums.find(x => x.id == eid || x.id === String(eid));
+  if (!a) { toast("Enregistrez d'abord l'album avant de rafraîchir", 'warn'); return; }
+  if (!a.discogsId && !a.mb_release_id) { toast('Aucune source liée (ID Discogs ou MusicBrainz requis)', 'warn'); return; }
+
+  const btn = document.getElementById('btn-refresh-provenance');
+  if (btn) btn.disabled = true;
+  const updated = new Set();
+
+  if (a.discogsId) {
+    try {
+      const rel = await fetchDiscogsRelease(a.discogsId);
+      if (rel.genres?.length && !isManualField(a, 'genre') && a.genre !== rel.genres[0]) {
+        a.genre = rel.genres[0]; setProvenance(a, 'genre', 'discogs'); updated.add('genre');
+      }
+      if (rel.cover_url && !rel.cover_url.includes('coverartarchive') && !isManualField(a, 'cover_url') && a.cover_url !== rel.cover_url) {
+        a.cover_url = rel.cover_url; setProvenance(a, 'cover_url', 'discogs'); updated.add('pochette');
+      }
+      if (rel.label && !isManualField(a, 'label') && a.label !== rel.label) {
+        a.label = rel.label; setProvenance(a, 'label', 'discogs'); updated.add('label');
+      }
+    } catch(e) { console.warn('Rafraîchissement Discogs:', e.message); }
+  }
+
+  if (a.mb_release_id) {
+    try {
+      if (a.discogsId) await new Promise(r => setTimeout(r, 700)); // marge Edge Fn entre 2 appels
+      const rel = await fetchMusicBrainzRelease(a.mb_release_id);
+      applyMbEnrichment(a, rel); // met à jour mb_original_year + youtube_url (respecte déjà le verrou manuel du genre)
+      if (rel.genres?.length && !isManualField(a, 'genre') && a.genre !== rel.genres[0]) {
+        a.genre = rel.genres[0]; setProvenance(a, 'genre', 'musicbrainz'); updated.add('genre');
+      }
+      if (rel.cover_url && !rel.cover_url.includes('coverartarchive') && !isManualField(a, 'cover_url') && a.cover_url !== rel.cover_url) {
+        a.cover_url = rel.cover_url; setProvenance(a, 'cover_url', 'musicbrainz'); updated.add('pochette');
+      }
+      if (rel.label && !isManualField(a, 'label') && a.label !== rel.label) {
+        a.label = rel.label; setProvenance(a, 'label', 'musicbrainz'); updated.add('label');
+      }
+      a.mb_refreshed_at = new Date().toISOString();
+    } catch(e) { console.warn('Rafraîchissement MusicBrainz:', e.message); }
+  }
+
+  if (btn) btn.disabled = false;
+  saveToStorage();
+
+  // Refléter dans le formulaire ouvert
+  document.getElementById('f-genre').value = a.genre || '';
+  if (document.getElementById('f-cover-url')) document.getElementById('f-cover-url').value = a.cover_url || '';
+  const coverImg  = document.getElementById('modal-cover-img');
+  const coverWrap = document.getElementById('modal-cover-wrap');
+  if (a.cover_url && coverImg) { coverImg.src = a.cover_url; coverWrap.style.display = 'block'; }
+  renderProvenancePanel(a.id);
+  invalidateCache();
+  renderAlbums(); renderDiscographie();
+  toast(updated.size ? `Rafraîchi : ${[...updated].join(', ')}` : 'Rien à mettre à jour (champs verrouillés 🔒 ou déjà à jour)');
 }
 
 </script>
