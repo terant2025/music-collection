@@ -20,6 +20,9 @@
 <!-- APP_VERSION: v2026.07.10-02 — 3 correctifs suite retour utilisateur. (1) BUG CORRIGÉ — note MusicBee par piste (tag XML "Rating") perdue au reload : calculée en mémoire par importMusicBeeTracklists() mais jamais persistée dans `album_tracks` (colonne absente de saveTracklist/loadAlbumTracks, contrairement à musicbee_tracks qui l'avait déjà) ; ajoutée aux deux + migration_v2026.07.10-02.sql. Un ré-import du XML MusicBee est nécessaire après la migration pour backfiller les pistes déjà en base. (2) BUG CORRIGÉ — note RYM absente en Wishlist albums pour les entrées ajoutées manuellement/depuis un album/le stock : ces 3 chemins figeaient `rymRating: 0` sans jamais appeler lookupRym(). renderWishlist() fait désormais un lookup RYM live (wishRymEntry()) au lieu de se fier au snapshot figé à l'ajout ; les 3 chemins d'ajout calculent aussi correctement rymRating pour le tri/CSV. (3) Wishlist albums : nouvelles colonnes "Note MB"/"Note DC" (wishOwnedMatch() — fiche déjà possédée dans un autre format, ex. vinyle en collection/CD recherché) en plus de "Note RYM", + export CSV mis à jour en conséquence. -->
 <!-- Migration SQL à appliquer : migration_v2026.07.10-02.sql (ALTER TABLE album_tracks ADD COLUMN rating INTEGER) puis ré-importer le XML MusicBee -->
 <!-- APP_VERSION: v2026.07.10-03 — Retrait de tous les boutons d'ajout/suppression manuels d'albums et de morceaux, conformément au principe : ajouts/suppressions passent uniquement par les imports MusicBee/Discogs (une entrée disparue du XML/CSV disparaît de la collection au réimport, cf. gestion des "ghostAlbums"). Retirés : "+ Album" (topbar), "+ Ajouter CD" (Discographie), "+ Ajouter au stock" (Stock), "+ Morceau" (Morceaux isolés), "✕ Supprimer" par ligne et en masse (Collection/Discographie/Stock/Morceaux isolés), "+ Ajouter" (bouton ✕) partout où il ouvrait la modale d'ajout manuel d'album (Morceaux manquants, écrans RYM missing/orphans/audit ownership). Fonctions JS désormais orphelines supprimées avec leurs boutons (deleteAlbum, bulkDeleteAlbums, deleteStockItem, bulkDeleteStock, deleteTrack, bulkDeleteTracks, openAlbumModal, openTrackModal + modale modal-track entière, addFromMissing, addFromRYM et ses 3 variantes idx). Wishlist albums : bouton "+ Ajouter" et "✓ Acquis" retirés (ce dernier ouvrait aussi la modale d'ajout manuel) — pruneWishlistOwned() généralisée à toutes les sources (plus seulement lastfm/rym) pour que le nettoyage automatique après réimport MB/DC remplace ce bouton. Seules les suppressions de wishlist restent possibles (deleteWish, bulkDeleteWish, deleteTrackWish), conformément à la demande. -->
+<!-- APP_VERSION: v2026.07.10-04 — Filtrage/export combiné (todo section 4, item ⬜) : audit du code a montré que Collection et Discographie avaient déjà les filtres combinés (genre/notes MB-DC-RYM/année/écoutes) + export du filtré (exportFilteredAlbumsCSV, exportDiscoCSV) ; seuls Stock et Wishlist avaient un trou. Stock : nouveau filtre note (filter-stock-note-op/-val, même widget ≥/>/=/≤/∅/✓ que les autres vues) intégré à stockFilteredList() (logique extraite de renderStock() pour être réutilisable) et aux préréglages de filtres sauvegardés. exportStockCSV() exporte désormais stockFilteredList() au lieu de stockItems en entier. Wishlist : pas de filtre genre ajouté — les entrées wishlist ne portent pas ce champ dans le modèle actuel (aucun chemin d'ajout ne le renseigne), l'ajouter aurait nécessité un changement de schéma hors scope d'un correctif ; logique de filtrage extraite en wishFilteredList() (réutilisable), exportWishlistCSV() exporte désormais la liste filtrée au lieu de wishlist en entier. -->
+<!-- APP_VERSION: v2026.07.10-05 — Comparaison multi-source généralisée (todo section 2, item ⬜) : le pattern cmp.discogs/cmp.musicbrainz existant pour les tracklists (showTracklistDiff) est étendu à year/genre/label/country. Nouveau panneau "🔍 Comparaison Discogs / MusicBrainz" dans la fiche album, sous "Provenance des champs", peuplé quand refreshAlbumFromSource() dispose des deux sources (album avec discogsId ET mb_release_id) : cache session _sourceCmpCache (comme albumTracksCache, jamais persisté — aide au diagnostic ponctuel, pas une donnée de collection) avec les valeurs brutes de chaque source par champ. Affichage display-only comme le diff tracklist (n'automatise aucune résolution) — divergence signalée ⚠️ en ambre, bouton "↳ Appliquer" par champ/source pour choisir explicitement une valeur (setProvenance tracée sur la source choisie). Pays affiché en comparaison mais sans bouton Appliquer : aucune colonne `country` n'existe sur `albums` côté Supabase (informatif uniquement, l'ajouter aurait nécessité une migration de schéma hors scope). -->
+<!-- APP_VERSION: v2026.07.10-06 — Genres RYM croisés (todo section 6, item ⬜) : RYM propose souvent un genre plus fin/plus "ambiance" que Discogs/MusicBrainz (ex. "Dream Pop" vs "Rock"), jusqu'ici seuls rating/ownership RYM étaient exploités. Nouvelle ligne "Genre RYM : X (suggestion, jamais appliquée automatiquement)" en pied du panneau "Provenance des champs" de la fiche album, visible dès qu'un match RYM (lookupRym, avec repli cleanDiscogsArtist comme ailleurs) donne un genre différent du genre actuel — même esprit que la suggestion de note RYM en Session notation (jamais posée automatiquement). Bouton "↳" pour appliquer explicitement, réutilise applySourceFieldValue() (introduite en -05) avec 'rym' comme source tracée dans field_provenance — ajouté à PROVENANCE_SOURCE_LABELS. -->
 
 
 
@@ -758,7 +761,7 @@ input[type="file"] { display: none; }
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-03</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-06</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1138,6 +1141,19 @@ input[type="file"] { display: none; }
           <option value="">Tous genres</option>
         </select>
         <input id="filter-stock-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4" oninput="renderStock()">
+        <div class="note-filter" title="Note">
+          <span class="note-filter-label">★</span>
+          <select id="filter-stock-note-op" onchange="onNoteOpChange('filter-stock-note-op','filter-stock-note-val');renderStock()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅</option>
+            <option value="any">✓</option>
+          </select>
+          <input type="number" id="filter-stock-note-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderStock()" style="display:none">
+        </div>
         <select id="filter-preset-select-stock" onchange="applyFilterPreset('stock')" title="Charger un préréglage de filtres enregistré">
           <option value="">💾 Filtres…</option>
         </select>
@@ -1996,6 +2012,10 @@ input[type="file"] { display: none; }
     <div class="form-row" style="grid-column:1/-1">
       <label>Provenance des champs <button class="btn btn-sm" type="button" onclick="refreshAlbumFromSource()" id="btn-refresh-provenance" title="Recontacte Discogs/MusicBrainz pour rafraîchir année/genre/pochette/label — ignore les champs verrouillés 🔒 (manuels)">🔄 Rafraîchir depuis la source</button></label>
       <div id="modal-field-provenance" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
+    </div>
+    <div class="form-row" style="grid-column:1/-1;display:none" id="modal-source-cmp-wrap">
+      <label>🔍 Comparaison Discogs / MusicBrainz</label>
+      <div id="modal-source-cmp" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
     </div>
     <div class="form-row" style="grid-column:1/-1">
       <label>Pochette</label>
@@ -3850,8 +3870,8 @@ const FILTER_PRESET_VIEWS = {
     selectId: 'filter-preset-select-stock',
     resetPage: false,
     renderFn: () => renderStock(),
-    fields: ['filter-stock-artist', 'filter-stock-genre', 'filter-stock-year'],
-    noteOpPairs: []
+    fields: ['filter-stock-artist', 'filter-stock-genre', 'filter-stock-year', 'filter-stock-note-op', 'filter-stock-note-val'],
+    noteOpPairs: [['filter-stock-note-op', 'filter-stock-note-val']]
   },
   wishlist: {
     selectId: 'filter-preset-select-wish',
@@ -5440,6 +5460,7 @@ function editAlbum(id) {
   renderAlbumTracklistPanel(realId);
   renderMatchConfidencePanel(realId);
   renderProvenancePanel(realId);
+  renderSourceComparisonPanel(realId);
   document.getElementById('modal-album').classList.add('open');
 }
 
@@ -8230,6 +8251,7 @@ const PROVENANCE_SOURCE_LABELS = {
   musicbrainz: 'MusicBrainz',
   musicbee:    'MusicBee',
   lastfm:      'Last.fm',
+  rym:         'RYM',
 };
 
 // Enregistre la source/date d'une valeur auto.
@@ -9934,11 +9956,12 @@ function addToWishlistFromStock(stockId) {
 }
 
 function exportWishlistCSV() {
+  const list = wishFilteredList();
   const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
   const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', manual: 'Manuel' };
   const lfIndex   = new Map(lastfmData.map(d => [normalizeKey(d.artist, d.album), d.plays]));
   const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes']];
-  wishlist.forEach(w => {
+  list.forEach(w => {
     const plays = lfIndex.get(normalizeKey(w.artist, w.album)) || w.plays || '';
     const owned = wishOwnedMatch(w);
     const rymEntry = wishRymEntry(w);
@@ -9952,7 +9975,7 @@ function exportWishlistCSV() {
   a.href=url; a.download=`wishlist-${new Date().toISOString().slice(0,10)}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  toast(`${wishlist.length} entrées exportées`);
+  toast(`${list.length} entrées exportées`);
 }
 
 // ===================== SÉLECTION MULTIPLE / ACTIONS GROUPÉES (Wishlist albums) =====================
@@ -10029,8 +10052,10 @@ function wishOwnedMatch(w) {
   return albums.find(a => normalizeKey(a.artist, a.album) === key || normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key);
 }
 
-function renderWishlist() {
-  pruneWishlistOwned();
+// Filtres combinés Wishlist (recherche/artiste/album/source/priorité/année) — réutilisée par
+// renderWishlist() et exportWishlistCSV(). Pas de filtre genre : les entrées wishlist ne portent
+// pas ce champ dans le modèle actuel (aucune source ne le fournit à l'ajout).
+function wishFilteredList() {
   const q    = document.getElementById('global-search').value.toLowerCase();
   const af   = (document.getElementById('filter-wish-artist')?.value || '').toLowerCase().trim();
   const albf = (document.getElementById('filter-wish-album')?.value  || '').toLowerCase().trim();
@@ -10038,7 +10063,7 @@ function renderWishlist() {
   const pf   = document.getElementById('filter-wish-prio')?.value   || '';
   const yf   = (document.getElementById('filter-wish-year')?.value  || '').trim();
 
-  const list = wishlist.filter(w => {
+  return wishlist.filter(w => {
     return (!q    || (w.artist+' '+w.album).toLowerCase().includes(q))
         && (!af   || w.artist.toLowerCase().includes(af))
         && (!albf || w.album.toLowerCase().includes(albf))
@@ -10050,6 +10075,11 @@ function renderWishlist() {
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
     return (b.plays || 0) - (a.plays || 0);
   });
+}
+
+function renderWishlist() {
+  pruneWishlistOwned();
+  const list = wishFilteredList();
 
   const ctr = document.getElementById('wish-counter');
   if (ctr) ctr.textContent = list.length + ' / ' + wishlist.length + ' entrées';
@@ -10261,20 +10291,27 @@ function bulkMoveStockToCollection() {
   toast(`${moved} album(s) déplacé(s) vers la collection ✓`);
 }
 
-function renderStock() {
-  // updateNavBadges called by saveToStorage
+// Filtres combinés Stock (recherche/artiste/genre/année/note) — réutilisée par renderStock() et exportStockCSV()
+function stockFilteredList() {
   const q = document.getElementById('global-search').value.toLowerCase();
   const af = document.getElementById('filter-stock-artist')?.value || '';
   const gf = document.getElementById('filter-stock-genre')?.value || '';
-
   const yf = (document.getElementById('filter-stock-year')?.value || '').trim();
-  let list = stockItems.filter(s => {
+  const nfOp = document.getElementById('filter-stock-note-op')?.value || '';
+  const nfVal = document.getElementById('filter-stock-note-val')?.value || '';
+  return stockItems.filter(s => {
     const m = !q || (s.artist + ' ' + s.album).toLowerCase().includes(q);
     const am = !af || s.artist === af;
     const gm = !gf || s.genre === gf;
     const ym = !yf || (s.year||'').startsWith(yf);
-    return m && am && gm && ym;
+    const nm = matchNoteFilter(nfOp, nfVal, s.note || 0);
+    return m && am && gm && ym && nm;
   }).sort((a, b) => a.artist.localeCompare(b.artist, 'fr'));
+}
+
+function renderStock() {
+  // updateNavBadges called by saveToStorage
+  let list = stockFilteredList();
 
   // Update artist filter
   const artists = [...new Set(stockItems.map(s => s.artist).filter(Boolean))].sort((a,b) => a.localeCompare(b,'fr'));
@@ -10338,10 +10375,11 @@ function rateStock(id, note) {
 }
 
 function exportStockCSV() {
+  const list = stockFilteredList();
   const header = ['id','artist','album','year','genre','format','note','notes'];
-  const rows = [header.join(','), ...stockItems.map(s => toCSVRow([s.id,s.artist,s.album,s.year||'',s.genre||'',s.format||'',s.note||0,s.notes||'']))];
+  const rows = [header.join(','), ...list.map(s => toCSVRow([s.id,s.artist,s.album,s.year||'',s.genre||'',s.format||'',s.note||0,s.notes||'']))];
   download('discothèque_stock.csv', rows.join('\n'), 'text/csv');
-  toast('Export stock téléchargé ✓');
+  toast(`${list.length} album(s) exporté(s) ✓`);
 }
 
 document.getElementById('modal-stock').addEventListener('click', function(e) {
@@ -14540,7 +14578,17 @@ function renderProvenancePanel(albumId) {
       <button class="btn btn-sm" onclick="toggleFieldLock('${sid(a.id)}','${f}')" title="${isManual ? 'Déverrouiller (redevient rafraîchissable automatiquement)' : 'Verrouiller manuellement (ne sera plus jamais écrasé par un import/enrichissement auto)'}">${isManual ? '🔒' : '🔓'}</button>
     </div>`;
   }).join('');
-  wrap.innerHTML = rows;
+
+  // Suggestion de genre RYM (todo section 6) : RYM propose souvent un genre plus fin/plus
+  // "ambiance" que Discogs/MusicBrainz (ex. "Dream Pop" vs "Rock"). Jamais appliqué
+  // automatiquement — juste signalé, comme la suggestion de note RYM en Session notation.
+  const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+  const rymGenre = (rymEntry?.genre || '').split(',')[0].trim();
+  const rymGenreRow = (rymGenre && rymGenre.toLowerCase() !== (a.genre || '').toLowerCase())
+    ? `<div style="color:var(--amber)">Genre RYM : ${esc(rymGenre)} <span style="color:var(--text3)">(suggestion, jamais appliquée automatiquement)</span> <button class="btn btn-sm" onclick="applySourceFieldValue('${sid(a.id)}','genre','rym','${esc(rymGenre).replace(/'/g,"\\'")}')" title="Appliquer ce genre">↳</button></div>`
+    : '';
+
+  wrap.innerHTML = rows + rymGenreRow;
 }
 
 function toggleFieldLock(albumIdSid, field) {
@@ -14554,6 +14602,63 @@ function toggleFieldLock(albumIdSid, field) {
   }
   saveToStorage();
   renderProvenancePanel(a.id);
+}
+
+// ===================== COMPARAISON MULTI-SOURCE (généralisation du pattern cmp.discogs/cmp.musicbrainz =====================
+// déjà en place pour les tracklists) à year/genre/label/country. Cache session uniquement
+// (comme albumTracksCache) — repeuplé à chaque "🔄 Rafraîchir depuis la source" quand l'album
+// a les deux IDs (Discogs + MusicBrainz), jamais persisté : c'est une aide au diagnostic ponctuel,
+// pas une donnée de collection. N'automatise aucune résolution — affiche les divergences et laisse
+// le choix (bouton "Appliquer" par champ/source), dans le même esprit que showTracklistDiff().
+const SOURCE_CMP_FIELDS = ['year', 'genre', 'label', 'country'];
+const SOURCE_CMP_FIELD_LABELS = { year: 'Année', genre: 'Genre', label: 'Label', country: 'Pays' };
+let _sourceCmpCache = {};
+
+function extractYear4(dateStr) {
+  const m = String(dateStr || '').match(/\d{4}/);
+  return m ? m[0] : '';
+}
+
+function renderSourceComparisonPanel(albumId) {
+  const wrap = document.getElementById('modal-source-cmp');
+  const wrapOuter = document.getElementById('modal-source-cmp-wrap');
+  if (!wrap || !wrapOuter) return;
+  const a = albums.find(x => x.id === albumId || x.id === String(albumId));
+  const cmp = _sourceCmpCache[albumId];
+  if (!a || !cmp || !cmp.discogs || !cmp.musicbrainz) { wrapOuter.style.display = 'none'; wrap.innerHTML = ''; return; }
+
+  const rows = SOURCE_CMP_FIELDS.map(f => {
+    const dv = cmp.discogs[f] || '';
+    const mv = cmp.musicbrainz[f] || '';
+    if (!dv && !mv) return '';
+    const differ = dv && mv && dv !== mv;
+    const current = a[f] || '';
+    const cell = (label, val, source) => !val ? `<span style="opacity:0.4">–</span>` : `<span style="${differ ? 'color:var(--amber)' : ''}">${esc(val)}</span>${(f !== 'country' && val && val !== current) ? ` <button class="btn btn-sm" onclick="applySourceFieldValue('${sid(a.id)}','${f}','${source}','${esc(val).replace(/'/g,"\\'")}')" title="Appliquer cette valeur">↳</button>` : ''}`;
+    return `<div style="display:flex;gap:10px;align-items:center;${differ ? 'color:var(--amber)' : ''}">
+      <span style="min-width:56px;font-weight:500">${SOURCE_CMP_FIELD_LABELS[f]}${differ ? ' ⚠️' : ''}</span>
+      <span style="min-width:170px">💿 ${cell('Discogs', dv, 'discogs')}</span>
+      <span>🔵 ${cell('MusicBrainz', mv, 'musicbrainz')}</span>
+    </div>`;
+  }).filter(Boolean).join('');
+
+  if (!rows) { wrapOuter.style.display = 'none'; wrap.innerHTML = ''; return; }
+  wrapOuter.style.display = '';
+  wrap.innerHTML = rows + `<div style="margin-top:4px;opacity:0.6;font-size:11px">⚠️ = divergence entre sources — ↳ pour appliquer une valeur au champ de l'album (Pays : informatif uniquement, pas de champ dédié sur la fiche album)</div>`;
+}
+
+function applySourceFieldValue(albumIdSid, field, source, value) {
+  const albumId = unsid(albumIdSid);
+  const a = albums.find(x => x.id === albumId || x.id === String(albumId));
+  if (!a || !value) return;
+  a[field] = value;
+  setProvenance(a, field, source);
+  saveToStorage();
+  if (field === 'genre' && document.getElementById('f-genre')) document.getElementById('f-genre').value = value;
+  renderProvenancePanel(a.id);
+  renderSourceComparisonPanel(a.id);
+  invalidateCache();
+  renderAlbums(); renderDiscographie();
+  toast(`${SOURCE_CMP_FIELD_LABELS[field]} appliqué depuis ${source === 'discogs' ? 'Discogs' : 'MusicBrainz'} ✓`);
 }
 
 // Bouton générique "🔄 Rafraîchir depuis la source" — recontacte Discogs/MusicBrainz
@@ -14570,10 +14675,12 @@ async function refreshAlbumFromSource() {
   const btn = document.getElementById('btn-refresh-provenance');
   if (btn) btn.disabled = true;
   const updated = new Set();
+  const rawCmp = { discogs: null, musicbrainz: null };
 
   if (a.discogsId) {
     try {
       const rel = await fetchDiscogsRelease(a.discogsId);
+      rawCmp.discogs = { year: extractYear4(rel.release_date), genre: rel.genres?.[0] || '', label: rel.label || '', country: rel.country || '' };
       if (rel.genres?.length && !isManualField(a, 'genre') && a.genre !== rel.genres[0]) {
         a.genre = rel.genres[0]; setProvenance(a, 'genre', 'discogs'); updated.add('genre');
       }
@@ -14590,6 +14697,7 @@ async function refreshAlbumFromSource() {
     try {
       if (a.discogsId) await new Promise(r => setTimeout(r, 700)); // marge Edge Fn entre 2 appels
       const rel = await fetchMusicBrainzRelease(a.mb_release_id);
+      rawCmp.musicbrainz = { year: extractYear4(rel.release_date), genre: rel.genres?.[0] || '', label: rel.label || '', country: rel.country || '' };
       applyMbEnrichment(a, rel); // met à jour mb_original_year + youtube_url (respecte déjà le verrou manuel du genre)
       if (rel.genres?.length && !isManualField(a, 'genre') && a.genre !== rel.genres[0]) {
         a.genre = rel.genres[0]; setProvenance(a, 'genre', 'musicbrainz'); updated.add('genre');
@@ -14606,6 +14714,7 @@ async function refreshAlbumFromSource() {
 
   if (btn) btn.disabled = false;
   saveToStorage();
+  _sourceCmpCache[a.id] = rawCmp;
 
   // Refléter dans le formulaire ouvert
   document.getElementById('f-genre').value = a.genre || '';
@@ -14614,6 +14723,7 @@ async function refreshAlbumFromSource() {
   const coverWrap = document.getElementById('modal-cover-wrap');
   if (a.cover_url && coverImg) { coverImg.src = a.cover_url; coverWrap.style.display = 'block'; }
   renderProvenancePanel(a.id);
+  renderSourceComparisonPanel(a.id);
   invalidateCache();
   renderAlbums(); renderDiscographie();
   toast(updated.size ? `Rafraîchi : ${[...updated].join(', ')}` : 'Rien à mettre à jour (champs verrouillés 🔒 ou déjà à jour)');
