@@ -2142,16 +2142,21 @@ function nextPage() {
 // ===================== SÉLECTION MULTIPLE / ACTIONS GROUPÉES (Morceaux isolés) =====================
 let selectedTrackIds = new Set();
 
-function toggleTrackSelected(id, checked) {
-  if (checked) selectedTrackIds.add(id); else selectedTrackIds.delete(id);
+function toggleTrackSelected(idSid, checked) {
+  const id = unsid(idSid);
+  const t = tracks.find(x => x.id === id);
+  const realId = t ? t.id : id;
+  if (checked) selectedTrackIds.add(realId); else selectedTrackIds.delete(realId);
   renderTrackBulkBar();
 }
 
 function toggleSelectAllTracks(checked) {
   document.querySelectorAll('#tracks-tbody .row-select').forEach(cb => {
     cb.checked = checked;
-    const id = parseInt(cb.dataset.id);
-    if (checked) selectedTrackIds.add(id); else selectedTrackIds.delete(id);
+    const id = unsid(cb.dataset.id);
+    const t = tracks.find(x => x.id === id);
+    const realId = t ? t.id : id;
+    if (checked) selectedTrackIds.add(realId); else selectedTrackIds.delete(realId);
   });
   renderTrackBulkBar();
 }
@@ -2236,8 +2241,9 @@ function renderTracks() {
   }
   const fmtBadge = { flac:'badge-flac', mp3:'badge-mp3', aac:'badge-digital', autre:'badge-digital' };
   tbody.innerHTML = list.map(t => {
+    const tSid = sid(t.id);
     const stars = [1,2,3,4,5].map(i =>
-      `<button class="star ${(t.note||0)>=i?'on':''}" onclick="rateTrack(${t.id},${i});event.stopPropagation()">★</button>`
+      `<button class="star ${(t.note||0)>=i?'on':''}" onclick="rateTrack('${tSid}',${i});event.stopPropagation()">★</button>`
     ).join('');
     const plays = lfExact.get(normalizeKey(t.artist, t.title)) || 0;
     const playsHtml = plays
@@ -2249,7 +2255,7 @@ function renderTracks() {
     const lovedBadge = _lovedTracks.has(normalizeKey(t.artist, t.title))
       ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : '';
     return `<tr>
-      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${t.id}" ${selectedTrackIds.has(t.id) ? 'checked' : ''} onchange="toggleTrackSelected(${t.id}, this.checked)"></td>
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${tSid}" ${selectedTrackIds.has(t.id) ? 'checked' : ''} onchange="toggleTrackSelected('${tSid}', this.checked)"></td>
       <td style="font-weight:500">${esc(t.title)}${lovedBadge}</td>
       <td style="color:var(--text2);font-size:13px">${esc(t.artist)}</td>
       <td style="color:var(--text3);font-size:12px">${esc(t.album||'–')}</td>
@@ -2257,7 +2263,7 @@ function renderTracks() {
       <td>${bitrateHtml}</td>
       <td>${playsHtml}</td>
       <td><div class="stars">${stars}</div></td>
-      <td onclick="event.stopPropagation()"><button class="btn btn-sm" onclick="listenToIsolatedTrack('${sid(t.id)}')" title="${t.mb_recording_id ? 'Écouter sur YouTube Music (lien direct MusicBrainz si disponible)' : 'Chercher sur YouTube Music'}">▶️</button></td>
+      <td onclick="event.stopPropagation()"><button class="btn btn-sm" onclick="listenToIsolatedTrack('${tSid}')" title="${t.mb_recording_id ? 'Écouter sur YouTube Music (lien direct MusicBrainz si disponible)' : 'Chercher sur YouTube Music'}">▶️</button></td>
     </tr>`;
   }).join('');
   renderTrackBulkBar();
@@ -2265,7 +2271,8 @@ function renderTracks() {
   if (selAllCb) selAllCb.checked = list.length > 0 && list.every(t => selectedTrackIds.has(t.id));
 }
 
-function rateTrack(id, note) {
+function rateTrack(idSid, note) {
+  const id = unsid(idSid);
   const t = tracks.find(x => x.id === id);
   if (t) {
     t.note = t.note === note ? 0 : note;
