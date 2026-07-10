@@ -21,6 +21,15 @@ let trackNoteOverrides = {}; // { "albumId§titreNormalisé": note (0-5, pas de 
 // Note posée dans l'app pour un morceau de la tracklist d'un album, indépendante du champ
 // `rating` importé depuis MusicBee (arrondi à l'étoile entière, écrasé à chaque réimport XML).
 // Stockée à part (jamais dans albumTracksCache) pour survivre aux réimports.
+let trackYoutubeCache = {}; // { [mb_recording_id]: url ('' = déjà cherché, rien trouvé) }
+// Lien YouTube direct par MORCEAU (relation MB recording→url), todo section 8 dernier item ⬜.
+// Contrairement au lien par ALBUM (album.youtube_url, récupéré en masse lors de l'enrichissement
+// release), celui-ci n'est récupéré qu'À LA DEMANDE (1 clic ▶️) — le volume de pistes (morceaux
+// isolés + pistes d'albums, dizaines de milliers) rendrait un pré-fetch en masse à 1 req/s MB
+// totalement impraticable. Clé = mb_recording_id (universel, valable aussi bien pour un morceau
+// isolé que pour une piste de tracklist d'album) plutôt qu'un ID propre à chaque table — évite
+// de dupliquer le cache par source. Stocké à part comme trackNoteOverrides, jamais dans les
+// tables tracks/album_tracks elles-mêmes (qui sont réécrites entièrement à chaque réimport XML).
 let modalNote = 0;
 let trackNote = 0;
 let currentPage = 1;
@@ -52,7 +61,7 @@ function _saveToStorageImpl() {
         await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, nextId, savedAt: now };
+        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, trackYoutubeCache, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -86,6 +95,7 @@ function loadFromStorage() {
     trackWishlist = data.trackWishlist || [];
     notesToReport = data.notesToReport || [];
     trackNoteOverrides = data.trackNoteOverrides || {};
+    trackYoutubeCache = data.trackYoutubeCache || {};
     nextId = Math.max(nextId, data.nextId || 0, computeNextId());
     if (repairDuplicateIds()) saveToStorage();
     setSaveIndicator('saved', data.savedAt);
@@ -506,6 +516,7 @@ async function saveToSupabase(opts) {
       { key: 'wishlist_data', value: wishData },
       { key: 'notes_to_report_data', value: JSON.stringify(notesToReport) },
       { key: 'track_note_overrides_data', value: JSON.stringify(trackNoteOverrides) },
+      { key: 'track_youtube_cache_data', value: JSON.stringify(trackYoutubeCache) },
     ], { onConflict: 'key' });
 
     // ── Bump atomique du compteur de version (v2026.07.09) ────────────────────
@@ -583,6 +594,7 @@ async function loadFromSupabase() {
         if (metaMap.wishlist_data) { try { const wd = JSON.parse(metaMap.wishlist_data); if (wd.albums?.length) wishlist = wd.albums; if (wd.tracks?.length) trackWishlist = wd.tracks; } catch(e) {} }
         if (metaMap.notes_to_report_data) { try { notesToReport = JSON.parse(metaMap.notes_to_report_data) || []; } catch(e) {} }
         if (metaMap.track_note_overrides_data) { try { trackNoteOverrides = JSON.parse(metaMap.track_note_overrides_data) || {}; } catch(e) {} }
+        if (metaMap.track_youtube_cache_data) { try { trackYoutubeCache = JSON.parse(metaMap.track_youtube_cache_data) || {}; } catch(e) {} }
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
@@ -751,6 +763,9 @@ async function loadFromSupabase() {
       }
       if (metaMap.track_note_overrides_data) {
         try { trackNoteOverrides = JSON.parse(metaMap.track_note_overrides_data) || {}; } catch(e) {}
+      }
+      if (metaMap.track_youtube_cache_data) {
+        try { trackYoutubeCache = JSON.parse(metaMap.track_youtube_cache_data) || {}; } catch(e) {}
       }
       if (metaMap.lastfm_status) {
         try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {}
@@ -2215,7 +2230,7 @@ function renderTracks() {
 
   const tbody = document.getElementById('tracks-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">🎵</div>Aucun morceau isolé</div></td></tr>';
     renderTrackBulkBar();
     return;
   }
@@ -2242,6 +2257,7 @@ function renderTracks() {
       <td>${bitrateHtml}</td>
       <td>${playsHtml}</td>
       <td><div class="stars">${stars}</div></td>
+      <td onclick="event.stopPropagation()"><button class="btn btn-sm" onclick="listenToIsolatedTrack('${sid(t.id)}')" title="${t.mb_recording_id ? 'Écouter sur YouTube Music (lien direct MusicBrainz si disponible)' : 'Chercher sur YouTube Music'}">▶️</button></td>
     </tr>`;
   }).join('');
   renderTrackBulkBar();
@@ -11441,6 +11457,61 @@ function openYouTubeMusicForAlbumId(id) {
   if (a) openYouTubeMusicForAlbum(a);
 }
 
+// ── Repli à la demande pour les MORCEAUX (todo section 8, dernier item ⬜) ──────────────
+// Récupère le lien direct YouTube au niveau recording MusicBrainz (relation "free streaming"
+// posée sur CE morceau précis, plus fiable qu'une recherche texte) via l'Edge Function.
+// Appelé UNIQUEMENT au clic — jamais en pré-fetch de masse, voir trackYoutubeCache ci-dessus.
+async function fetchMusicBrainzRecordingYoutube(recordingId) {
+  const data = await callEdgeFn({ source: 'musicbrainz', recording_id: recordingId });
+  return data.youtube_url || '';
+}
+
+// Point d'entrée unique pour "écouter ce morceau" (bouton ▶️), qu'il s'agisse d'un morceau
+// isolé ou d'une piste de tracklist d'album — les deux portent un mb_recording_id (import XML
+// MusicBee) une fois associés à MusicBrainz. Sans mb_recording_id, ou en cas d'échec/absence
+// de lien direct, repli silencieux et immédiat sur la recherche YouTube Music existante.
+async function listenToTrackByRecording(artist, title, mbRecordingId) {
+  if (!mbRecordingId) { openYouTubeMusicSearch(artist, title); return; }
+  if (Object.prototype.hasOwnProperty.call(trackYoutubeCache, mbRecordingId)) {
+    const cached = trackYoutubeCache[mbRecordingId];
+    if (cached) window.open(cached, '_blank', 'noopener');
+    else openYouTubeMusicSearch(artist, title);
+    return;
+  }
+  toast('Recherche du lien direct MusicBrainz…', 'info');
+  try {
+    const url = await fetchMusicBrainzRecordingYoutube(mbRecordingId);
+    trackYoutubeCache[mbRecordingId] = url; // '' mis en cache aussi : évite de re-chercher à chaque écoute
+    saveToStorage();
+    if (url) window.open(url, '_blank', 'noopener');
+    else openYouTubeMusicSearch(artist, title);
+  } catch(e) {
+    console.error('listenToTrackByRecording:', e.message || e);
+    openYouTubeMusicSearch(artist, title); // repli silencieux, ne bloque jamais l'écoute
+  }
+}
+
+// Wrapper pour un morceau isolé (tracks[]), utilisé par le bouton ▶️ de "Morceaux isolés".
+// id reçu encodé via sid() — l'id d'un morceau isolé est "artistNorm|||titleNorm" (texte,
+// contient espaces/pipes), jamais sûr à interpoler brut dans un attribut onclick.
+function listenToIsolatedTrack(encodedId) {
+  const id = unsid(encodedId);
+  const t = tracks.find(x => x.id === id);
+  if (t) listenToTrackByRecording(t.artist, t.title, t.mb_recording_id);
+}
+
+// Wrapper pour une piste de tracklist d'album, utilisé par le bouton ▶️ du panneau tracklist
+// (fiche album + panneau embarqué Session notation). L'artiste vient de l'album (les lignes
+// album_tracks ne portent pas leur propre artiste). Paramètres encodés via sid() (titre et
+// mb_recording_id peuvent contenir des caractères non sûrs dans un attribut onclick brut).
+function listenToAlbumTrack(encodedAlbumId, encodedTitle, encodedMbId) {
+  const albumId = unsid(encodedAlbumId);
+  const title = unsid(encodedTitle);
+  const mbRecordingId = unsid(encodedMbId) || '';
+  const album = albums.find(x => String(x.id) === String(albumId));
+  listenToTrackByRecording(album?.artist || '', title, mbRecordingId);
+}
+
 // ===================== SESSION DE NOTATION =====================
 // Écran dédié : un album ou un morceau isolé non noté à la fois (grosse pochette/avatar,
 // étoiles, raccourcis clavier), plutôt que de chasser les lignes vides dans un tableau de
@@ -11887,7 +11958,7 @@ function rsSkipCurrent() {
 function rsListenCurrent() {
   if (ratingSessionMode === 'tracks') {
     const t = tracks.find(x => x.id === ratingQueueTracks[0]);
-    if (t) openYouTubeMusicSearch(t.artist, t.title);
+    if (t) listenToTrackByRecording(t.artist, t.title, t.mb_recording_id);
   } else {
     const a = albums.find(x => x.id === ratingQueue[0]);
     if (a) openYouTubeMusicForAlbum(a);
@@ -12138,6 +12209,7 @@ function renderAlbumTracklistPanel(albumId, containerId) {
   wrap.innerHTML = mbTracks.map(t => {
     const key = trackNoteKey(albumId, t.title);
     const value = Object.prototype.hasOwnProperty.call(trackNoteOverrides, key) ? trackNoteOverrides[key] : (t.rating || 0);
+    const listenBtn = `<button class="btn btn-sm" onclick="listenToAlbumTrack('${sid(albumId)}','${sid(t.title)}','${sid(t.mb_recording_id||'')}')" title="${t.mb_recording_id ? 'Écouter sur YouTube Music (lien direct MusicBrainz si disponible)' : 'Chercher sur YouTube Music'}">▶️</button>`;
     return `<div class="rs-track-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;border-bottom:1px solid var(--border)">
       <div class="rs-track-row-click" data-album-id="${escAttr(albumId)}" data-title="${escAttr(t.title)}" title="Cliquer pour saisir une note au clavier" style="cursor:pointer;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${t.position ? esc(t.position) + '. ' : ''}${esc(t.title)}</div>
       <div class="hstars">${halfStarsHtml(value, albumId, t.title)}</div>
@@ -12145,6 +12217,7 @@ function renderAlbumTracklistPanel(albumId, containerId) {
         <input type="text" inputmode="decimal" class="rs-track-note-input" placeholder="0-5" value="${value || ''}" title="Note (0 à 5, demi-étoiles possibles)">
         <button class="btn btn-sm rs-track-note-btn" title="Valider la note">✓</button>
       </div>
+      ${listenBtn}
     </div>`;
   }).join('');
 }
