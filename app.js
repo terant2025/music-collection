@@ -395,6 +395,7 @@ async function saveToSupabase(opts) {
       mb_refreshed_at: a.mb_refreshed_at || null,
       mb_release_type: a.mb_release_type || null,
       mb_release_secondary_types: a.mb_release_secondary_types?.length ? JSON.stringify(a.mb_release_secondary_types) : null,
+      mb_credits: a.mb_credits?.length ? JSON.stringify(a.mb_credits) : null,
       discogs_master_year: a.discogs_master_year || null,
       youtube_url:    a.youtube_url || null,
       cover_url:      a.cover_url || null,
@@ -619,6 +620,7 @@ async function loadFromSupabase() {
         mb_refreshed_at: a.mb_refreshed_at || undefined,
         mb_release_type: a.mb_release_type || undefined,
         mb_release_secondary_types: (() => { try { return a.mb_release_secondary_types ? JSON.parse(a.mb_release_secondary_types) : undefined; } catch(e) { return undefined; } })(),
+        mb_credits: (() => { try { return a.mb_credits ? JSON.parse(a.mb_credits) : undefined; } catch(e) { return undefined; } })(),
         discogs_master_year: a.discogs_master_year || undefined,
         youtube_url:   a.youtube_url || undefined,
         cover_url:     a.cover_url || undefined,
@@ -3122,6 +3124,7 @@ function editAlbum(id) {
   renderMatchConfidencePanel(realId);
   renderProvenancePanel(realId);
   renderSourceComparisonPanel(realId);
+  renderMbCreditsPanel(realId);
   document.getElementById('modal-album').classList.add('open');
 }
 
@@ -5850,6 +5853,7 @@ async function fetchMusicBrainzRelease(mbId) {
     genres: data.genres || [],                          // genres du release-group, triés par pertinence
     release_type: data.release_type || '',               // primary-type release-group : Album/EP/Single/Broadcast/Other
     release_secondary_types: data.release_secondary_types || [], // Compilation/Live/Remix/Soundtrack/...
+    credits: data.credits || [],                          // crédits release (producteur, ingénieur, mixage...) — [{role, name}]
     youtube_url: data.youtube_url || '',                 // lien direct si un éditeur MB l'a renseigné
     cover_url: data.cover_url || '',
     label: data.label || '',
@@ -5979,6 +5983,14 @@ function applyMbEnrichment(album, rel) {
   const secTypes = rel.release_secondary_types || [];
   if (JSON.stringify(secTypes) !== JSON.stringify(album.mb_release_secondary_types || [])) {
     album.mb_release_secondary_types = secTypes;
+    changed = true;
+  }
+  // Crédits MusicBrainz (todo section 6, item ⬜) : producteur/ingénieur/mixage/arrangement
+  // posés au niveau release. Simple champ informatif comme le type de release-group —
+  // pas de field_provenance/verrou, toujours rafraîchi si la liste change.
+  const credits = rel.credits || [];
+  if (JSON.stringify(credits) !== JSON.stringify(album.mb_credits || [])) {
+    album.mb_credits = credits;
     changed = true;
   }
   if (changed) saveToStorage();
@@ -12332,6 +12344,42 @@ function renderSourceComparisonPanel(albumId) {
   wrap.innerHTML = rows + `<div style="margin-top:4px;opacity:0.6;font-size:11px">⚠️ = divergence entre sources — ↳ pour appliquer une valeur au champ de l'album (Pays : informatif uniquement, pas de champ dédié sur la fiche album)</div>`;
 }
 
+// Crédits MusicBrainz (todo section 6, item ⬜) : relations artiste posées au niveau release
+// (producteur, ingénieur, mixage, arrangement...). Affiché seulement si présent — simple
+// panneau informatif comme le badge type, alimenté au fetch (fetchAllTracklists,
+// refreshAlbumFromSource), jamais édité manuellement.
+const MB_CREDIT_ROLE_LABELS = {
+  producer: 'Production', 'executive producer': 'Production exécutive', engineer: 'Ingénieur du son',
+  mix: 'Mixage', mastering: 'Mastering', recording: 'Enregistrement', arranger: 'Arrangement',
+  orchestrator: 'Orchestration', conductor: 'Direction', composer: 'Composition', lyricist: 'Paroles',
+  writer: 'Écriture', remixer: 'Remix', programming: 'Programmation', vocal: 'Voix',
+  instrument: 'Instrument', performer: 'Interprétation', 'liner notes': 'Livret',
+  'art direction': 'Direction artistique', photography: 'Photographie', design: 'Design',
+  illustration: 'Illustration', compiler: 'Compilation',
+};
+function renderMbCreditsPanel(albumId) {
+  const wrap = document.getElementById('modal-mb-credits');
+  const wrapOuter = document.getElementById('modal-mb-credits-wrap');
+  if (!wrap || !wrapOuter) return;
+  const a = albums.find(x => x.id === albumId || x.id === String(albumId));
+  const credits = a?.mb_credits || [];
+  if (!credits.length) { wrapOuter.style.display = 'none'; wrap.innerHTML = ''; return; }
+
+  const byRole = {};
+  credits.forEach(c => {
+    if (!c.role || !c.name) return;
+    (byRole[c.role] = byRole[c.role] || new Set()).add(c.name);
+  });
+  const rows = Object.keys(byRole).sort().map(role => {
+    const label = MB_CREDIT_ROLE_LABELS[role] || (role.charAt(0).toUpperCase() + role.slice(1));
+    return `<div><span style="font-weight:500">${esc(label)}</span> : ${esc([...byRole[role]].join(', '))}</div>`;
+  }).join('');
+
+  if (!rows) { wrapOuter.style.display = 'none'; wrap.innerHTML = ''; return; }
+  wrapOuter.style.display = '';
+  wrap.innerHTML = rows + `<div style="margin-top:4px;opacity:0.6;font-size:11px">Relations posées au niveau release sur MusicBrainz — le compositeur par morceau (lien recording→work) n'est pas récupéré (trop coûteux en appels API à 1 req/s).</div>`;
+}
+
 function applySourceFieldValue(albumIdSid, field, source, value) {
   const albumId = unsid(albumIdSid);
   const a = albums.find(x => x.id === albumId || x.id === String(albumId));
@@ -12413,6 +12461,7 @@ async function refreshAlbumFromSource() {
   if (a.cover_url && coverImg) { coverImg.src = a.cover_url; coverWrap.style.display = 'block'; }
   renderProvenancePanel(a.id);
   renderSourceComparisonPanel(a.id);
+  renderMbCreditsPanel(a.id);
   invalidateCache();
   renderAlbums(); renderDiscographie();
   toast(updated.size ? `Rafraîchi : ${[...updated].join(', ')}` : 'Rien à mettre à jour (champs verrouillés 🔒 ou déjà à jour)');
