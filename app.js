@@ -393,6 +393,8 @@ async function saveToSupabase(opts) {
       mb_match_score: a.mb_match_score ?? null,
       mb_original_year: a.mb_original_year || null,
       mb_refreshed_at: a.mb_refreshed_at || null,
+      mb_release_type: a.mb_release_type || null,
+      mb_release_secondary_types: a.mb_release_secondary_types?.length ? JSON.stringify(a.mb_release_secondary_types) : null,
       youtube_url:    a.youtube_url || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
@@ -614,6 +616,8 @@ async function loadFromSupabase() {
         mb_match_score: a.mb_match_score ?? undefined,
         mb_original_year: a.mb_original_year || undefined,
         mb_refreshed_at: a.mb_refreshed_at || undefined,
+        mb_release_type: a.mb_release_type || undefined,
+        mb_release_secondary_types: (() => { try { return a.mb_release_secondary_types ? JSON.parse(a.mb_release_secondary_types) : undefined; } catch(e) { return undefined; } })(),
         youtube_url:   a.youtube_url || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
@@ -1928,7 +1932,7 @@ function renderAlbums() {
         <div class="artist-cell">
           <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
-            <div class="name">${esc(a.album)}</div>
+            <div class="name">${esc(a.album)}${mbTypeBadge(a)}</div>
             <div class="sub">${esc(a.artist)}${!isStock && a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
           </div>
         </div>
@@ -1965,6 +1969,19 @@ function esc(s) {
 // double-quoté (ex: data-title="...") où esc() seul ne suffit pas.
 function escAttr(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Badge type de release-group MusicBrainz (todo section 6, item ⬜) : n'affiche rien pour
+// le cas courant "Album" sans secondary-types (bruit inutile sur la majorité des lignes),
+// seulement quand ça apporte une info (EP/Single/Compilation/Live/...).
+const MB_TYPE_LABELS = { EP: 'EP', Single: 'Single', Broadcast: 'Diffusion', Other: 'Autre' };
+const MB_SECONDARY_LABELS = { Compilation: 'Compil', Live: 'Live', Remix: 'Remix', Soundtrack: 'BO', 'DJ-mix': 'DJ-mix', 'Mixtape/Street': 'Mixtape', Demo: 'Demo', Audiobook: 'Audiobook', Interview: 'Interview', Spokenword: 'Spoken' };
+function mbTypeBadge(a) {
+  const parts = [];
+  if (a.mb_release_type && a.mb_release_type !== 'Album') parts.push(MB_TYPE_LABELS[a.mb_release_type] || a.mb_release_type);
+  (a.mb_release_secondary_types || []).forEach(t => parts.push(MB_SECONDARY_LABELS[t] || t));
+  if (!parts.length) return '';
+  return ` <span title="Type MusicBrainz : ${escAttr([a.mb_release_type, ...(a.mb_release_secondary_types||[])].filter(Boolean).join(', '))}" style="font-size:9px;color:var(--purple);border:1px solid rgba(176,140,255,0.3);border-radius:3px;padding:1px 4px;margin-left:4px;vertical-align:middle">${esc([...new Set(parts)].join(' · '))}</span>`;
 }
 
 // Échappe un id (normalizeKey texte) pour usage dans un attribut onclick HTML
@@ -5808,6 +5825,8 @@ async function fetchMusicBrainzRelease(mbId) {
     release_date: data.release_date || '',
     first_release_date: data.first_release_date || '', // année d'origine (release-group MB)
     genres: data.genres || [],                          // genres du release-group, triés par pertinence
+    release_type: data.release_type || '',               // primary-type release-group : Album/EP/Single/Broadcast/Other
+    release_secondary_types: data.release_secondary_types || [], // Compilation/Live/Remix/Soundtrack/...
     youtube_url: data.youtube_url || '',                 // lien direct si un éditeur MB l'a renseigné
     cover_url: data.cover_url || '',
     label: data.label || '',
@@ -5925,6 +5944,18 @@ function applyMbEnrichment(album, rel) {
   }
   if (rel.youtube_url && album.youtube_url !== rel.youtube_url) {
     album.youtube_url = rel.youtube_url;
+    changed = true;
+  }
+  // Type de release-group (todo section 6, item ⬜) : simple champ informatif, jamais
+  // édité manuellement contrairement à year/genre/label/cover_url — pas besoin de
+  // field_provenance/verrou, toujours rafraîchi si la valeur change.
+  if (rel.release_type && album.mb_release_type !== rel.release_type) {
+    album.mb_release_type = rel.release_type;
+    changed = true;
+  }
+  const secTypes = rel.release_secondary_types || [];
+  if (JSON.stringify(secTypes) !== JSON.stringify(album.mb_release_secondary_types || [])) {
+    album.mb_release_secondary_types = secTypes;
     changed = true;
   }
   if (changed) saveToStorage();
@@ -8146,11 +8177,20 @@ function discoFilteredList() {
   const rymVal   = document.getElementById('filter-disco-rym-val')?.value  || '';
   const minPlays = parseInt(document.getElementById('filter-disco-min-plays')?.value || '0') || 0;
 
-  // Détecte une compilation (Various Artists / Various)
-  const isVA = a => /^various/i.test(a.artist) || a.isCompilation;
-  // Détecte un EP / single / rarités / live / compilation de titres
+  // Détecte une compilation (Various Artists / Various) — MB (secondary-types "Compilation")
+  // fait foi quand disponible (todo section 6, "distinguer automatiquement les compils sans
+  // heuristique manuelle"), sinon repli sur l'heuristique regex existante.
+  const isVA = a => a.mb_release_secondary_types?.length
+    ? a.mb_release_secondary_types.includes('Compilation')
+    : (/^various/i.test(a.artist) || a.isCompilation);
+  // Détecte un EP / single / rarités / live / compilation de titres — idem, MB
+  // (primary-type EP/Single, ou secondary-types Live/Remix/DJ-mix/Mixtape) fait foi quand
+  // disponible, sinon repli sur la même heuristique regex qu'avant.
   const EP_RE = /\b(EP|single|b[\-\s]?sides?|bonus|raret[eé]s?|best\s+of|collection|sampler|vol\.?|volume|#\d|\bcd\s*\d|\blive\b|bootleg|demo|anthology|greatest\s+hits|the\s+singles|box\s+set)\b/i;
-  const isEP = a => EP_RE.test(a.album) || /^\[/.test(a.album);
+  const MB_EP_SECONDARY = ['Live', 'Remix', 'DJ-mix', 'Mixtape/Street', 'Demo'];
+  const isEP = a => (a.mb_release_type || a.mb_release_secondary_types?.length)
+    ? (['EP', 'Single'].includes(a.mb_release_type) || a.mb_release_secondary_types?.some(t => MB_EP_SECONDARY.includes(t)))
+    : (EP_RE.test(a.album) || /^\[/.test(a.album));
 
   let list = [];
   if (filter === 'no-cd') {
@@ -8313,7 +8353,7 @@ function renderDiscographie() {
         <div class="artist-cell">
           <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
-            <div class="name">${esc(a.album)}</div>
+            <div class="name">${esc(a.album)}${mbTypeBadge(a)}</div>
             <div class="sub">${esc(a.artist)}</div>
           </div>
         </div>
