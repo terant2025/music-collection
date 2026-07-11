@@ -7825,7 +7825,7 @@ function addToWishlistFromAlbumId(albumId) {
   const realId = unsid(albumId);
   const a = albums.find(x => x.id === realId);
   if (!a) return;
-  const rymR = (lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album))?.rating || 0;
+  const rymR = (lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id))?.rating || 0;
   addToWishlist(a.artist, a.album, a.year || '', 'manual', a.plays || 0, rymR, '');
 }
 
@@ -7833,7 +7833,7 @@ function addToWishlistFromStock(stockId) {
   const realId = unsid(stockId);
   const s = stockItems.find(x => x.id === realId || x.id === String(realId));
   if (!s) return;
-  const rymR = (lookupRym(s.artist, s.album) || lookupRym(cleanDiscogsArtist(s.artist), s.album))?.rating || 0;
+  const rymR = (lookupRym(s.artist, s.album, s.id) || lookupRym(cleanDiscogsArtist(s.artist), s.album, s.id))?.rating || 0;
   addToWishlist(s.artist, s.album, s.year || '', 'stock', 0, rymR, s.notes || '');
 }
 
@@ -12079,15 +12079,15 @@ const NEXTTRACK_PRIO_LABEL = { high: 'haute', mid: 'moyenne', low: 'basse' };
 
 let nextToListenQueue = []; // [{ source:'owned'|'wishlist', id, score, rymRating }]
 
-function _nextToListenRym(artist, album) {
-  return (lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album))?.rating || 0;
+function _nextToListenRym(artist, album, albumId) {
+  return (lookupRym(artist, album, albumId) || lookupRym(cleanDiscogsArtist(artist), album, albumId))?.rating || 0;
 }
 
 function buildNextToListenQueue() {
   const owned = ownedAlbumsForCovers()
     .filter(a => !a.plays)
     .map(a => {
-      const rymRating = _nextToListenRym(a.artist, a.album);
+      const rymRating = _nextToListenRym(a.artist, a.album, a.id);
       return { source: 'owned', id: a.id, score: rymRating * 2, rymRating };
     });
   const wish = wishlist.map(w => {
@@ -12646,8 +12646,12 @@ function renderRatingSession() {
     document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
     document.getElementById('rs-plays').textContent = a.plays ? `${a.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
 
-    // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso
-    const rymEntry = lookupRym(a.artist, a.album) || lookupRym(cleanDiscogsArtist(a.artist), a.album);
+    // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso.
+    // BUG CORRIGÉ (v2026.07.10-26) : a.id manquant ici empêchait lookupRym() de retomber sur une
+    // association RYM manuelle (rymAssociations) quand le nom ne matche pas automatiquement (ex.
+    // "V.V. Brown" côté RYM vs "VV Brown" côté collection) — la suggestion restait invisible même
+    // après avoir associé manuellement l'album depuis l'écran RYM.
+    const rymEntry = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
     if (sugEl) {
       if (rymEntry?.rating) {
         sugEl.style.display = 'block';
@@ -12749,30 +12753,55 @@ const NTR_TARGET_LABELS = { musicbee: 'MusicBee', discogs: 'Discogs', rym: 'RYM'
 function queueNoteToReport(type, entity, note) {
   const title = type === 'album' ? entity.album : entity.title;
   const key = normalizeKey(entity.artist, title);
-  let targets = ['musicbee'];
+  let targets = [];
+  // MusicBee n'est une cible pertinente QUE si l'album a effectivement une tracklist MusicBee
+  // (fichiers réellement présents dans la bibliothèque MusicBee) — sinon il n'y a tout
+  // simplement rien à reporter là-bas (cas des albums notés via RYM/Stock/Session notation mais
+  // jamais destinés à rejoindre la collection MusicBee). Pour les morceaux isolés (type
+  // 'track'), MusicBee reste la seule cible possible (RYM ne note pas au niveau morceau) — pas
+  // de vérification de présence ici, comportement inchangé.
+  const hasMusicBeeFile = type === 'album'
+    ? (albumTracksCache[entity.id] || []).some(t => t.source === 'musicbee')
+    : true;
+  if (hasMusicBeeFile) targets.push('musicbee');
   if (type === 'album') {
     if (entity.discogsId && !entity.discogsRating) targets.push('discogs');
-    const rymEntry = lookupRym(entity.artist, entity.album) || lookupRym(cleanDiscogsArtist(entity.artist), entity.album);
+    const rymEntry = lookupRym(entity.artist, entity.album, entity.id) || lookupRym(cleanDiscogsArtist(entity.artist), entity.album, entity.id);
     if (!rymEntry?.rating) targets.push('rym');
   }
   // Une nouvelle note sur la même fiche remplace l'entrée en attente précédente
   notesToReport = notesToReport.filter(e => !(e.type === type && e.key === key));
-  notesToReport.push({ id: uid(), type, key, artist: entity.artist, title, note, targets, createdAt: Date.now() });
+  notesToReport.push({ id: uid(), type, key, artist: entity.artist, title, note, targets, createdAt: Date.now(), albumId: type === 'album' ? entity.id : undefined });
 }
 
-// Retire automatiquement les cibles Discogs/RYM détectées comme reportées (via réimport).
+// Retire automatiquement les cibles Discogs/RYM détectées comme reportées (via réimport), et
+// la cible MusicBee quand l'album n'a en réalité aucune tracklist MusicBee (cas des entrées
+// créées avant le correctif v2026.07.10-27, ou d'un album jamais destiné à rejoindre MusicBee).
 // Retourne true si quelque chose a changé (pour déclencher une sauvegarde).
 function pruneNotesToReport() {
   let changed = false;
   notesToReport.forEach(entry => {
     if (entry.type !== 'album') return;
+    // Rétro-remplissage : les entrées créées avant v2026.07.10-27 n'ont pas d'albumId stocké,
+    // nécessaire aux deux vérifications ci-dessous (association RYM manuelle, présence réelle
+    // MusicBee). Résolu une fois pour toutes ici via la clé normalisée déjà stockée.
+    if (!entry.albumId) {
+      const match = albums.find(x => normalizeKey(x.artist, x.album) === entry.key);
+      if (match) { entry.albumId = match.id; changed = true; }
+    }
     if (entry.targets.includes('discogs')) {
       const a = albums.find(x => normalizeKey(x.artist, x.album) === entry.key);
       if (a?.discogsRating) { entry.targets = entry.targets.filter(t => t !== 'discogs'); changed = true; }
     }
     if (entry.targets.includes('rym')) {
-      const rymEntry = lookupRym(entry.artist, entry.title) || lookupRym(cleanDiscogsArtist(entry.artist), entry.title);
+      // albumId transmis à lookupRym() pour retomber sur une association RYM manuelle si le nom
+      // ne matche pas automatiquement (même correctif que Session notation, v2026.07.10-26).
+      const rymEntry = lookupRym(entry.artist, entry.title, entry.albumId) || lookupRym(cleanDiscogsArtist(entry.artist), entry.title, entry.albumId);
       if (rymEntry?.rating) { entry.targets = entry.targets.filter(t => t !== 'rym'); changed = true; }
+    }
+    if (entry.targets.includes('musicbee') && entry.albumId) {
+      const hasMusicBeeFile = (albumTracksCache[entry.albumId] || []).some(t => t.source === 'musicbee');
+      if (!hasMusicBeeFile) { entry.targets = entry.targets.filter(t => t !== 'musicbee'); changed = true; }
     }
   });
   const before = notesToReport.length;
