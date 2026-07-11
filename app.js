@@ -6873,30 +6873,39 @@ function showTracklistDiff(albumId) {
 let wishlist = []; // [{ id, artist, album, year, source, prio, plays, rymRating, notes, addedAt }]
 
 function wishlistOwnedSet() {
-  // Albums déjà possédés (numérique ou discogs) — à exclure de la wishlist auto.
+  // Albums déjà possédés — au sens Discogs, seul contrôle faisant foi ici (confirmé par Antoine
+  // le 2026-07-11) : la wishlist ne doit contenir QUE des albums absents de Discogs. Un album
+  // présent uniquement en Stock (fichiers MusicBee déjà présents mais pas encore reportés dans
+  // Discogs/discographie) n'est PAS "possédé" au sens de la wishlist, même s'il a des fichiers
+  // flac/mp3/cd/digital — sans cette distinction, pruneWishlistOwned() videait silencieusement
+  // toute la wishlist correspondant à des albums déjà ripés en Stock mais pas encore
+  // officiellement collectés (bug corrigé v2026.07.10-22, cf. discogsId comme seul critère).
   // Correspondance EXACTE uniquement (clé normalisée artiste+album) : un faux-positif ici
   // supprime silencieusement une entrée qu'on vient d'ajouter, donc mieux vaut louper
   // un match approximatif que perdre une entrée légitime.
   const s = new Set();
   albums.forEach(a => {
-    if (!(a.flac || a.mp3 || a.digital || a.cd)) return;
+    if (!a.discogsId) return;
     s.add(normalizeKey(a.artist, a.album));
   });
   return s;
 }
 
-// Retire de la wishlist les entrées déjà possédées (ex: après un réimport Discogs/MusicBee
-// qui vient d'ajouter un album qui était en wishlist). Appelé automatiquement — pas besoin
-// de cliquer manuellement sur ✓ pour chaque album retrouvé via un import.
+// Retire de la wishlist les entrées devenues présentes dans Discogs (ex: après un réimport
+// Discogs qui vient d'ajouter un album qui était en wishlist). Appelé automatiquement — pas
+// besoin de cliquer manuellement sur ✓ pour chaque album retrouvé via un import.
 // IMPORTANT : ne touche que les entrées ajoutées automatiquement (source last.fm/RYM,
 // "cet album me manque"). Les ajouts manuels/stock (source 'manual'/'stock', ex: "je veux
 // aussi le CD d'un album que j'ai déjà en numérique") ne sont JAMAIS auto-retirés, car
 // l'utilisateur les a ajoutés en sachant déjà qu'il possède l'album dans un autre format.
-// Retire automatiquement de la wishlist tout album devenu possédé, quelle que soit
-// sa source d'ajout (lastfm/rym/stock/manual) — auparavant limité à lastfm/rym.
+// Retire automatiquement de la wishlist tout album devenu présent dans Discogs, quelle que
+// soit sa source d'ajout (lastfm/rym/stock/manual) — auparavant limité à lastfm/rym.
 // Généralisé en v2026.07.10-03 suite au retrait du bouton "✓ Acquis" (qui ouvrait la
-// modale d'ajout manuel) : sans lui, c'est ce nettoyage automatique après réimport
-// MusicBee/Discogs qui fait disparaître une entrée une fois réellement acquise.
+// modale d'ajout manuel) : sans lui, c'est ce nettoyage automatique après réimport Discogs
+// qui fait disparaître une entrée une fois réellement acquise. Le critère est Discogs
+// spécifiquement (a.discogsId), PAS la présence de fichiers flac/mp3/cd/digital — un album
+// seulement en Stock (ripé mais pas encore reporté dans Discogs) reste en wishlist tant qu'il
+// n'est pas dans Discogs (confirmé par Antoine, v2026.07.10-22, cf. wishlistOwnedSet()).
 function pruneWishlistOwned() {
   if (!wishlist.length) return 0;
   const owned = wishlistOwnedSet();
