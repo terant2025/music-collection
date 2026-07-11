@@ -34,6 +34,9 @@
 <!-- APP_VERSION: v2026.07.10-15 — Heatmap d'écoute (todo section 11, item ⬜ "Heatmap d'écoute (type calendrier GitHub) sur les scrobbles récents", 2e item de la section traité après le dashboard d'insights en -14). Nouveau 6e bloc dans l'onglet "📊 Insights", sous l'évolution des écoutes : calendrier type GitHub (grille CSS, 1 colonne par semaine, 1 ligne par jour, intensité par opacité de var(--accent)), calculé À LA DEMANDE (bouton dédié) sur les 90 derniers jours. Contrairement à l'évolution mensuelle (-14, weekly charts, résolution hebdomadaire insuffisante pour un calendrier), reconstitué depuis user.getrecenttracks — même endpoint que "Scrobbles récents" — filtré côté serveur last.fm via le paramètre from= pour ne récupérer que la fenêtre de 90 jours plutôt que paginer sur tout l'historique (garde-fou de 60 pages max en cas de réponse anormale, dégradation gracieuse en heatmap partielle plutôt que boucle infinie). Résultat mis en cache dans un nouveau state listeningHeatmap + horodatage _listeningHeatmapComputedAt, persistés comme listeningEvolution via un nouveau meta.listening_heatmap_data (JSON, aucune migration SQL — table meta déjà générique). -->
 <!-- APP_VERSION: v2026.07.10-16 — Score de complétude de fiche (todo section 11, item ⬜ "Score de complétude de fiche (pochette / genre / note / tracklist présents) pour repérer les fiches négligées — variante des diagnostics existants (🩺, Pochettes)", 3e item de la section). Nouvel onglet "🧩 Complétude" (nav "Outils", entre Pochettes et Session notation) : tableau des albums possédés (ownedAlbumsForCovers, même filtre que Pochettes/Session notation), triés par score croissant (pires fiches en premier), 4 critères binaires par colonne (🖼 pochette / 🎨 genre / ⭐ note / 📀 tracklist) + score X/4 en pourcentage. Tracklist vérifiée via albumTracksCache, déjà chargé en bloc pour toute la collection au démarrage (loadAlbumTracks) — aucun appel réseau supplémentaire. Recherche artiste/album, case "Masquer les fiches déjà complètes" (cochée par défaut), pagination "Charger plus" (50/page, même pattern que Pochettes). Clic sur une ligne → ouvre la fiche album (editAlbum). Badge sidebar = nombre de fiches "négligées" (score ≤ 2/4). 100% calculé côté client, aucune migration SQL, aucun state persisté (recalculé à chaque affichage comme les autres blocs du dashboard Insights). -->
 <!-- APP_VERSION: v2026.07.10-17 — "Prochain à écouter" (todo section 11, item ⬜ « suggestion pondérée note RYM haute + jamais écouté + priorité wishlist, pendant écoute — logique proche de celle déjà en place pour la Session notation », 4e item de la section). Nouvel onglet "🎧 Prochain à écouter" (nav Outils, juste après Session notation) : même principe de carte unique que la Session notation (buildRatingQueue), mais objectif inverse — suggérer quoi écouter ENSUITE plutôt que quoi noter parmi ce qui est déjà écouté. Candidats : albums possédés jamais écoutés (a.plays === 0/falsy, "jamais écouté" en filtre d'éligibilité plutôt qu'en pondération continue) + entrées wishlist (écouter avant d'acheter). Score combiné : note RYM (lookupRym, ×2, facteur dominant) + bonus priorité wishlist (🔴 +3 / 🟡 +1.5 / 🟢 +0.5, uniquement pour les entrées wishlist). Carte : pochette/avatar, artiste/album/année/genre, badges (source Possédé/Wishlist, priorité wishlist le cas échéant, note RYM), bouton "▶️ Écouter sur YouTube Music" (openYouTubeMusicForAlbum si possédé avec lien direct connu, sinon recherche), "📄 Ouvrir la fiche" (albums possédés uniquement), "⏭ Suivant" pour passer à la suggestion suivante. File recalculée à chaque ouverture de l'écran (buildNextToListenQueue), jamais persistée — comme ratingQueue, filtrée en continu contre les mutations survenues ailleurs dans l'app (album désormais écouté, entrée wishlist supprimée/acquise). Aucune migration SQL, aucun appel réseau supplémentaire (réutilise rymData/wishlist/albums déjà en mémoire). -->
+<!-- APP_VERSION: v2026.07.10-18 — Artistes similaires possédés (todo section 11, item ⬜ « via artist-rels MusicBrainz (déjà récupéré pour les crédits, v2026.07.10-11) : relie entre eux des artistes déjà présents dans la collection », 5e item de la section). Nouvel onglet "🕸️ Artistes similaires" (nav Outils, après Prochain à écouter) : réutilise album.mb_credits (relations artiste au niveau release — producteur, remix, featuring, membre… déjà récupérées en -11) sans AUCUN appel API supplémentaire. Pour chaque crédit de chaque album possédé, si le nom crédité correspond (via artistVariants(), même normalisation que le matching last.fm existant) à un artiste déjà présent ailleurs dans la collection, c'est une connexion — volontairement pas de vraies "similar artists" (nécessiterait une API dédiée type last.fm similar artists, hors scope), mais des collaborations réelles et vérifiables entre artistes déjà possédés. Tableau (Artiste / Connecté à / Rôle / Via l'album, cette dernière colonne cliquable → editAlbum), recherche par artiste, compteur "X connexion(s) entre Y artiste(s)". 100% calculé côté client, aucune migration SQL, rien de persisté (recalculé à chaque affichage). -->
+<!-- APP_VERSION: v2026.07.10-19 — 2 correctifs UI suite retour utilisateur (aucun lien avec la todo). (1) BUG CORRIGÉ — débordement du menu de gauche : l'ajout progressif d'entrées de nav (Complétude, Prochain à écouter, Artistes similaires en -16/-17/-18, en plus des entrées déjà existantes) a fini par dépasser la hauteur de viewport sur les résolutions courantes, sans qu'aucun scroll ne soit possible (.sidebar était un simple flex column sans overflow, dans .app qui a overflow:hidden) — les dernières entrées (Insights, Import/Export) et le bloc sidebar-bottom (barre de stockage, indicateur de sauvegarde) devenaient inaccessibles. Restructuré en 3 zones : .sidebar-logo (fixe en haut), .sidebar-nav (nouveau wrapper autour de tous les nav-section/nav-item, flex:1 + overflow-y:auto — scroll indépendant), .sidebar-bottom (fixe en bas, flex-shrink:0). (2) Le sous-titre statique "v2.0" sous le logo "Discothèque" affichait un numéro de version fixe et obsolète, distinct du vrai numéro de version affiché dans la topbar (#app-version, mis à jour à chaque déploiement) — source de confusion ("le titre du projet s'appelle v2.0 alors que le numéro de version est différent"). Retiré : la topbar reste la seule source de vérité pour la version déployée. -->
+<!-- APP_VERSION: v2026.07.10-20 — 🐛 BUG CRITIQUE CORRIGÉ (perte de données) : la wishlist se vidait après restauration d'un snapshot (33 entrées dans le snapshot, ne "prenaient" pas après restauration). Cause : restoreSnapshot() restaure wishlist en mémoire puis appelle updateNavBadges() avant d'attendre saveToSupabase() ; updateNavBadges() déclenche pruneWishlistOwned() de façon DÉBOUNCÉE (80ms, cf. _navBadgeTimer) — largement plus court que saveToSupabase() qui fait plusieurs allers-retours réseau (albums, purge des IDs distants absents, tracks) avant même d'atteindre la sérialisation de la wishlist. Le prune débounced se déclenchait donc PENDANT l'upload, mutait `wishlist` en mémoire (retrait des entrées jugées déjà possédées), et c'est cette version déjà amputée qui finissait sérialisée et envoyée à Supabase — donnant l'impression que la restauration ne "prenait pas", alors qu'elle avait bien eu lieu un instant avant d'être re-écrasée. Probable cause-racine aussi du vidage initial signalé (34→1 entrées) : le même mécanisme (pruneWishlistOwned débounced à 80ms) peut se déclencher pendant N'IMPORTE QUEL sync Supabase de plusieurs secondes (gros import Discogs/MusicBee inclus), pas seulement une restauration. Correctif : nouveau flag _restoringSnapshot, actif pendant tout restoreSnapshot() (du restore jusqu'à la fin de saveToSupabase(), y compris en cas d'erreur via finally) — bloque pruneWishlistOwned()/pruneNotesToReport() à la fois dans updateNavBadges() ET dans renderWishlist() (qui l'appelait aussi directement, sans quoi rouvrir l'écran Wishlist juste après une restauration aurait re-déclenché la purge malgré le premier correctif). Une purge normale est relancée une seule fois, proprement, une fois la restauration entièrement persistée (finally). ⚠️ Ne corrige que la race condition de la restauration — si le prune retire encore des entrées légitimes après ce correctif (vérifiable via le console.warn existant "pruneWishlistOwned: entrées retirées"), il faudra investiguer une éventuelle sur-correspondance dans wishlistOwnedSet()/normalizeKey séparément. -->
 
 
 
@@ -71,9 +74,9 @@
 <aside class="sidebar">
   <div class="sidebar-logo">
     <h1>Discothèque</h1>
-    <span>v2.0</span>
   </div>
 
+  <div class="sidebar-nav">
   <div class="nav-section">Albums</div>
   <div class="nav-item active" onclick="nav('albums')">
     <span class="nav-icon">💿</span> Collection
@@ -136,6 +139,9 @@
   <div class="nav-item" onclick="nav('nexttrack')">
     <span class="nav-icon">🎧</span> Prochain à écouter
   </div>
+  <div class="nav-item" onclick="nav('artistlinks')">
+    <span class="nav-icon">🕸️</span> Artistes similaires
+  </div>
   <div class="nav-item" onclick="nav('notestoreport')">
     <span class="nav-icon">📋</span> Notes à reporter
     <span class="nav-badge warn" id="nav-notestoreport-count">0</span>
@@ -149,6 +155,7 @@
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
   </div>
+  </div><!-- /sidebar-nav -->
 
   <div class="sidebar-bottom">
     <div class="storage-bar-wrap">
@@ -173,7 +180,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-17</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-20</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1363,6 +1370,22 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- ARTISTES SIMILAIRES (crédits MusicBrainz croisés avec la collection) -->
+    <div class="section" id="sec-artistlinks">
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
+        Croise les crédits MusicBrainz (producteur, remix, featuring, membre…) déjà récupérés pour chaque
+        album avec les autres artistes de ta collection — révèle des collaborations entre artistes que tu possèdes déjà.
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <input type="text" id="artistlinks-search" placeholder="Filtrer par artiste…" oninput="renderArtistLinks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:220px"/>
+      </div>
+      <div id="artistlinks-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Artiste</th><th>Connecté à</th><th>Rôle</th><th>Via l'album</th></tr></thead>
+        <tbody id="artistlinks-tbody"></tbody>
+      </table></div>
     </div>
 
     <!-- NOTES À REPORTER -->

@@ -375,6 +375,11 @@ function deduplicateAlbums() {
 }
 
 let _savingToSupabase = false;
+// Bug corrigé v2026.07.10-20 : pendant une restauration de snapshot, ce flag bloque toute purge
+// automatique (pruneWishlistOwned/pruneNotesToReport, déclenchées par updateNavBadges) tant que
+// l'état restauré n'a pas fini d'être persisté — voir restoreSnapshot() pour le détail de la
+// race condition corrigée.
+let _restoringSnapshot = false;
 async function saveToSupabase(opts) {
   const force = !!(opts && opts.force);
   if (!window._sb) return;
@@ -1192,7 +1197,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'notestoreport', 'journal', 'insights', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'artistlinks', 'notestoreport', 'journal', 'insights', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -1209,7 +1214,7 @@ function nav(id) {
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
     completeness: 'Complétude',
-    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
+    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', artistlinks: 'Artistes similaires', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1222,6 +1227,7 @@ function nav(id) {
     completeness: 'Pochette / genre / note / tracklist — repérer les fiches négligées',
     ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
     nexttrack: 'Suggestion pondérée : note RYM + jamais écouté + priorité wishlist',
+    artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
     notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
     journal: 'Ce qui a changé depuis un snapshot — pour vérifier l\u2019effet d\u2019un import',
     insights: 'Genres, décennies, artistes, écoutes',
@@ -1245,6 +1251,7 @@ function nav(id) {
   if (id === 'completeness') renderCompleteness();
   if (id === 'ratesession') initRatingSession();
   if (id === 'nexttrack') initNextToListen();
+  if (id === 'artistlinks') renderArtistLinks();
   if (id === 'notestoreport') renderNotesToReport();
   if (id === 'journal') renderJournal();
   if (id === 'insights') renderInsights();
@@ -2446,8 +2453,8 @@ let _dataReady = false; // flag : données chargées depuis Supabase/localStorag
 function updateNavBadges() {
   clearTimeout(_navBadgeTimer);
   _navBadgeTimer = setTimeout(() => {
-    if (_dataReady) pruneWishlistOwned();
-    if (_dataReady && notesToReport.length) pruneNotesToReport();
+    if (_dataReady && !_restoringSnapshot) pruneWishlistOwned();
+    if (_dataReady && !_restoringSnapshot && notesToReport.length) pruneNotesToReport();
     document.getElementById('nav-albums-count').textContent = albums.filter(a => !getStockKeysSet().has(normalizeKey(a.artist, a.album))).length;
     document.getElementById('nav-tracks-count').textContent = tracks.length;
     const wishBadge = document.getElementById('nav-wish-count');
@@ -7900,7 +7907,7 @@ function wishFilteredList() {
 }
 
 function renderWishlist() {
-  pruneWishlistOwned();
+  if (!_restoringSnapshot) pruneWishlistOwned();
   const list = wishFilteredList();
 
   const ctr = document.getElementById('wish-counter');
@@ -11368,6 +11375,16 @@ async function renderSnapshotsList() {
 
 async function restoreSnapshot(id) {
   if (!confirm("Restaurer ce snapshot va REMPLACER la collection actuelle par son contenu, puis resynchroniser vers Supabase.\n\nUn snapshot de l'état actuel sera créé automatiquement avant, par sécurité.\n\nContinuer ?")) return;
+  // Bug corrigé v2026.07.10-20 : updateNavBadges() (appelé juste après la restauration, quelques
+  // lignes plus bas) déclenche pruneWishlistOwned() de façon DÉBOUNCÉE (80ms, voir updateNavBadges).
+  // Comme saveToSupabase() ci-dessous prend largement plus de 80ms (plusieurs allers-retours
+  // réseau pour albums/tracks avant même de sérialiser la wishlist), le prune débounce pouvait se
+  // déclencher PENDANT l'upload, muter `wishlist` en mémoire (retrait des entrées jugées déjà
+  // possédées) et ce sont ces données déjà amputées qui finissaient sérialisées et envoyées à
+  // Supabase — donnant l'impression que la restauration "ne prenait pas". _restoringSnapshot
+  // bloque toute purge auto (ici et dans renderWishlist()) tant que la restauration n'est pas
+  // entièrement persistée.
+  _restoringSnapshot = true;
   try {
     toast("Snapshot de sécurité de l'état actuel…");
     await createSnapshot(`Auto — avant restauration du snapshot #${id}`, { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist });
@@ -11401,6 +11418,12 @@ async function restoreSnapshot(id) {
   } catch(e) {
     console.error('restoreSnapshot error', e);
     toast('Erreur lors de la restauration : ' + (e.message || e), 'error');
+  } finally {
+    _restoringSnapshot = false;
+    // La purge auto était bloquée pendant toute la restauration — on la relance maintenant,
+    // une fois pour de bon, sur l'état définitivement persisté (comportement normal identique
+    // à n'importe quel autre chargement de page).
+    updateNavBadges();
   }
 }
 
@@ -12040,6 +12063,78 @@ function renderNextToListen() {
     openBtn.style.display = a ? 'inline-block' : 'none';
     if (a) openBtn.onclick = () => editAlbum(sid(a.id));
   }
+}
+
+// ===================== ARTISTES SIMILAIRES (crédits MusicBrainz croisés) =====================
+// Todo section 11, item ⬜ « Artistes similaires possédés via artist-rels MusicBrainz (déjà
+// récupéré pour les crédits, v2026.07.10-11) : relie entre eux des artistes déjà présents dans
+// la collection. » Réutilise album.mb_credits (relations artiste posées au niveau release —
+// producteur, remix, featuring, membre…, cf. renderMbCreditsPanel) sans aucun appel API
+// supplémentaire : pour chaque crédit d'un album, si le nom crédité correspond (via
+// artistVariants(), même mécanisme de normalisation que le matching last.fm) à un artiste déjà
+// présent ailleurs dans la collection, c'est une connexion. Volontairement pas de vraies
+// "similar artists" (ça nécessiterait l'API last.fm/MB dédiée, hors scope ici) : ce sont des
+// collaborations réelles et vérifiables entre artistes que tu possèdes déjà.
+function buildOwnedArtistIndex() {
+  const idx = new Map(); // normKey -> Set(nom d'artiste tel qu'affiché dans la collection)
+  ownedAlbumsForCovers().forEach(a => {
+    if (!a.artist) return;
+    artistVariants(a.artist).forEach(v => {
+      if (!idx.has(v)) idx.set(v, new Set());
+      idx.get(v).add(a.artist);
+    });
+  });
+  return idx;
+}
+
+function computeArtistConnections() {
+  const idx = buildOwnedArtistIndex();
+  const connections = [];
+  const seen = new Set(); // dédoublonnage : mêmeArtiste|artisteConnecté|rôle|album
+  ownedAlbumsForCovers().forEach(a => {
+    const credits = a.mb_credits || [];
+    if (!credits.length || !a.artist) return;
+    const fromVariants = artistVariants(a.artist);
+    credits.forEach(c => {
+      if (!c.name || !c.role) return;
+      artistVariants(c.name).forEach(v => {
+        if (fromVariants.has(v)) return; // le crédit désigne l'artiste principal lui-même — pas une connexion
+        const owners = idx.get(v);
+        if (!owners) return;
+        owners.forEach(toArtist => {
+          const key = `${normalizeKey(a.artist,'')}|${normalizeKey(toArtist,'')}|${c.role}|${a.id}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          connections.push({ fromArtist: a.artist, toArtist, role: c.role, albumId: a.id, album: a.album });
+        });
+      });
+    });
+  });
+  return connections;
+}
+
+function renderArtistLinks() {
+  const q = (document.getElementById('artistlinks-search')?.value || '').toLowerCase().trim();
+  let list = computeArtistConnections();
+  if (q) list = list.filter(c => c.fromArtist.toLowerCase().includes(q) || c.toArtist.toLowerCase().includes(q));
+  list.sort((x, y) => x.fromArtist.localeCompare(y.fromArtist) || x.toArtist.localeCompare(y.toArtist));
+
+  const distinctArtists = new Set();
+  list.forEach(c => { distinctArtists.add(normalizeKey(c.fromArtist,'')); distinctArtists.add(normalizeKey(c.toArtist,'')); });
+  const counter = document.getElementById('artistlinks-counter');
+  if (counter) counter.textContent = `${list.length} connexion(s) entre ${distinctArtists.size} artiste(s) de ta collection`;
+
+  const tbody = document.getElementById('artistlinks-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = list.map(c => {
+    const label = MB_CREDIT_ROLE_LABELS[c.role] || (c.role.charAt(0).toUpperCase() + c.role.slice(1));
+    return `<tr>
+      <td style="font-weight:500">${esc(c.fromArtist)}</td>
+      <td style="font-weight:500">${esc(c.toArtist)}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(label)}</td>
+      <td onclick="editAlbum('${sid(c.albumId)}')" style="cursor:pointer;font-size:12px;color:var(--text3)">${esc(c.album)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="4"><div class="empty" style="padding:24px"><div class="empty-icon">🕸️</div>${q ? 'Aucune connexion pour ce filtre.' : "Aucune connexion trouvée — les crédits MusicBrainz ne sont récupérés qu'au fetch/rafraîchissement d'un album lié (fiche album, bouton 🔄 Rafraîchir depuis la source)."}</div></td></tr>`;
 }
 
 // ===================== SCROBBLES RÉCENTS (Session notation) =====================
