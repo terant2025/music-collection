@@ -172,6 +172,11 @@ async function fetchSyncState() {
     if (error) {
       if (error.code === 'PGRST205' || error.message?.includes('does not exist') || error.code === '42P01') {
         _syncTableMissing = true;
+      } else if (error.code !== 'PGRST116') {
+        // PGRST116 = 0 ligne trouvée pour .single() (id=1 pas encore seedée) — cas normal avant
+        // le premier bump, pas la peine de polluer la console. Toute autre erreur (RLS, etc.)
+        // mérite un warning pour rester diagnosticable (cf. bug v2026.07.10-20).
+        console.warn('sync_state : lecture échouée —', error.message || error);
       }
       return null;
     }
@@ -560,21 +565,28 @@ async function saveToSupabase(opts) {
           newVersion = bumped ? bumped.version : null;
         }
         if (newVersion === null) {
-          // Pas de version attendue (1ère connexion) ou update conditionnel raté (course) :
-          // on relit puis on force l'incrément pour rester cohérent.
+          // Pas de version attendue (1ère connexion), update conditionnel raté (course), OU ligne
+          // id=1 absente (jamais seedée) : upsert plutôt qu'update, pour que la ligne se crée
+          // d'elle-même au lieu de laisser le compteur durablement désactivé. Bug corrigé
+          // v2026.07.10-20 : une ligne sync_state manquante faisait échouer l'UPDATE en silence
+          // (0 ligne affectée → 406 sur .single()) à CHAQUE sauvegarde, avec pour conséquence que
+          // la protection anti-écrasement multi-onglets n'a jamais pu s'activer une seule fois.
           const cur = await fetchSyncState();
           const base = cur ? cur.version : 0;
           const { data: bumped2 } = await window._sb.from('sync_state')
-            .update({ version: base + 1, ...bumpPayload })
-            .eq('id', 1).select('version').single();
+            .upsert({ id: 1, version: base + 1, ...bumpPayload }, { onConflict: 'id' })
+            .select('version').single();
           newVersion = bumped2 ? bumped2.version : base + 1;
         }
         _localSyncVersion = newVersion;
         _syncConflict = null;
       } catch (e) {
-        // Table sync_state absente (migration non appliquée) ou erreur réseau ponctuelle :
-        // dégradation gracieuse, pas de blocage de la sauvegarde qui a déjà réussi.
-        _syncTableMissing = true;
+        // Erreur réseau ponctuelle, ou table sync_state réellement absente (migration non
+        // appliquée) — déjà détectée et flaggée par fetchSyncState() dans ce cas précis
+        // (_syncTableMissing). On n'écrase plus ce flag ici pour toute autre erreur (RLS, etc.),
+        // qui reste diagnostiquable via ce warning au lieu de désactiver silencieusement la
+        // protection anti-conflit pour le reste de la session.
+        console.warn('sync_state : échec du bump de version (protection anti-conflit potentiellement inactive) —', e.message || e);
       }
     }
 
