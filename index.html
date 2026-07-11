@@ -45,6 +45,11 @@
 <!-- APP_VERSION: v2026.07.10-26 — 🐛 Bug corrigé (signalé par Antoine avec captures d'écran) : après association manuelle RYM sur un album (ex. "VV Brown" collection vs "V.V. Brown" côté RYM, noms trop différents pour un matching automatique), la note RYM se répercutait bien dans la Collection (colonne Note RYM, confirmé par capture), mais la "Suggestion RYM" affichée en Session notation restait invisible pour ce même album — laissant croire à une réinitialisation au réimport MusicBee/RYM. Cause réelle, sans lien avec un réimport : lookupRym(artist, album, albumId) sait déjà retomber sur une association RYM manuelle (rymAssociations) via son 3e paramètre optionnel albumId quand le matching par nom échoue — mais l'appel dans renderRatingSession() (Session notation) omettait ce 3e argument, empêchant structurellement ce fallback de se déclencher, quelle que soit l'association déjà faite. rymAssociations lui-même n'est jamais réinitialisé par un réimport MusicBee ou RYM (vérifié : seul un clearAll() explicite, confirmation utilisateur requise, le vide). Correctif : albumId ajouté à l'appel manquant dans renderRatingSession(), + 3 autres call sites du même type de gap trouvés par audit (addToWishlistFromAlbumId, addToWishlistFromStock, queueNoteToReport) pour cohérence — tous avaient un id d'album disponible en contexte mais ne le transmettaient pas à lookupRym(), silencieusement invisibles pour les mêmes cas d'association manuelle sans matching automatique par nom. -->
 <!-- APP_VERSION: v2026.07.10-27 — 2 correctifs sur "Notes à reporter", signalés par Antoine avec capture d'écran. (1) MusicBee n'est plus une cible pour les albums qui n'ont en réalité AUCUNE tracklist MusicBee ((albumTracksCache[id]||[]).some(t=>t.source==='musicbee')) — cas des albums notés (Session notation/Stock) mais jamais destinés à rejoindre la collection MusicBee : demander de "reporter dans MusicBee" un album qui n'y a aucun fichier n'a pas de sens, l'entrée restait bloquée indéfiniment. Effet indirect exactement demandé par Antoine (« quand la notation RYM est faite on peut sortir de la note à reporter ») : pour ces albums, une fois RYM satisfait (déjà le cas pour la plupart des 7 entrées de sa capture), il ne reste plus aucune cible → l'entrée disparaît automatiquement de la liste (pruneNotesToReport(), filtre targets.length>0 déjà existant). (2) queueNoteToReport()/pruneNotesToReport() transmettent désormais albumId à lookupRym() pour la vérification RYM (même correctif que -26 pour Session notation) — corrige le cas signalé où le nom diffère légèrement entre la collection et RYM (1re entrée de la capture, ex. Nancy Sinatra) et empêchait la détection automatique même avec un rating RYM existant, à condition d'avoir été associé manuellement depuis l'écran RYM. Rétro-compatible : les entrées notesToReport déjà existantes (créées avant ce correctif, sans albumId stocké) sont rétro-remplies au premier passage de pruneNotesToReport() via un lookup par clé normalisée — aucune perte, aucune migration nécessaire (notesToReport reste un blob JSON générique, meta.notes_to_report_data). -->
 <!-- APP_VERSION: v2026.07.10-28 — 🐛 Bug corrigé : écoutes last.fm figées en Wishlist albums, signalé par Antoine avec captures d'écran (Ali Farka Touré — "Voyageur", 22 écoutes visibles sur la page artiste last.fm et dans la fiche Collection, mais "–" en Wishlist alors que l'album y figure aussi). Cause : même famille de bug que la note RYM absente en wishlist (corrigée en v2026.07.10-02) — la colonne "Écoutes" de renderWishlist() affichait le snapshot w.plays figé au moment de l'ajout à la wishlist, jamais rafraîchi ensuite (ni par un import last.fm ultérieur, ni par le fait que l'album a depuis rejoint la Collection avec ses propres écoutes réelles). exportWishlistCSV() faisait déjà un lookup live via une lfIndex locale — seul l'écran restait sur l'ancien comportement, d'où l'incohérence Collection (22, à jour) vs Wishlist (–, figé) visible dans les captures. Correctif : nouvelle fonction wishPlays(w), même principe que wishRymEntry() déjà en place (lookup live dans lastfmData par normalizeKey, avec repli sur cleanDiscogsArtist() comme les autres lookups wishlist, puis sur w.plays si aucune correspondance) — utilisée dans renderWishlist() (affichage), wishFilteredList() (tri, qui triait aussi sur le snapshot figé) et exportWishlistCSV() (remplace la lfIndex dupliquée par le même helper commun, comportement inchangé pour l'export). -->
+<!-- APP_VERSION: v2026.07.10-29 — 🐛 Bug corrigé : snapshots auto "avant suppression de N album(s)" en doublons, signalé par Antoine avec capture d'écran (3 snapshots identiques "17 albums" à 5-7s d'intervalle). Cause : fenêtre de course dans saveToSupabase() — le verrou _savingToSupabase n'était posé qu'APRÈS l'await de fetchSyncState() (détection de conflit), alors que le test précoce "if (_savingToSupabase) return" est synchrone. Plusieurs appels saveToSupabase() déclenchés à quelques ms d'intervalle (plusieurs actions UI coup sur coup, chacune via saveToStorage()) passaient donc TOUS ce test pendant que le flag valait encore false, puis exécutaient chacun indépendamment et en parallèle le diff destructeur (comparaison locale vs remote → DELETE des absents) sur le même état remote pas encore modifié par les autres — d'où le même nombre d'albums "à supprimer" détecté plusieurs fois et un autoSnapshotBeforeDelete() par appel concurrent. Correctif : _savingToSupabase = true posé immédiatement après le test initial, avant tout await, fermant la fenêtre de course (reset manuel ajouté sur le retour anticipé du cas conflit, qui ne passe plus par le bloc try/finally existant). Les doublons déjà créés avant ce correctif ne sont pas nettoyés automatiquement — suppression manuelle (🗑) recommandée dans la modale Snapshots pour les identiques. -->
+<!-- APP_VERSION: v2026.07.10-30 — Suivi de prêts (todo section 11, item ⬜ « Suivi de prêts : champ prêté à / date sur les CD physiques + liste des prêts en cours », premier item restant de la section). 2 nouvelles colonnes albums (loaned_to text, loaned_since text — migration_v2026.07.10-30.sql requise AVANT déploiement, l'upsert albums échouerait sinon en totalité). Modale édition album : nouveau bloc "📤 Prêt" (prêté à + date + bouton "↩ Marquer comme rendu" qui vide les 2 champs, à sauvegarder comme le reste du formulaire). Nouvel onglet "📤 Prêts en cours" (nav Outils, badge sidebar) : tableau des CD prêtés triés par date de prêt (plus anciens en premier), durée en jours affichée, bouton "↩ Rendu" par ligne — celui-ci, contrairement au bouton de la modale, sauvegarde immédiatement (pas de bouton "Enregistrer" séparé dans ce tableau). Aucune détection auto de retour (contrairement à Discogs/RYM dans "Notes à reporter") : le prêt est une info purement locale à l'app, aucune source externe ne la connaît. -->
+<!-- APP_VERSION: v2026.07.10-31 — Nettoyage de taxonomie genre (todo section 11, item ⬜ « détection de variantes proches (casse, espaces, quasi-doublons) avec fusion assistée — dans l'esprit du diagnostic d'intégrité existant », dernier item avec Export M3U / PWA restant). Nouveau module 100% client (computeGenreClusters()) : regroupe les genres distincts de la collection par union-find sur 3 critères cumulés — égalité casse/espaces (fusion évidente), égalité une fois la ponctuation retirée ("Hip Hop"/"Hip-Hop"/"HipHop"), distance de Levenshtein tolérée proportionnelle à la longueur (seuil de longueur minimale 5 caractères pour éviter de rapprocher des genres courts sans rapport type "IDM"/"EDM"). Jamais de fusion automatique — nouvelle modale "🧬 Nettoyage des genres" (accessible depuis le diagnostic d'intégrité) liste les groupes de variantes, choix du libellé canonique par radio, bouton "Fusionner" par groupe, "✕ Ignorer" (session uniquement — pas de vrais doublons). Réutilise snapshotForUndo()/integrityLog existants (même historique annulable que le diagnostic d'intégrité) plutôt qu'un système d'annulation dédié. Aucune colonne Supabase supplémentaire (réécrit album.genre existant, déjà synchronisé). -->
+<!-- APP_VERSION: v2026.07.10-32 — PWA installable (todo section 11, dernier item ⬜ « manifest + service worker minimal pour un accès mobile plus fluide que l'export HTML offline actuel, sans refonte d'architecture » — Export M3U écarté à la demande d'Antoine, aucun chemin de fichier local n'étant persisté par l'app pour aucune piste, cf. discussion). 3 nouveaux fichiers à déployer : manifest.json (icônes 192/512/512-maskable générées aux couleurs du thème, --bg/--accent), icon-192.png, icon-512.png, icon-512-maskable.png, et sw.js (service worker). Portée volontairement réduite au shell statique (HTML/CSS/JS/icônes, stale-while-revalidate) : AUCUNE requête Supabase ou API externe interceptée — servir une réponse Supabase mise en cache serait pire que rien (données périmées présentées comme à jour). Pas d'offline complet (l'export HTML autonome existant reste la solution pour une consultation 100% déconnectée) — juste un chargement plus rapide et une installation possible (icône sur l'écran d'accueil mobile, mode standalone sans barre d'adresse). ⚠️ CACHE_VERSION dans sw.js à incrémenter à CHAQUE déploiement (même convention manuelle que APP_VERSION), sinon les visiteurs restent sur le shell caché précédemment. Enregistrement du service worker en fin de app.js, chemin relatif (compatible sous-chemin GitHub Pages), échec non bloquant (l'app reste utilisable normalement si le SW ne s'enregistre pas). -->
+<!-- APP_VERSION: v2026.07.10-33 — 🐛 Économie d'egress Supabase, signalé par Antoine (quota gratuit 5 Go/mois dépassé à 134% — 6,685 Go — alors que la DB elle-même ne faisait que 48% de son quota 500 Mo, deux limites indépendantes). Cause : aucun cache local n'était écrit quand Supabase est configuré (writeLocalCache() n'existait pas — l'écriture localStorage était scopée à la seule branche "pas de Supabase" de _saveToStorageImpl()) — chaque ouverture de l'app, sur chaque appareil/onglet, retéléchargeait donc intégralement albums + lastfm_data (38k lignes) + lastfm_tracks (116k lignes) depuis zéro, même sans le moindre changement depuis la dernière visite. Correctif : réutilise sync_state.version (déjà en place pour la détection de conflit multi-onglets) — connectSupabase() compare désormais la version distante (fetchSyncState(), appel léger 1 ligne) à la dernière version chargée avec succès par CE navigateur, persistée en localStorage (LS_SYNC_VERSION_CACHE — contrairement à _localSyncVersion, un simple `let` qui ne survivait pas à un rechargement de page). Version identique → cache local servi directement (loadFromStorage() + nouveau loadLastfmTracksFromLocalStorage(), quasi zéro egress sur les 2 plus grosses tables) ; version différente (ou 1er lancement) → rechargement réseau complet comme avant. writeLocalCache()/writeLastfmTracksCache() (nouvelles fonctions, formats compacts type tuples pour lastfm_tracks) appelées après chaque save ET chaque load réussi, avec try/catch dédié (quota localStorage 5-10 Mo selon navigateur — en cas d'échec, dégradation gracieuse vers un rechargement réseau complet au prochain lancement, jamais de blocage). Portée volontairement limitée à lastfm_data/lastfm_tracks (~154k lignes, l'essentiel du volume) pour cette 1ère passe — album_tracks/musicbee_tracks (tracklists, détection "morceaux manquants") toujours rechargés à chaque ouverture dans la branche cache local elle-même (coût modeste en comparaison, pas encore mis en cache pour limiter le risque de cette 1ère passe). -->
 
 
 
@@ -59,6 +64,12 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e0e0f">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Discothèque">
 </head>
 <body>
 
@@ -153,6 +164,10 @@
   <div class="nav-item" onclick="nav('marketvalue')">
     <span class="nav-icon">💰</span> Valeur collection
   </div>
+  <div class="nav-item" onclick="nav('loans')">
+    <span class="nav-icon">📤</span> Prêts en cours
+    <span class="nav-badge" id="nav-loans-count">0</span>
+  </div>
   <div class="nav-item" onclick="nav('notestoreport')">
     <span class="nav-icon">📋</span> Notes à reporter
     <span class="nav-badge warn" id="nav-notestoreport-count">0</span>
@@ -191,7 +206,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-28</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-33</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1434,6 +1449,18 @@
       </table></div>
     </div>
 
+    <!-- PRÊTS EN COURS -->
+    <div class="section" id="sec-loans">
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
+        CD physiques actuellement prêtés — champ posé manuellement sur la fiche album (aucune source externe ne connaît cette info).
+        Triés par date de prêt, les plus anciens en premier.
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Artiste</th><th>Album</th><th>Prêté à</th><th>Depuis</th><th></th></tr></thead>
+        <tbody id="loans-tbody"></tbody>
+      </table></div>
+    </div>
+
     <!-- NOTES À REPORTER -->
     <div class="section" id="sec-notestoreport">
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:14px">
@@ -1587,6 +1614,14 @@
     <div class="form-row">
       <label>Notes personnelles</label>
       <textarea id="f-notes" placeholder="Édition, provenance, état…"></textarea>
+    </div>
+    <div class="form-row" style="grid-column:1/-1">
+      <label>📤 Prêt (CD physique)</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="f-loaned-to" placeholder="Prêté à…" style="width:180px">
+        <input type="date" id="f-loaned-since" style="width:150px">
+        <button type="button" class="btn btn-sm" onclick="clearLoanFields()" title="Vide les 2 champs — pense à Enregistrer ensuite">↩ Marquer comme rendu</button>
+      </div>
     </div>
     <div class="form-row">
       <label>Référence Discogs</label>
@@ -1908,12 +1943,30 @@
       <button class="btn btn-sm" onclick="cleanupLastfmDuplicates()">🧹 Doublons last.fm</button>
       <button class="btn btn-sm btn-danger" onclick="resetLastfmCompletely()" title="Efface tout (Supabase + local) et repart de zéro depuis l'API last.fm — pour des écoutes qui restent doublées malgré une resync classique">☢️ Reset complet last.fm</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();nav('assocreview');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
+      <button class="btn btn-sm" onclick="closeIntegrityModal();openGenreCleanupModal()">🧬 Nettoyage des genres</button>
     </div>
     <div id="integrity-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
     <div id="integrity-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="renderIntegrityList()">↻ Relancer le scan</button>
       <button class="btn" onclick="closeIntegrityModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal nettoyage de taxonomie genre -->
+<div class="modal-overlay" id="modal-genre-cleanup">
+  <div class="modal" style="width:760px;max-width:92vw">
+    <h2>🧬 Nettoyage des genres</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:10px">
+      Variantes probables détectées (casse, espaces, ponctuation, quasi-doublons) parmi les genres utilisés dans la collection.
+      Choisis le libellé canonique par groupe puis fusionne — jamais automatique, une variante peut être volontaire.
+    </p>
+    <div id="genre-cleanup-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div id="genre-cleanup-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="renderGenreCleanup()">↻ Relancer le scan</button>
+      <button class="btn" onclick="closeGenreCleanupModal()">Fermer</button>
     </div>
   </div>
 </div>

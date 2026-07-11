@@ -64,33 +64,73 @@ function stableAlbumId(artist, album, mb_release_id, discogs_id) {
 // ===================== LOCALSTORAGE =====================
 const LS_KEY = 'discotheque_v2';
 const LS_CFG = 'discotheque_backend_cfg';
+// Cache local des grosses tables (lastfm_tracks — 100k+ lignes chez Antoine) + version
+// sync_state associée, pour permettre à connectSupabase() de sauter le rechargement réseau
+// complet quand rien n'a changé côté serveur — v2026.07.10-33, cf. CHANGELOG (economie d'egress).
+const LS_LASTFM_TRACKS_KEY = 'discotheque_lastfm_tracks';
+const LS_SYNC_VERSION_CACHE = 'discotheque_sync_version';
 
 function _saveToStorageImpl() {
   setSaveIndicator('saving');
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     try {
+      // Cache local systématique — AVANT v2026.07.10-33, ceci n'écrivait rien tant que Supabase
+      // était configuré (branche else uniquement) : au rechargement de page suivant, aucun cache
+      // n'existait, donc connectSupabase() retéléchargeait TOUJOURS tout depuis zéro (albums +
+      // lastfm_data + lastfm_tracks 100k+ lignes), à chaque ouverture, sur chaque appareil — cause
+      // racine du dépassement d'egress Supabase (134% du quota gratuit) alors que la taille de la
+      // DB elle-même restait sous le quota (48%). Écrit désormais toujours, permettant à
+      // connectSupabase() de sauter le rechargement réseau complet via sync_state.version.
+      writeLocalCache();
       if (window._sb) {
         await saveToSupabase();
       } else {
-        const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, trackYoutubeCache, listeningEvolution, listeningEvolutionComputedAt: _listeningEvolutionComputedAt, listeningHeatmap, listeningHeatmapComputedAt: _listeningHeatmapComputedAt, nextId, savedAt: now };
-        localStorage.setItem(LS_KEY, JSON.stringify(data));
-        if (lastfmData.length) {
-          const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
-          localStorage.setItem('discotheque_lastfm', JSON.stringify(compact));
-        }
-        if (rymData.length) {
-          const compact = rymData.map(d => ({ a: d.artist, b: d.album, r: d.rating, o: d.ownership||'' }));
-          localStorage.setItem('discotheque_rym', JSON.stringify(compact));
-        }
-        setSaveIndicator('saved', now);
+        setSaveIndicator('saved', new Date().toISOString());
       }
     } catch(e) {
       setSaveIndicator('error');
       console.error('Sauvegarde échouée', e);
     }
   }, 600);
+}
+
+// Écrit l'état courant (albums/tracks/wishlist/… + lastfmData + rymData) dans localStorage.
+// Try/catch dédié : le quota localStorage (5-10 Mo selon navigateur) peut être dépassé sur une
+// grosse collection — dans ce cas le cache reste simplement absent/partiel (silencieux, non
+// bloquant), connectSupabase() retombera sur un rechargement réseau complet comme avant ce
+// correctif. Supabase reste dans tous les cas la source de vérité, jamais ce cache.
+function writeLocalCache() {
+  try {
+    const now = new Date().toISOString();
+    const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, trackYoutubeCache, listeningEvolution, listeningEvolutionComputedAt: _listeningEvolutionComputedAt, listeningHeatmap, listeningHeatmapComputedAt: _listeningHeatmapComputedAt, nextId, savedAt: now };
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+    if (lastfmData.length) {
+      const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
+      localStorage.setItem('discotheque_lastfm', JSON.stringify(compact));
+    }
+    if (rymData.length) {
+      const compact = rymData.map(d => ({ a: d.artist, b: d.album, r: d.rating, o: d.ownership||'' }));
+      localStorage.setItem('discotheque_rym', JSON.stringify(compact));
+    }
+  } catch(e) {
+    console.warn('Cache local (localStorage) non écrit — quota probablement dépassé, prochain chargement retéléchargera tout —', e.message || e);
+  }
+}
+
+// Cache séparé pour _lastfmTrackCounts (table lastfm_tracks, 100k+ lignes chez Antoine) — à part
+// de writeLocalCache() car alimentée par un fetch en arrière-plan qui peut se terminer bien après
+// le reste (voir loadLastfmFromSupabase()), et volumineuse (tuples compacts plutôt qu'objets,
+// pour rester sous le quota localStorage autant que possible).
+function writeLastfmTracksCache() {
+  try {
+    const entries = Object.values(_lastfmTrackCounts || {});
+    if (!entries.length) return;
+    const compact = entries.map(d => [d.artist, d.track, d.album || '', d.plays || 0]);
+    localStorage.setItem(LS_LASTFM_TRACKS_KEY, JSON.stringify(compact));
+  } catch(e) {
+    console.warn('Cache local lastfm_tracks non écrit — quota probablement dépassé —', e.message || e);
+  }
 }
 
 function loadFromStorage() {
@@ -117,6 +157,7 @@ function loadFromStorage() {
     if (repairDuplicateIds()) saveToStorage();
     setSaveIndicator('saved', data.savedAt);
     loadLastfmFromLocalStorage();
+    loadLastfmTracksFromLocalStorage();
     loadRymFromLocalStorage(); // écrase rymData si clé dédiée présente
     return true;
   } catch(e) { return false; }
@@ -190,6 +231,13 @@ async function syncVersionAfterLoad() {
   const st = await fetchSyncState();
   _localSyncVersion = st ? st.version : (_syncTableMissing ? null : 0);
   _syncConflict = null;
+  // Persisté (contrairement à _localSyncVersion, un simple `let` qui ne survit pas à un
+  // rechargement de page) — c'est cette valeur que connectSupabase() compare à la version
+  // distante au prochain lancement pour décider s'il peut sauter le rechargement réseau complet.
+  try {
+    if (_localSyncVersion !== null) localStorage.setItem(LS_SYNC_VERSION_CACHE, String(_localSyncVersion));
+    else localStorage.removeItem(LS_SYNC_VERSION_CACHE);
+  } catch(e) {}
 }
 
 // Vérification périodique légère (n'écrit rien) : détecte un conflit même sans sauvegarde
@@ -255,7 +303,36 @@ async function connectSupabase(anonKey) {
     localStorage.setItem(LS_CFG, 'supabase');
     const setupEl = document.getElementById('supabase-setup');
     if (setupEl) setupEl.style.display = 'none';
-    const loaded = await loadFromSupabase();
+    // Économie d'egress (v2026.07.10-33) : avant de retélécharger TOUT (albums + lastfm_data +
+    // lastfm_tracks 100k+ lignes...), vérifier via un appel léger (sync_state, 1 ligne) si la
+    // version distante correspond à celle du dernier chargement réussi de CE navigateur — si
+    // oui, rien n'a changé côté serveur depuis, le cache local (localStorage, écrit par
+    // writeLocalCache()/writeLastfmTracksCache() à chaque save/load précédent) est encore valide
+    // et sert de source directement, sans passer par le réseau pour les grosses tables.
+    let usedLocalCache = false;
+    try {
+      const remoteState = await fetchSyncState();
+      const cachedVersion = localStorage.getItem(LS_SYNC_VERSION_CACHE);
+      if (remoteState && cachedVersion !== null && String(remoteState.version) === cachedVersion) {
+        if (loadFromStorage()) {
+          usedLocalCache = true;
+          _localSyncVersion = remoteState.version;
+          _syncConflict = null;
+          console.log(`Sync : cache local utilisé (version ${remoteState.version} inchangée) — rechargement réseau complet évité`);
+          // album_tracks/musicbee_tracks (tracklists + détection "morceaux manquants") ne sont
+          // PAS encore mis en cache localStorage — portée de ce 1er passage volontairement
+          // limitée aux 2 plus grosses tables (lastfm_data + lastfm_tracks, ~154k lignes à
+          // elles seules, l'essentiel du problème d'egress). Rechargées normalement ici, coût
+          // réseau modeste en comparaison — à mettre en cache aussi dans un 2e temps si l'egress
+          // reste élevé après ce correctif.
+          loadAlbumTracks();
+          loadMusicBeeTracks();
+          loadLastfmTrackStatus();
+          loadLovedTracks();
+        }
+      }
+    } catch(e) { /* en cas de doute, on retombe sur le rechargement complet ci-dessous */ }
+    const loaded = usedLocalCache ? true : await loadFromSupabase();
     // Ne pas sauvegarder si la collection est vide (ex: après migration — évite de purger les associations)
     if (!loaded && albums.length > 0) await saveToSupabase();
     _dataReady = true;
@@ -393,6 +470,16 @@ async function saveToSupabase(opts) {
     setTimeout(() => saveToSupabase(opts), 1000);
     return;
   }
+  // Bug corrigé v2026.07.10-29 : le verrou était posé APRÈS l'await de fetchSyncState()
+  // ci-dessous — fenêtre de course où plusieurs appels saveToSupabase() déclenchés à
+  // quelques ms d'intervalle (plusieurs actions UI coup sur coup) passaient TOUS le test
+  // ci-dessus pendant que _savingToSupabase valait encore false, puis exécutaient chacun
+  // indépendamment le diff destructeur (DELETE des absents) sur le même état remote pas
+  // encore modifié — d'où plusieurs snapshots auto "avant suppression de N album(s)"
+  // quasi identiques (signalé par Antoine avec capture d'écran, 3 doublons à 5-7s
+  // d'intervalle, systématiquement le même N). Posé ici, avant tout await, pour que
+  // les appels concurrents soient bloqués dès le test initial comme prévu.
+  _savingToSupabase = true;
   // ── Détection de conflit (v2026.07.09) ──────────────────────────────────────
   // Si un autre onglet/appareil a sauvegardé depuis notre dernier chargement, on bloque
   // le sync destructeur (DELETE des absents, etc.) plutôt que d'écraser silencieusement.
@@ -403,13 +490,14 @@ async function saveToSupabase(opts) {
     if (remoteState && _localSyncVersion !== null && remoteState.version !== _localSyncVersion) {
       _syncConflict = { remoteVersion: remoteState.version, remoteDeviceLabel: remoteState.device_label || 'un autre appareil', remoteAt: remoteState.updated_at };
       setSaveIndicator('conflict');
+      _savingToSupabase = false; // pas de finally atteint sur ce retour anticipé — reset manuel
       return; // sync bloqué — aucune table modifiée
     }
     if (remoteState) expectedVersion = remoteState.version;
   }
-  _savingToSupabase = true;
   setSaveIndicator('saving');
   const now = new Date().toISOString();
+
   try {
     // ── Albums (inclut stock, ok, forsale — distingués par folders[]) ──────────
     const albumRows = albums.map(a => ({
@@ -445,6 +533,8 @@ async function saveToSupabase(opts) {
       label:          a.label || null,
       catno:          a.catno || null,
       is_compilation: !!a.isCompilation,
+      loaned_to:      a.loaned_to || null,
+      loaned_since:   a.loaned_since || null,
 	  primary_folder: a.primaryFolder || 'album',
       field_provenance: a.field_provenance ? JSON.stringify(a.field_provenance) : null,
       updated_at:     now,
@@ -584,6 +674,11 @@ async function saveToSupabase(opts) {
         }
         _localSyncVersion = newVersion;
         _syncConflict = null;
+        // Même persistance qu'après un chargement (syncVersionAfterLoad()) — après un save
+        // réussi, le cache local qu'on vient d'écrire (writeLocalCache(), appelé juste avant
+        // saveToSupabase() dans _saveToStorageImpl()) reflète exactement cette nouvelle version :
+        // pas besoin de retélécharger au prochain lancement tant que rien d'autre n'a resauvé.
+        try { if (newVersion !== null) localStorage.setItem(LS_SYNC_VERSION_CACHE, String(newVersion)); } catch(e) {}
       } catch (e) {
         // Erreur réseau ponctuelle, ou table sync_state réellement absente (migration non
         // appliquée) — déjà détectée et flaggée par fetchSyncState() dans ce cas précis
@@ -647,6 +742,7 @@ async function loadFromSupabase() {
       nextId = Math.max(nextId, computeNextId());
       if (repairDuplicateIds()) saveToStorage();
       await syncVersionAfterLoad();
+      writeLocalCache();
       setSaveIndicator('saved');
       return true; // succès — collection vide est un état valide
     }
@@ -687,6 +783,8 @@ async function loadFromSupabase() {
         label:         a.label || undefined,
         catno:         a.catno || undefined,
         isCompilation: !!a.is_compilation,
+        loaned_to:     a.loaned_to || undefined,
+        loaned_since:  a.loaned_since || undefined,
 		primaryFolder: a.primary_folder || 'album',
         field_provenance: (() => { try { return a.field_provenance ? JSON.parse(a.field_provenance) : undefined; } catch(e) { return undefined; } })(),
 		
@@ -843,6 +941,7 @@ async function loadFromSupabase() {
     if (repairDuplicateIds()) saveToStorage();
 
     await syncVersionAfterLoad();
+    writeLocalCache();
     setSaveIndicator('saved');
     return true;
   } catch(e) {
@@ -898,6 +997,7 @@ async function loadLastfmFromSupabase() {
             _lastfmTrackCounts[kt] = { artist: d.artist, track: d.track, album: d.album || '', plays: d.plays };
           });
           console.log(`lastfm_tracks chargés : ${trackAll.length} morceaux`);
+          writeLastfmTracksCache();
           // Invalider le cache et mettre à jour les onglets qui dépendent des tracks
           invalidateCache();
           updateNavBadges();
@@ -945,6 +1045,25 @@ function loadLastfmFromLocalStorage() {
     }
   } catch(e) {}
 }
+
+// Restaure _lastfmTrackCounts depuis le cache localStorage (tuples compacts, voir
+// writeLastfmTracksCache()) — reconstruit le même format de clé que
+// loadLastfmFromSupabase()/importLastfmTracks() pour rester interchangeable.
+function loadLastfmTracksFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(LS_LASTFM_TRACKS_KEY);
+    if (!raw) return false;
+    const compact = JSON.parse(raw);
+    const counts = {};
+    compact.forEach(([artist, track, album, plays]) => {
+      const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album || '');
+      counts[kt] = { artist, track, album: album || '', plays: plays || 0 };
+    });
+    _lastfmTrackCounts = counts;
+    return true;
+  } catch(e) { return false; }
+}
+
 
 function loadRymFromLocalStorage() {
   try {
@@ -1217,7 +1336,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'artistlinks', 'marketvalue', 'notestoreport', 'journal', 'insights', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'journal', 'insights', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -1234,7 +1353,7 @@ function nav(id) {
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
     completeness: 'Complétude',
-    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
+    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1249,6 +1368,7 @@ function nav(id) {
     nexttrack: 'Suggestion pondérée : note RYM + jamais écouté + priorité wishlist',
     artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
     marketvalue: 'Estimation via le marketplace Discogs — indicatif, pas une cote officielle',
+    loans: 'CD physiques actuellement prêtés',
     notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
     journal: 'Ce qui a changé depuis un snapshot — pour vérifier l\u2019effet d\u2019un import',
     insights: 'Genres, décennies, artistes, écoutes',
@@ -1274,6 +1394,7 @@ function nav(id) {
   if (id === 'nexttrack') initNextToListen();
   if (id === 'artistlinks') renderArtistLinks();
   if (id === 'marketvalue') renderMarketValue();
+  if (id === 'loans') renderLoans();
   if (id === 'notestoreport') renderNotesToReport();
   if (id === 'journal') renderJournal();
   if (id === 'insights') renderInsights();
@@ -2511,6 +2632,9 @@ function updateNavBadges() {
     if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length + tracks.filter(t => !t.note).length;
     const ntrBadge = document.getElementById('nav-notestoreport-count');
     if (ntrBadge) ntrBadge.textContent = notesToReport.length;
+    const loansBadge = document.getElementById('nav-loans-count');
+    if (loansBadge) loansBadge.textContent = albums.filter(a => a.loaned_to).length;
+    if (document.getElementById('sec-loans')?.classList.contains('active')) renderLoans();
     if (document.getElementById('sec-notestoreport')?.classList.contains('active')) renderNotesToReport();
     // Calculs coûteux uniquement si données chargées
     if (_dataReady) {
@@ -3203,6 +3327,8 @@ function editAlbum(id) {
   document.getElementById('f-genre').value = a.genre || '';
   document.getElementById('f-plays').value = a.plays || '';
   document.getElementById('f-notes').value = a.notes || '';
+  document.getElementById('f-loaned-to').value = a.loaned_to || '';
+  document.getElementById('f-loaned-since').value = a.loaned_since || '';
   document.getElementById('f-cd').checked = !!a.cd;
   document.getElementById('f-flac').checked = !!a.flac;
   document.getElementById('f-mp3').checked = !!a.mp3;
@@ -3693,6 +3819,14 @@ function setModalNote(n) {
   document.querySelectorAll('#modal-stars .modal-star').forEach((s, i) => s.classList.toggle('on', i < n));
 }
 
+// Vide les 2 champs prêt dans la modale — ne sauvegarde pas seul, juste avant saveAlbum()
+// (comportement volontairement symétrique aux autres champs du formulaire : rien n'est
+// persisté tant que "Enregistrer" n'est pas cliqué, pour rester annulable).
+function clearLoanFields() {
+  document.getElementById('f-loaned-to').value = '';
+  document.getElementById('f-loaned-since').value = '';
+}
+
 function saveAlbum() {
   const artist = document.getElementById('f-artist').value.trim();
   const album = document.getElementById('f-album').value.trim();
@@ -3709,6 +3843,8 @@ function saveAlbum() {
     note: _modalNote,
     plays: parseInt(document.getElementById('f-plays').value) || 0,
     notes: document.getElementById('f-notes').value.trim(),
+    loaned_to: document.getElementById('f-loaned-to').value.trim() || undefined,
+    loaned_since: document.getElementById('f-loaned-since').value || undefined,
     discogsId: document.getElementById('f-discogs-id').value.trim() || undefined,
     cover_url: document.getElementById('f-cover-url')?.value.trim() || undefined,
   };
@@ -7841,10 +7977,9 @@ function exportWishlistCSV() {
   const list = wishFilteredList();
   const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
   const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', discography: 'Discographie MB', manual: 'Manuel' };
-  const lfIndex   = new Map(lastfmData.map(d => [normalizeKey(d.artist, d.album), d.plays]));
   const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes']];
   list.forEach(w => {
-    const plays = lfIndex.get(normalizeKey(w.artist, w.album)) || w.plays || '';
+    const plays = wishPlays(w) || '';
     const owned = wishOwnedMatch(w);
     const rymEntry = wishRymEntry(w);
     rows.push([w.artist, w.album, w.year||'', srcLabel[w.source]||w.source,
@@ -7933,6 +8068,16 @@ function wishOwnedMatch(w) {
   const key = normalizeKey(w.artist, w.album);
   return albums.find(a => normalizeKey(a.artist, a.album) === key || normalizeKey(cleanDiscogsArtist(a.artist), a.album) === key);
 }
+// Écoutes last.fm live (pas le snapshot w.plays figé à l'ajout — même bug que la note RYM
+// corrigée en v2026.07.10-02 : les 3 chemins d'ajout wishlist figent plays au moment T,
+// jamais remis à jour ensuite même si de nouveaux scrobbles arrivent ou si l'album est
+// désormais possédé avec ses écoutes réelles en Collection). exportWishlistCSV() faisait
+// déjà ce lookup live via lfIndex — seul l'affichage écran restait sur l'ancien snapshot.
+function wishPlays(w) {
+  const entry = lastfmData.find(d => normalizeKey(d.artist, d.album) === normalizeKey(w.artist, w.album))
+    || lastfmData.find(d => normalizeKey(cleanDiscogsArtist(d.artist), d.album) === normalizeKey(w.artist, w.album));
+  return entry ? entry.plays : (w.plays || 0);
+}
 
 // Filtres combinés Wishlist (recherche/artiste/album/source/priorité/année) — réutilisée par
 // renderWishlist() et exportWishlistCSV(). Pas de filtre genre : les entrées wishlist ne portent
@@ -7955,7 +8100,7 @@ function wishFilteredList() {
   }).sort((a, b) => {
     const po = { high: 0, mid: 1, low: 2 };
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
-    return (b.plays || 0) - (a.plays || 0);
+    return wishPlays(b) - wishPlays(a);
   });
 }
 
@@ -7994,7 +8139,7 @@ function renderWishlist() {
     <td class="mono">${w.year || '–'}</td>
     <td style="font-size:12px">${srcLabel[w.source] || w.source}</td>
     <td><span style="font-size:12px">${prioLabel[w.prio] || w.prio}</span></td>
-    <td class="mono" style="color:var(--accent)">${w.plays || '–'}</td>
+    <td class="mono" style="color:var(--accent)">${wishPlays(w) || '–'}</td>
     <td class="mono">${owned?.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${owned.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono">${owned?.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(owned.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono" style="color:var(--amber)">${rymEntry?.rating ? rymEntry.rating.toFixed(2) + '★' : '–'}</td>
@@ -11293,7 +11438,167 @@ function fixBadNotes() {
   renderIntegrityList();
 }
 
-// ===================== SNAPSHOTS SUPABASE (sauvegarde / restauration) =====================
+// ===================== NETTOYAGE DE TAXONOMIE GENRE =====================
+// Todo section 11 : « détection de variantes proches (casse, espaces, quasi-doublons) avec
+// fusion assistée — dans l'esprit du diagnostic d'intégrité existant ». Contrairement au
+// diagnostic d'intégrité (corrections automatiques sans ambiguïté), une fusion de genre est
+// un jugement humain (est-ce que "Rock alternatif" et "Rock Alternative" sont vraiment la
+// même chose ?) — donc suggestions groupées avec choix du libellé canonique, jamais de fusion
+// automatique. Réutilise snapshotForUndo()/integrityLog (même historique annulable que le
+// diagnostic d'intégrité) plutôt qu'un système d'annulation dédié.
+
+// Distance d'édition (Levenshtein) — implémentation compacte, une seule ligne de la matrice
+// gardée en mémoire à la fois (suffisant pour des libellés de genre, jamais très longs).
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], cur[j - 1]);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Normalisation "légère" (casse/espaces) : deux genres qui ne diffèrent QUE par ça sont
+// toujours la même entrée, fusion sans ambiguïté possible.
+function normGenreLoose(g) {
+  return (g || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+// Normalisation "serrée" (ponctuation en plus) : sert uniquement à repérer des candidats à la
+// distance d'édition, jamais à décider seule (ex. "Hip Hop" / "Hip-Hop" / "HipHop").
+function normGenreTight(g) {
+  return normGenreLoose(g).replace(/[-_&,\/+.]+/g, ' ').replace(/\s+/g, '');
+}
+
+// Regroupe les genres distincts de la collection en clusters de variantes probables
+// (union-find simple — le volume de genres distincts reste toujours assez faible, O(n²)
+// largement suffisant, pas besoin d'un index plus malin).
+function computeGenreClusters() {
+  const counts = new Map(); // genre brut → nb d'albums
+  albums.forEach(a => {
+    if (!a.genre) return;
+    counts.set(a.genre, (counts.get(a.genre) || 0) + 1);
+  });
+  const genres = [...counts.keys()];
+  const parent = genres.map((_, i) => i);
+  const find = i => parent[i] === i ? i : (parent[i] = find(parent[i]));
+  const union = (i, j) => { const ri = find(i), rj = find(j); if (ri !== rj) parent[ri] = rj; };
+
+  for (let i = 0; i < genres.length; i++) {
+    for (let j = i + 1; j < genres.length; j++) {
+      const looseI = normGenreLoose(genres[i]), looseJ = normGenreLoose(genres[j]);
+      if (looseI === looseJ) { union(i, j); continue; } // casse/espaces — fusion évidente
+      const tightI = normGenreTight(genres[i]), tightJ = normGenreTight(genres[j]);
+      if (tightI === tightJ) { union(i, j); continue; } // ponctuation seule (Hip Hop / Hip-Hop)
+      // Quasi-doublon : distance d'édition tolérée proportionnelle à la longueur, et seulement
+      // au-delà de 4 caractères pour éviter de rapprocher des genres courts sans rapport
+      // ("Pop" / "Pop" mis à part, "IDM"/"EDM" ne doivent PAS fusionner : 3 caractères, distance 1
+      // mais ce sont deux genres différents — d'où le seuil de longueur).
+      if (Math.min(tightI.length, tightJ.length) >= 5) {
+        const maxDist = Math.min(tightI.length, tightJ.length) >= 10 ? 2 : 1;
+        if (levenshtein(tightI, tightJ) <= maxDist) union(i, j);
+      }
+    }
+  }
+
+  const clusters = new Map(); // racine → [genres bruts]
+  genres.forEach((g, i) => {
+    const r = find(i);
+    if (!clusters.has(r)) clusters.set(r, []);
+    clusters.get(r).push(g);
+  });
+
+  return [...clusters.values()]
+    .filter(group => group.length > 1)
+    .map(group => ({
+      variants: group
+        .map(g => ({ genre: g, count: counts.get(g) }))
+        .sort((a, b) => b.count - a.count || a.genre.localeCompare(b.genre, 'fr')),
+    }))
+    .sort((a, b) => b.variants.reduce((s, v) => s + v.count, 0) - a.variants.reduce((s, v) => s + v.count, 0));
+}
+
+let _genreClustersDismissed = new Set(); // session seulement — clé = variantes triées jointes
+
+function openGenreCleanupModal() {
+  _genreClustersDismissed = new Set();
+  renderGenreCleanup();
+  document.getElementById('modal-genre-cleanup').classList.add('open');
+}
+function closeGenreCleanupModal() {
+  document.getElementById('modal-genre-cleanup').classList.remove('open');
+}
+document.getElementById('modal-genre-cleanup').addEventListener('click', function(e) {
+  if (e.target === this) closeGenreCleanupModal();
+});
+
+function _clusterKey(variants) { return variants.map(v => v.genre).sort().join('|||'); }
+
+function renderGenreCleanup() {
+  const clusters = computeGenreClusters().filter(c => !_genreClustersDismissed.has(_clusterKey(c.variants)));
+  const counter = document.getElementById('genre-cleanup-counter');
+  if (counter) counter.textContent = clusters.length ? `${clusters.length} groupe(s) de variantes probables` : '';
+
+  const el = document.getElementById('genre-cleanup-list');
+  if (!clusters.length) {
+    el.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">✅</div>Aucune variante de genre détectée.</div>';
+    return;
+  }
+  el.innerHTML = clusters.map((c, ci) => {
+    const key = _clusterKey(c.variants);
+    const total = c.variants.reduce((s, v) => s + v.count, 0);
+    const radios = c.variants.map((v, vi) => `
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:4px 0;cursor:pointer">
+        <input type="radio" name="genre-canon-${ci}" value="${escAttr(v.genre)}" ${vi === 0 ? 'checked' : ''}>
+        <span style="font-family:var(--mono)">${esc(v.genre)}</span>
+        <span style="color:var(--text3);font-size:11px">(${v.count} album${v.count > 1 ? 's' : ''})</span>
+      </label>`).join('');
+    return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px" data-cluster-key="${escAttr(key)}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+        <span style="font-size:13px;font-weight:500">${c.variants.length} variantes · ${total} album(s) au total</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-accent" onclick="mergeGenreCluster(${ci}, '${escAttr(key)}')">🔧 Fusionner vers le choix ci-dessous</button>
+          <button class="btn btn-sm" onclick="dismissGenreCluster('${escAttr(key)}')" title="Ignorer pour cette session — ce ne sont pas de vrais doublons">✕ Ignorer</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column">${radios}</div>
+    </div>`;
+  }).join('');
+}
+
+function dismissGenreCluster(key) {
+  _genreClustersDismissed.add(key);
+  renderGenreCleanup();
+}
+
+function mergeGenreCluster(clusterIndex, key) {
+  const clusters = computeGenreClusters().filter(c => !_genreClustersDismissed.has(_clusterKey(c.variants)));
+  const cluster = clusters.find(c => _clusterKey(c.variants) === key);
+  if (!cluster) return;
+  const selected = document.querySelector(`input[name="genre-canon-${clusterIndex}"]:checked`);
+  const canon = selected ? selected.value : cluster.variants[0].genre;
+  const variantGenres = new Set(cluster.variants.map(v => v.genre));
+  variantGenres.delete(canon);
+  if (!variantGenres.size) { toast('Rien à fusionner (déjà uniforme)', 'warn'); return; }
+
+  snapshotForUndo(`Genres fusionnés vers "${canon}" (${[...variantGenres].join(', ')})`);
+  let fixed = 0;
+  albums.forEach(a => { if (a.genre && variantGenres.has(a.genre)) { a.genre = canon; fixed++; } });
+  invalidateCache();
+  saveToStorage();
+  updateNavBadges();
+  toast(`${fixed} album(s) reclassé(s) vers "${canon}" ✓`);
+  renderGenreCleanup();
+}
+
+
 // Contrairement à l'historique du diagnostic d'intégrité (localStorage, portée limitée aux
 // corrections automatiques de cet outil), ces snapshots couvrent TOUTE la collection et sont
 // stockés côté Supabase — donc disponibles même après un rechargement ou depuis un autre
@@ -12245,6 +12550,46 @@ function renderArtistLinks() {
 // de l'app plutôt que de fragmenter en lots multi-clics.
 function marketValueEligibleAlbums() {
   return albums.filter(a => a.cd && a.discogsId);
+}
+
+// ===================== PRÊTS EN COURS =====================
+// Champ purement local à l'app (loaned_to/loaned_since sur l'album) — aucune source externe
+// (MusicBee/Discogs/RYM) ne connaît la notion de prêt, donc pas de détection auto de retour
+// comme pour "Notes à reporter" : le retrait se fait uniquement via markLoanReturned().
+function renderLoans() {
+  const loaned = albums.filter(a => a.loaned_to).sort((a, b) => (a.loaned_since || '9999') < (b.loaned_since || '9999') ? -1 : 1);
+  const tbody = document.getElementById('loans-tbody');
+  if (!tbody) return;
+  if (!loaned.length) {
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">📤</div>Aucun prêt en cours.</div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = loaned.map(a => {
+    const days = a.loaned_since ? Math.floor((Date.now() - new Date(a.loaned_since).getTime()) / 86400000) : null;
+    const sinceLabel = a.loaned_since ? `${a.loaned_since}${days != null && days >= 0 ? ` (${days} j)` : ''}` : '–';
+    return `<tr>
+      <td>${esc(a.artist)}</td>
+      <td style="cursor:pointer;color:var(--accent)" onclick="editAlbum('${sid(a.id)}')">${esc(a.album)}</td>
+      <td>${esc(a.loaned_to)}</td>
+      <td class="mono">${sinceLabel}</td>
+      <td><button class="btn btn-sm" onclick="markLoanReturned('${sid(a.id)}')" title="Vide les champs prêt et sauvegarde immédiatement">↩ Rendu</button></td>
+    </tr>`;
+  }).join('');
+}
+
+// Contrairement à clearLoanFields() (modale, pas encore sauvegardé), ici la mutation est
+// immédiate + sauvegardée — utilisé depuis le tableau "Prêts en cours" où il n'y a pas de
+// bouton "Enregistrer" séparé.
+function markLoanReturned(idSid) {
+  const id = unsid(idSid);
+  const a = albums.find(x => x.id === id || x.id === String(id));
+  if (!a) return;
+  a.loaned_to = undefined;
+  a.loaned_since = undefined;
+  saveToStorage();
+  renderLoans();
+  updateNavBadges();
+  toast(`${a.artist} — ${a.album} marqué comme rendu`);
 }
 
 function renderMarketValue() {
@@ -13425,4 +13770,21 @@ async function refreshAlbumFromSource() {
   renderAlbums(); renderDiscographie();
   toast(updated.size ? `Rafraîchi : ${[...updated].join(', ')}` : 'Rien à mettre à jour (champs verrouillés 🔒 ou déjà à jour)');
 }
+
+// ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
+// Todo section 11 : « PWA installable (manifest + service worker minimal) pour un accès
+// mobile plus fluide que l'export HTML offline actuel, sans refonte d'architecture ».
+// Portée réduite au shell statique (voir sw.js) — Supabase/API externes ne sont jamais
+// interceptées, donc les données restent toujours en ligne réelles, jamais du cache périmé.
+// Chemin relatif ('./sw.js') : fonctionne aussi bien à la racine du domaine GitHub Pages
+// (terant2025.github.io si domaine dédié) que sous un sous-chemin (terant2025.github.io/
+// music-collection/), contrairement à un chemin absolu qui casserait le 2e cas.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(e => {
+      console.warn('Service worker non enregistré (PWA installable indisponible, reste utilisable normalement) —', e.message || e);
+    });
+  });
+}
+
 
