@@ -39,6 +39,8 @@
 <!-- APP_VERSION: v2026.07.10-20 — 🐛 BUG CRITIQUE CORRIGÉ (perte de données) : la wishlist se vidait après restauration d'un snapshot (33 entrées dans le snapshot, ne "prenaient" pas après restauration). Cause : restoreSnapshot() restaure wishlist en mémoire puis appelle updateNavBadges() avant d'attendre saveToSupabase() ; updateNavBadges() déclenche pruneWishlistOwned() de façon DÉBOUNCÉE (80ms, cf. _navBadgeTimer) — largement plus court que saveToSupabase() qui fait plusieurs allers-retours réseau (albums, purge des IDs distants absents, tracks) avant même d'atteindre la sérialisation de la wishlist. Le prune débounced se déclenchait donc PENDANT l'upload, mutait `wishlist` en mémoire (retrait des entrées jugées déjà possédées), et c'est cette version déjà amputée qui finissait sérialisée et envoyée à Supabase — donnant l'impression que la restauration ne "prenait pas", alors qu'elle avait bien eu lieu un instant avant d'être re-écrasée. Probable cause-racine aussi du vidage initial signalé (34→1 entrées) : le même mécanisme (pruneWishlistOwned débounced à 80ms) peut se déclencher pendant N'IMPORTE QUEL sync Supabase de plusieurs secondes (gros import Discogs/MusicBee inclus), pas seulement une restauration. Correctif : nouveau flag _restoringSnapshot, actif pendant tout restoreSnapshot() (du restore jusqu'à la fin de saveToSupabase(), y compris en cas d'erreur via finally) — bloque pruneWishlistOwned()/pruneNotesToReport() à la fois dans updateNavBadges() ET dans renderWishlist() (qui l'appelait aussi directement, sans quoi rouvrir l'écran Wishlist juste après une restauration aurait re-déclenché la purge malgré le premier correctif). Une purge normale est relancée une seule fois, proprement, une fois la restauration entièrement persistée (finally). ⚠️ Ne corrige que la race condition de la restauration — si le prune retire encore des entrées légitimes après ce correctif (vérifiable via le console.warn existant "pruneWishlistOwned: entrées retirées"), il faudra investiguer une éventuelle sur-correspondance dans wishlistOwnedSet()/normalizeKey séparément. -->
 <!-- APP_VERSION: v2026.07.10-21 — 🐛 2e bug critique trouvé via les logs console fournis par Antoine (protection anti-conflit multi-onglets jamais fonctionnelle depuis sa mise en place en v2026.07.09-01). Diagnostic : les requêtes GET/PATCH sur sync_state?id=eq.1 renvoient systématiquement 406 (visible dans les logs : "sync_state?select=...&id=eq.1 [HTTP/2 406]" à répétition). Cause : le bump utilisait un UPDATE .eq('id',1) — si la ligne id=1 n'a jamais été seedée (aucun mécanisme ne la crée), l'UPDATE affecte 0 ligne, et .single() sur 0 ligne renvoie 406 côté PostgREST. Le catch générique de saveToSupabase() interprétait alors CETTE erreur (ligne manquante) comme "table absente" et mettait _syncTableMissing = true, désactivant silencieusement toute vérification de conflit pour le reste de la session — reproduit à CHAQUE sauvegarde depuis la mise en place de la fonctionnalité, ce qui signifie que la détection de conflit (sync_state, modale de résolution) n'a jamais empêché un seul écrasement multi-onglets malgré son apparente présence dans le code. Probable cause-racine du vidage initial de la wishlist (34→1, avant même le bug de restauration corrigé en -20) : un onglet resté ouvert avec une wishlist locale obsolète a pu resauvegarder par-dessus la version à jour, sans qu'aucun garde-fou ne s'y oppose. Correctif : (1) le bump utilise désormais .upsert({id:1,...}, {onConflict:'id'}) au lieu d'un UPDATE pur — la ligne se crée d'elle-même si absente, au lieu de faire échouer silencieusement l'opération à chaque sauvegarde ; (2) le catch de saveToSupabase() ne positionne plus _syncTableMissing sur une erreur générique (seul fetchSyncState() le fait, sur détection explicite de table réellement absente PGRST205/42P01) — un console.warn diagnostique est émis à la place, pour que ce genre de dégradation silencieuse reste visible dans les logs futurs ; (3) fetchSyncState() logue aussi un warning sur toute erreur inattendue (hors "table absente" et hors "0 ligne avant le premier seed", ce dernier cas étant normal et non bruité). ⚠️ Ce correctif rend le système auto-réparateur au prochain déploiement (la ligne sync_state id=1 sera créée automatiquement à la première sauvegarde), mais la protection anti-conflit n'aura jamais été active AVANT ce déploiement — aucune conséquence rétroactive possible sur les données déjà perdues. -->
 <!-- APP_VERSION: v2026.07.10-22 — 🐛 3e bug trouvé dans la même investigation, confirmé par Antoine : pruneWishlistOwned() traitait un album comme "possédé" (donc à retirer de la wishlist) dès qu'il avait un fichier flac/mp3/cd/digital — y compris pour des albums UNIQUEMENT en Stock (fichiers MusicBee présents mais pas encore reportés dans Discogs/discographie). Or le modèle de la wishlist chez Antoine est explicite : "dans wishlist il n'y a que les albums non présents dans discogs, c'est le contrôle discogs qui doit aboutir à leur retrait" — le Stock ne doit PAS suffire à vider une entrée de la wishlist, seule la présence effective dans Discogs (a.discogsId, posé par l'import CSV Discogs) doit le faire. C'est ce qui expliquait la disparition des 32 entrées wishlist observée dans les logs (albums encore en Stock, pas en Discogs, mais déjà retirés car ripés en flac). Correctif : wishlistOwnedSet() vérifie désormais a.discogsId exclusivement au lieu de (flac||mp3||digital||cd) — un album seulement en Stock reste en wishlist jusqu'à son passage effectif par Discogs. wishOwnedMatch() (colonnes d'info "Note MB"/"Note DC", purement informatif, aucune suppression) reste inchangé à dessein. -->
+<!-- APP_VERSION: v2026.07.10-23 — Discographie manquante par artiste (todo section 11, item ⬜ « pour un artiste possédé, lister via MB les albums du groupe absents de la collection, avec ajout direct à la wishlist. 1 lookup MB par artiste, à la demande », 6e et dernier item de la section 11). Nouveau panneau "🎼 Discographie manquante" dans la fiche album (sous les crédits MusicBrainz), bouton "🔍 Chercher sur MusicBrainz" : contrairement aux autres enrichissements MB de l'app (mb_credits, cover, année d'origine — tous via l'Edge Function get-release-info, non modifiable ici faute d'accès à son code), interroge l'API PUBLIQUE MusicBrainz DIRECTEMENT depuis le navigateur (ws/2/artist puis ws/2/release-group, CORS-ouvertes en GET) — 2 requêtes séquentielles par clic, jamais en masse/auto, conforme à la limite 1 req/s de MB en usage non-authentifié. Recherche l'artiste par nom (meilleur score MB), récupère ses release-groups de type album|ep, exclut les secondary-types Live/Compilation/Soundtrack/Interview/Spokenword/Remix/DJ-mix/Mixtape pour ne garder que les sorties studio, compare aux albums déjà possédés de cet artiste (artistVariants(), toutes variantes de nom confondues, même mécanisme que le reste de l'app) via normalizeKey sur le titre. Résultat : liste des absents avec année, bouton "+ Wishlist" par album (addToWishlist(), nouvelle source 'discography' — libellé "🎼 Discographie MB" ajouté au filtre/export/affichage wishlist aux 3 endroits existants) + bouton "+ Tout ajouter". Rien de persisté (recalculé à chaque recherche, comme les autres lookups à la demande de l'app). -->
+<!-- APP_VERSION: v2026.07.10-24 — Valeur collection (todo section 11, item ⬜ « Suivi de valeur collection : prix marketplace Discogs (endpoint stats, discogsId déjà présent) pour une estimation globale (assurance) », 7e item de la section — dernier restant après le nettoyage de la todo pour v2026.07.10-23). Contrairement à Discographie manquante (MusicBrainz, public, appelé en direct depuis le navigateur), l'API marketplace Discogs nécessite le même token que tous les autres appels Discogs de l'app → passe par l'Edge Function get-release-info.ts, mise à jour avec une nouvelle branche "discogs_stats" (GET /marketplace/stats/{release_id}?curr_abbr=EUR, endpoint séparé de /releases/{id}, retourne lowest_price/currency/num_for_sale) — fichier complet fourni par Antoine sur demande, diff strictement additif (aucune branche existante modifiée), à redéployer : `supabase functions deploy get-release-info`. Migration SQL requise (migration_v2026.07.10-24.sql) : 4 nouvelles colonnes albums (marketplace_price numeric, marketplace_currency text, marketplace_num_for_sale integer, marketplace_fetched_at timestamptz). Nouvel onglet "💰 Valeur collection" (nav Outils) : 4 cartes résumé (valeur totale estimée, CD estimés/éligibles, en attente, prix moyen) + tableau trié par prix décroissant. Périmètre : CD catalogués Discogs uniquement (a.cd && a.discogsId) — le numérique n'a pas de valeur marketplace. Bouton "🔄 Estimer les prix manquants" : boucle unique sur TOUT le périmètre restant à estimer en un clic (pas de fragmentation en lots), pacée à 700ms entre requêtes (même cadence que fetchAllTracklists pour l'Edge Function Discogs), jamais automatique. Sauvegarde progressive tous les 10 albums pendant la boucle (pas seulement à la fin) pour limiter la perte en cas d'interruption sur une collection de plusieurs centaines de CD. -->
 
 
 
@@ -144,6 +146,9 @@
   <div class="nav-item" onclick="nav('artistlinks')">
     <span class="nav-icon">🕸️</span> Artistes similaires
   </div>
+  <div class="nav-item" onclick="nav('marketvalue')">
+    <span class="nav-icon">💰</span> Valeur collection
+  </div>
   <div class="nav-item" onclick="nav('notestoreport')">
     <span class="nav-icon">📋</span> Notes à reporter
     <span class="nav-badge warn" id="nav-notestoreport-count">0</span>
@@ -182,7 +187,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-22</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-24</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -782,6 +787,7 @@
           <option value="lastfm">last.fm</option>
           <option value="stock">Stock</option>
           <option value="rym">RYM</option>
+          <option value="discography">Discographie MB</option>
           <option value="manual">Manuel</option>
         </select>
         <input id="filter-wish-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
@@ -1390,6 +1396,29 @@
       </table></div>
     </div>
 
+    <!-- VALEUR COLLECTION (stats marketplace Discogs) -->
+    <div class="section" id="sec-marketvalue">
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
+        Prix le plus bas observé sur le marketplace Discogs pour chaque CD catalogué (endpoint stats,
+        séparé de la fiche release) — estimation globale à titre indicatif (assurance), pas une cote officielle.
+        Récupéré à la demande uniquement, jamais en fond automatique.
+      </div>
+      <div class="stats-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+        <div class="card"><div style="font-size:22px;font-weight:600;color:var(--accent)" id="mv-total">–</div><div style="font-size:12px;color:var(--text3)">Valeur totale estimée</div></div>
+        <div class="card"><div style="font-size:22px;font-weight:600" id="mv-estimated">–</div><div style="font-size:12px;color:var(--text3)">CD estimés</div></div>
+        <div class="card"><div style="font-size:22px;font-weight:600" id="mv-pending">–</div><div style="font-size:12px;color:var(--text3)">En attente d'estimation</div></div>
+        <div class="card"><div style="font-size:22px;font-weight:600" id="mv-avg">–</div><div style="font-size:12px;color:var(--text3)">Prix moyen</div></div>
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <button class="btn btn-accent" id="mv-fetch-btn" onclick="fetchAllMarketplaceStats()">🔄 Estimer les prix manquants (Discogs)</button>
+        <span id="mv-fetch-status" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Album</th><th style="text-align:right">Prix</th><th style="text-align:right">En vente</th><th>Récupéré</th></tr></thead>
+        <tbody id="mv-tbody"></tbody>
+      </table></div>
+    </div>
+
     <!-- NOTES À REPORTER -->
     <div class="section" id="sec-notestoreport">
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:14px">
@@ -1566,6 +1595,10 @@
     <div class="form-row" style="grid-column:1/-1;display:none" id="modal-mb-credits-wrap">
       <label>🎛️ Crédits MusicBrainz</label>
       <div id="modal-mb-credits" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
+    </div>
+    <div class="form-row" style="grid-column:1/-1">
+      <label>🎼 Discographie manquante <button class="btn btn-sm" type="button" onclick="searchMissingDiscography()" id="btn-missing-discog">🔍 Chercher sur MusicBrainz</button></label>
+      <div id="modal-missing-discog" style="font-size:12px;color:var(--text3);line-height:1.8"></div>
     </div>
     <div class="form-row" style="grid-column:1/-1">
       <label>Pochette</label>

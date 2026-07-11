@@ -434,6 +434,10 @@ async function saveToSupabase(opts) {
       mb_release_secondary_types: a.mb_release_secondary_types?.length ? JSON.stringify(a.mb_release_secondary_types) : null,
       mb_credits: a.mb_credits?.length ? JSON.stringify(a.mb_credits) : null,
       discogs_master_year: a.discogs_master_year || null,
+      marketplace_price: a.marketplace_price ?? null,
+      marketplace_currency: a.marketplace_currency || null,
+      marketplace_num_for_sale: a.marketplace_num_for_sale ?? null,
+      marketplace_fetched_at: a.marketplace_fetched_at || null,
       youtube_url:    a.youtube_url || null,
       cover_url:      a.cover_url || null,
       lastfm_aliases: a.lastfmAliases?.length ? JSON.stringify(a.lastfmAliases) : null,
@@ -672,6 +676,10 @@ async function loadFromSupabase() {
         mb_release_secondary_types: (() => { try { return a.mb_release_secondary_types ? JSON.parse(a.mb_release_secondary_types) : undefined; } catch(e) { return undefined; } })(),
         mb_credits: (() => { try { return a.mb_credits ? JSON.parse(a.mb_credits) : undefined; } catch(e) { return undefined; } })(),
         discogs_master_year: a.discogs_master_year || undefined,
+        marketplace_price: a.marketplace_price ?? undefined,
+        marketplace_currency: a.marketplace_currency || undefined,
+        marketplace_num_for_sale: a.marketplace_num_for_sale ?? undefined,
+        marketplace_fetched_at: a.marketplace_fetched_at || undefined,
         youtube_url:   a.youtube_url || undefined,
         cover_url:     a.cover_url || undefined,
         lastfmAliases: a.lastfm_aliases ? JSON.parse(a.lastfm_aliases) : undefined,
@@ -1209,7 +1217,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'artistlinks', 'notestoreport', 'journal', 'insights', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'artistlinks', 'marketvalue', 'notestoreport', 'journal', 'insights', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -1226,7 +1234,7 @@ function nav(id) {
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
     completeness: 'Complétude',
-    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', artistlinks: 'Artistes similaires', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
+    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1240,6 +1248,7 @@ function nav(id) {
     ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
     nexttrack: 'Suggestion pondérée : note RYM + jamais écouté + priorité wishlist',
     artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
+    marketvalue: 'Estimation via le marketplace Discogs — indicatif, pas une cote officielle',
     notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
     journal: 'Ce qui a changé depuis un snapshot — pour vérifier l\u2019effet d\u2019un import',
     insights: 'Genres, décennies, artistes, écoutes',
@@ -1264,6 +1273,7 @@ function nav(id) {
   if (id === 'ratesession') initRatingSession();
   if (id === 'nexttrack') initNextToListen();
   if (id === 'artistlinks') renderArtistLinks();
+  if (id === 'marketvalue') renderMarketValue();
   if (id === 'notestoreport') renderNotesToReport();
   if (id === 'journal') renderJournal();
   if (id === 'insights') renderInsights();
@@ -3203,6 +3213,9 @@ function editAlbum(id) {
   renderProvenancePanel(realId);
   renderSourceComparisonPanel(realId);
   renderMbCreditsPanel(realId);
+  const missingDiscogEl = document.getElementById('modal-missing-discog');
+  if (missingDiscogEl) missingDiscogEl.innerHTML = '';
+  _missingDiscogList = [];
   document.getElementById('modal-album').classList.add('open');
 }
 
@@ -5989,6 +6002,18 @@ async function fetchDiscogsRelease(discogsId) {
   };
 }
 
+// Récupérer les stats marketplace Discogs (prix le plus bas, nb en vente) via Edge Function —
+// endpoint séparé de /releases/{id}, cf. get-release-info.ts branche "discogs_stats".
+async function fetchMarketplaceStats(discogsId) {
+  const data = await callEdgeFn({ source: 'discogs_stats', release_id: discogsId, curr_abbr: 'EUR' });
+  return {
+    price: data.lowest_price ?? null,
+    currency: data.currency || 'EUR',
+    numForSale: data.num_for_sale || 0,
+  };
+}
+
+
 // Rechercher sur MusicBrainz via Edge Function (par artiste+album)
 async function searchMusicBrainz(artist, album) {
   const data = await callEdgeFn({ source: 'musicbrainz', artist, album });
@@ -7808,7 +7833,7 @@ function addToWishlistFromStock(stockId) {
 function exportWishlistCSV() {
   const list = wishFilteredList();
   const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
-  const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', manual: 'Manuel' };
+  const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', discography: 'Discographie MB', manual: 'Manuel' };
   const lfIndex   = new Map(lastfmData.map(d => [normalizeKey(d.artist, d.album), d.plays]));
   const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes']];
   list.forEach(w => {
@@ -7943,7 +7968,7 @@ function renderWishlist() {
     return;
   }
   const prioLabel = { high: '🔴 Haute', mid: '🟡 Moyenne', low: '🟢 Basse' };
-  const srcLabel  = { lastfm: '🎵 last.fm', stock: '📦 Stock', rym: '⭐ RYM', manual: '✍️ Manuel' };
+  const srcLabel  = { lastfm: '🎵 last.fm', stock: '📦 Stock', rym: '⭐ RYM', discography: '🎼 Discographie MB', manual: '✍️ Manuel' };
   tbody.innerHTML = list.map(w => {
     // Note RYM : lookup live (pas le snapshot rymRating figé à l'ajout — cf. bug
     // "note RYM absente en wishlist alors qu'elle existe" côté ajout manuel/stock,
@@ -12158,6 +12183,85 @@ function renderArtistLinks() {
   }).join('') || `<tr><td colspan="4"><div class="empty" style="padding:24px"><div class="empty-icon">🕸️</div>${q ? 'Aucune connexion pour ce filtre.' : "Aucune connexion trouvée — les crédits MusicBrainz ne sont récupérés qu'au fetch/rafraîchissement d'un album lié (fiche album, bouton 🔄 Rafraîchir depuis la source)."}</div></td></tr>`;
 }
 
+// ===================== VALEUR COLLECTION (stats marketplace Discogs) =====================
+// Todo section 11, item ⬜ « Suivi de valeur collection : prix marketplace Discogs (endpoint
+// stats, discogsId déjà présent) pour une estimation globale (assurance). » Endpoint séparé de
+// la fiche release (/marketplace/stats/{id}, pas inclus dans /releases/{id}) — nécessite le
+// même token Discogs que les autres appels Discogs de l'app, donc passe par l'Edge Function
+// get-release-info.ts (nouvelle branche "discogs_stats", jamais en direct depuis le navigateur :
+// CORS + auth serveur, comme tous les autres appels Discogs existants). Périmètre : CD
+// catalogués (a.cd && a.discogsId) uniquement — le numérique n'a pas de valeur marketplace
+// Discogs. Récupération en masse À LA DEMANDE (bouton dédié, jamais automatique), pacée à 700ms
+// entre requêtes (même cadence que fetchAllTracklists pour l'Edge Function Discogs), sur tout le
+// périmètre restant à estimer en un seul clic — cohérent avec le seul autre gros fetch Discogs
+// de l'app plutôt que de fragmenter en lots multi-clics.
+function marketValueEligibleAlbums() {
+  return albums.filter(a => a.cd && a.discogsId);
+}
+
+function renderMarketValue() {
+  const eligible = marketValueEligibleAlbums();
+  const estimated = eligible.filter(a => a.marketplace_price != null);
+  const pending = eligible.length - estimated.length;
+  const total = estimated.reduce((sum, a) => sum + (a.marketplace_price || 0), 0);
+  const avg = estimated.length ? total / estimated.length : 0;
+  const currency = estimated[0]?.marketplace_currency || 'EUR';
+
+  const fmtMoney = (v) => v.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (currency === 'EUR' ? '€' : currency);
+
+  document.getElementById('mv-total').textContent = estimated.length ? fmtMoney(total) : '–';
+  document.getElementById('mv-estimated').textContent = `${estimated.length} / ${eligible.length}`;
+  document.getElementById('mv-pending').textContent = pending;
+  document.getElementById('mv-avg').textContent = estimated.length ? fmtMoney(avg) : '–';
+
+  const tbody = document.getElementById('mv-tbody');
+  if (!tbody) return;
+  const sorted = [...estimated].sort((a, b) => (b.marketplace_price || 0) - (a.marketplace_price || 0));
+  tbody.innerHTML = sorted.map(a => {
+    const price = fmtMoney(a.marketplace_price || 0);
+    const age = a.marketplace_fetched_at ? formatProvenanceAge(a.marketplace_fetched_at) : '–';
+    return `<tr onclick="editAlbum('${sid(a.id)}')" style="cursor:pointer">
+      <td><div style="font-weight:500">${esc(a.album)}</div><div style="font-size:11px;color:var(--text3)">${esc(a.artist)}</div></td>
+      <td class="mono" style="text-align:right;color:var(--accent)">${price}</td>
+      <td class="mono" style="text-align:right;color:var(--text3)">${a.marketplace_num_for_sale ?? '–'}</td>
+      <td style="font-size:11px;color:var(--text3)">${age}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="4"><div class="empty" style="padding:24px"><div class="empty-icon">💰</div>${eligible.length ? 'Aucun prix récupéré pour l\'instant — clique sur "🔄 Estimer les prix manquants".' : 'Aucun CD catalogué Discogs dans la collection.'}</div></td></tr>`;
+}
+
+async function fetchAllMarketplaceStats() {
+  const btn = document.getElementById('mv-fetch-btn');
+  const status = document.getElementById('mv-fetch-status');
+  const targets = marketValueEligibleAlbums().filter(a => a.marketplace_price == null);
+  if (!targets.length) {
+    if (status) status.textContent = 'Tous les CD catalogués sont déjà estimés.';
+    return;
+  }
+  if (btn) btn.disabled = true;
+  let done = 0, errors = 0;
+  for (const a of targets) {
+    if (status) status.textContent = `${done}/${targets.length} — ${a.artist} — ${a.album}`;
+    try {
+      await new Promise(r => setTimeout(r, 700)); // Edge Fn rate limit Discogs (même cadence que fetchAllTracklists)
+      const stats = await fetchMarketplaceStats(a.discogsId);
+      a.marketplace_price = stats.price;
+      a.marketplace_currency = stats.currency;
+      a.marketplace_num_for_sale = stats.numForSale;
+      a.marketplace_fetched_at = new Date().toISOString();
+    } catch (e) {
+      console.warn('fetchAllMarketplaceStats:', a.artist, '—', a.album, e.message || e);
+      errors++;
+    }
+    done++;
+    if (done % 10 === 0) { renderMarketValue(); saveToStorage(); }
+  }
+  renderMarketValue();
+  saveToStorage();
+  if (status) status.textContent = `Terminé — ${done - errors} estimé(s)${errors ? `, ${errors} erreur(s)` : ''}.`;
+  if (btn) btn.disabled = false;
+  toast(`Estimation terminée : ${done - errors}/${targets.length} CD`);
+}
+
 // ===================== SCROBBLES RÉCENTS (Session notation) =====================
 // Lecture live de l'API last.fm (user.getrecenttracks) — volontairement non persistée : la sync
 // habituelle n'agrège que des compteurs (lastfmData/_lastfmTrackCounts), jamais l'horodatage par
@@ -13061,6 +13165,101 @@ function renderMbCreditsPanel(albumId) {
   if (!rows) { wrapOuter.style.display = 'none'; wrap.innerHTML = ''; return; }
   wrapOuter.style.display = '';
   wrap.innerHTML = rows + `<div style="margin-top:4px;opacity:0.6;font-size:11px">Relations posées au niveau release sur MusicBrainz — le compositeur par morceau (lien recording→work) n'est pas récupéré (trop coûteux en appels API à 1 req/s).</div>`;
+}
+
+// ===================== DISCOGRAPHIE MANQUANTE PAR ARTISTE =====================
+// Todo section 11, item ⬜ « Discographie manquante par artiste : pour un artiste possédé,
+// lister via MB les albums du groupe absents de la collection, avec ajout direct à la wishlist.
+// 1 lookup MB par artiste, à la demande. » Contrairement aux autres enrichissements MB de l'app
+// (mb_credits, cover, année d'origine...), qui passent tous par l'Edge Function get-release-info
+// (accès non disponible ici pour lui ajouter un nouveau mode), ceci appelle l'API publique
+// MusicBrainz DIRECTEMENT depuis le navigateur (ws/2/artist puis ws/2/release-group, toutes
+// deux CORS-ouvertes en GET) — 2 requêtes séquentielles par clic sur "🔍 Chercher", jamais en
+// masse/auto, conforme à la limite de 1 req/s de MusicBrainz pour un usage non-authentifié.
+let _missingDiscogList = []; // dernier résultat, indexé pour les boutons "+ Wishlist" (évite d'échapper artiste/titre dans des onclick)
+
+async function searchMissingDiscography() {
+  const artist = document.getElementById('f-artist').value.trim();
+  if (!artist) return;
+  const btn = document.getElementById('btn-missing-discog');
+  const out = document.getElementById('modal-missing-discog');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Recherche…'; }
+  if (out) out.innerHTML = '';
+  _missingDiscogList = [];
+  try {
+    // 1) MBID de l'artiste — recherche par nom, meilleur score MusicBrainz (1er résultat trié par score)
+    const sRes = await fetch(`https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent('artist:"' + artist + '"')}&fmt=json&limit=5`);
+    if (!sRes.ok) throw new Error('MusicBrainz indisponible (HTTP ' + sRes.status + ')');
+    const sData = await sRes.json();
+    const best = (sData.artists || [])[0];
+    if (!best) { if (out) out.innerHTML = '<div>Artiste introuvable sur MusicBrainz.</div>'; return; }
+
+    // 2) Release-groups (albums + EP studio) de cet artiste
+    const rRes = await fetch(`https://musicbrainz.org/ws/2/release-group?artist=${best.id}&type=album|ep&limit=100&fmt=json`);
+    if (!rRes.ok) throw new Error('MusicBrainz indisponible (HTTP ' + rRes.status + ')');
+    const rData = await rRes.json();
+    const groups = rData['release-groups'] || [];
+
+    // 3) Comparaison aux albums déjà possédés de cet artiste, toutes variantes de nom confondues
+    //    (artistVariants(), même mécanisme que le reste de l'app) — exclut live/compilation/
+    //    soundtrack/remix côté MusicBrainz (secondary-types), pour ne pointer que des sorties
+    //    studio manquantes plutôt que des rééditions ou compiles qui gonfleraient la liste.
+    const artVariants = artistVariants(artist);
+    const ownedTitles = new Set();
+    albums.forEach(a => {
+      if ([...artistVariants(a.artist)].some(v => artVariants.has(v))) {
+        ownedTitles.add(normalizeKey('', a.album).replace('|||', ''));
+      }
+    });
+    const EXCLUDED_SECONDARY = ['Live', 'Compilation', 'Soundtrack', 'Interview', 'Spokenword', 'Remix', 'DJ-mix', 'Mixtape/Street'];
+    const missing = groups.filter(g => {
+      const secondary = g['secondary-types'] || [];
+      if (secondary.some(t => EXCLUDED_SECONDARY.includes(t))) return false;
+      const key = normalizeKey('', g.title || '').replace('|||', '');
+      return key && !ownedTitles.has(key);
+    }).sort((a, b) => (a['first-release-date'] || '9999').localeCompare(b['first-release-date'] || '9999'));
+
+    _missingDiscogList = missing;
+    if (!out) return;
+    if (!missing.length) {
+      out.innerHTML = `Rien de manquant — discographie complète sur MusicBrainz pour <b>${esc(best.name)}</b> (${groups.length} album(s)/EP analysés).`;
+      return;
+    }
+    out.innerHTML = `<div style="margin-bottom:6px">${missing.length} absent(s) de ta collection sur ${groups.length} chez <b>${esc(best.name)}</b> :
+        <button class="btn btn-sm" type="button" onclick="addAllMissingDiscogToWishlist()">+ Tout ajouter à la wishlist</button></div>` +
+      missing.map((g, i) => {
+        const year = (g['first-release-date'] || '').slice(0, 4);
+        return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+          <span>${esc(g.title)}${year ? ` <span style="opacity:0.6">(${esc(year)})</span>` : ''}${g['primary-type']==='EP' ? ' <span style="opacity:0.6">[EP]</span>' : ''}</span>
+          <button class="btn btn-sm" type="button" onclick="addMissingDiscogToWishlist(${i})">+ Wishlist</button>
+        </div>`;
+      }).join('');
+  } catch (e) {
+    console.error('searchMissingDiscography:', e);
+    if (out) out.innerHTML = 'Erreur MusicBrainz : ' + esc(e.message || e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Chercher sur MusicBrainz'; }
+  }
+}
+
+function addMissingDiscogToWishlist(i) {
+  const g = _missingDiscogList[i];
+  if (!g) return;
+  const artist = document.getElementById('f-artist').value.trim();
+  const year = (g['first-release-date'] || '').slice(0, 4);
+  addToWishlist(artist, g.title, year, 'discography', 0, 0, '');
+}
+
+function addAllMissingDiscogToWishlist() {
+  if (!_missingDiscogList.length) return;
+  const artist = document.getElementById('f-artist').value.trim();
+  let added = 0;
+  _missingDiscogList.forEach(g => {
+    const before = wishlist.length;
+    addToWishlist(artist, g.title, (g['first-release-date'] || '').slice(0, 4), 'discography', 0, 0, '');
+    if (wishlist.length > before) added++;
+  });
+  toast(`${added} album(s) ajouté(s) à la wishlist`);
 }
 
 function applySourceFieldValue(albumIdSid, field, source, value) {
