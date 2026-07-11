@@ -30,6 +30,11 @@
 <!-- APP_VERSION: v2026.07.10-11 — Crédits MusicBrainz (todo section 6, item ⬜, dernier des 4 items nécessitant l'Edge Function). get-release-info.ts (à redéployer) : +artist-rels ajouté à l'inc= déjà utilisé pour le lookup release par mb_id — AUCUN appel API supplémentaire (même requête). Extrait les relations artiste posées au niveau release (data.relations, target-type "artist") en credits:[{role,name}] — couvre producteur/ingénieur du son/mixage/mastering/arrangement/etc. quand tagués au niveau release. Le compositeur par morceau (lien recording→work) n'est volontairement PAS récupéré : nécessiterait 1 lookup MB par morceau à 1 req/s, coût prohibitif (documenté dans le code et dans le panneau). Front (app.js) : fetchMusicBrainzRelease() récupère credits, applyMbEnrichment() (déjà appelée à tous les points d'enrichissement MB existants — fetchAllTracklists, refreshAlbumFromSource) le stocke sur album.mb_credits, simple champ informatif comme mb_release_type. 1 nouvelle colonne Supabase (migration_v2026.07.10-11.sql). Nouveau panneau "🎛️ Crédits MusicBrainz" dans la fiche album (renderMbCreditsPanel, sous le panneau de comparaison Discogs/MusicBrainz), groupé par rôle avec libellés français pour les rôles courants, masqué quand aucun crédit n'est disponible. -->
 <!-- APP_VERSION: v2026.07.10-12 — Repli à la demande MusicBrainz recording-level pour l'écoute des morceaux (todo section 8, dernier item ⬜). get-release-info.ts (à redéployer) : nouvelle branche recording_id dans la source musicbrainz — lookup recording/{id}?inc=url-rels, extrait le lien "free streaming"/"stream for free" vers YouTube s'il existe (même logique que le lien release-level déjà utilisé pour album.youtube_url, mais au niveau morceau). Appelé UNIQUEMENT au clic ▶️, jamais en pré-fetch de masse — le volume de pistes (morceaux isolés + pistes d'albums, dizaines de milliers) rendrait ça impraticable à 1 req/s. Front (app.js) : fetchMusicBrainzRecordingYoutube() + listenToTrackByRecording() (repli silencieux sur la recherche texte existante si pas de mb_recording_id ou pas de lien direct trouvé). Résultat mis en cache dans trackYoutubeCache (nouveau state, clé = mb_recording_id — universel pour un morceau isolé comme pour une piste de tracklist d'album), persisté comme trackNoteOverrides via un nouveau meta.track_youtube_cache_data (JSON, aucune migration SQL nécessaire — table meta déjà générique). Nouveau bouton ▶️ sur chaque ligne de "Morceaux isolés" et sur chaque piste du panneau tracklist album (fiche album + Session notation mode Albums), rsListenCurrent (Session notation mode Morceaux) utilise désormais aussi ce repli. ⚠️ Bug pré-existant découvert au passage (non corrigé ici, hors scope) : les ids de morceaux isolés (tracks[].id = "artistNorm|||titleNorm", texte avec espaces) étaient déjà interpolés bruts (sans guillemets) dans plusieurs onclick/attributs de "Morceaux isolés" (rateTrack, toggleTrackSelected, sélection multiple) — invalide en JavaScript dès qu'un titre/artiste contient un espace, ce qui est le cas quasi systématiquement. Le nouveau bouton ▶️ utilise sid()/unsid() (comme pour les albums) et n'est pas affecté, mais les étoiles/case à cocher existantes le sont probablement. À corriger dans une session dédiée si confirmé. -->
 <!-- APP_VERSION: v2026.07.10-13 — Correctif du bug ids "Morceaux isolés" découvert en -12 (non lié à un item du todo — bug latent trouvé pendant les tests de la version précédente). tracks[].id ("artistNorm|||titleNorm", texte contenant des espaces) était interpolé brut, sans guillemets ni encodage, dans rateTrack() (clic étoile), toggleTrackSelected() (case à cocher par ligne) et toggleSelectAllTracks() (parseInt(dataset.id) → NaN sur un id texte). Invalide en JavaScript dès qu'un titre ou artiste contient un espace — vérifié systématiquement cassé sur données réelles (ex. "Daft Punk" / "Discovery") via node --check sur le HTML généré. Corrigé en reprenant exactement le pattern déjà utilisé pour les albums (toggleAlbumSelected/toggleSelectAllAlbums) : sid()/unsid() à l'émission (attributs onclick/onchange/data-id) et au clic all-select (dataset.id décodé via unsid() plutôt que parseInt()). selectedTrackIds continue de stocker les ids réels (non encodés) en interne, comme selectedAlbumIds — seule la sérialisation dans les attributs HTML change. Aucune migration, aucun changement de schéma Supabase. -->
+<!-- APP_VERSION: v2026.07.10-14 — Dashboard d'insights (todo section 11, item ⬜, discuté juillet 2026). Nouvel onglet "📊 Insights" (nav + section, calculs 100% client sauf l'évolution des écoutes). 4 cartes résumé (albums possédés, écoutes last.fm totales, % noté, note moyenne) + 4 blocs à barres horizontales (composant réutilisable renderBarList, aucune lib de graphique externe ajoutée) : genres (top 12), décennies, top 10 artistes par écoutes last.fm (_lastfmTrackCounts) vs top 10 artistes par nombre d'albums possédés (ownedAlbumsForCovers, réutilise le filtre déjà utilisé par Pochettes/Session notation) — les deux classements sont volontairement juxtaposés pour faire ressortir les écarts. 5e bloc : évolution des écoutes par mois, calculée À LA DEMANDE uniquement (bouton dédié, jamais en auto) via les weekly charts Last.fm (user.getweeklychartlist puis user.getweeklyartistchart, bornée aux 104 dernières semaines ≈ 2 ans — l'historique complet sur 100k+ scrobbles coûterait des centaines d'appels séquentiels pour un gain marginal sur un dashboard, même logique de prudence que pour "Scrobbles récents" qui reste lui aussi volontairement non persisté). Résultat mis en cache dans un nouveau state listeningEvolution + horodatage _listeningEvolutionComputedAt, persistés comme trackYoutubeCache via un nouveau meta.listening_evolution_data (JSON, aucune migration SQL — table meta déjà générique). Nouvelle classe CSS générique .card (styles.css, dérivée de .import-card mais sans sa sémantique import) pour les panneaux du dashboard. -->
+<!-- APP_VERSION: v2026.07.10-15 — Heatmap d'écoute (todo section 11, item ⬜ "Heatmap d'écoute (type calendrier GitHub) sur les scrobbles récents", 2e item de la section traité après le dashboard d'insights en -14). Nouveau 6e bloc dans l'onglet "📊 Insights", sous l'évolution des écoutes : calendrier type GitHub (grille CSS, 1 colonne par semaine, 1 ligne par jour, intensité par opacité de var(--accent)), calculé À LA DEMANDE (bouton dédié) sur les 90 derniers jours. Contrairement à l'évolution mensuelle (-14, weekly charts, résolution hebdomadaire insuffisante pour un calendrier), reconstitué depuis user.getrecenttracks — même endpoint que "Scrobbles récents" — filtré côté serveur last.fm via le paramètre from= pour ne récupérer que la fenêtre de 90 jours plutôt que paginer sur tout l'historique (garde-fou de 60 pages max en cas de réponse anormale, dégradation gracieuse en heatmap partielle plutôt que boucle infinie). Résultat mis en cache dans un nouveau state listeningHeatmap + horodatage _listeningHeatmapComputedAt, persistés comme listeningEvolution via un nouveau meta.listening_heatmap_data (JSON, aucune migration SQL — table meta déjà générique). -->
+<!-- APP_VERSION: v2026.07.10-16 — Score de complétude de fiche (todo section 11, item ⬜ "Score de complétude de fiche (pochette / genre / note / tracklist présents) pour repérer les fiches négligées — variante des diagnostics existants (🩺, Pochettes)", 3e item de la section). Nouvel onglet "🧩 Complétude" (nav "Outils", entre Pochettes et Session notation) : tableau des albums possédés (ownedAlbumsForCovers, même filtre que Pochettes/Session notation), triés par score croissant (pires fiches en premier), 4 critères binaires par colonne (🖼 pochette / 🎨 genre / ⭐ note / 📀 tracklist) + score X/4 en pourcentage. Tracklist vérifiée via albumTracksCache, déjà chargé en bloc pour toute la collection au démarrage (loadAlbumTracks) — aucun appel réseau supplémentaire. Recherche artiste/album, case "Masquer les fiches déjà complètes" (cochée par défaut), pagination "Charger plus" (50/page, même pattern que Pochettes). Clic sur une ligne → ouvre la fiche album (editAlbum). Badge sidebar = nombre de fiches "négligées" (score ≤ 2/4). 100% calculé côté client, aucune migration SQL, aucun state persisté (recalculé à chaque affichage comme les autres blocs du dashboard Insights). -->
+<!-- APP_VERSION: v2026.07.10-17 — "Prochain à écouter" (todo section 11, item ⬜ « suggestion pondérée note RYM haute + jamais écouté + priorité wishlist, pendant écoute — logique proche de celle déjà en place pour la Session notation », 4e item de la section). Nouvel onglet "🎧 Prochain à écouter" (nav Outils, juste après Session notation) : même principe de carte unique que la Session notation (buildRatingQueue), mais objectif inverse — suggérer quoi écouter ENSUITE plutôt que quoi noter parmi ce qui est déjà écouté. Candidats : albums possédés jamais écoutés (a.plays === 0/falsy, "jamais écouté" en filtre d'éligibilité plutôt qu'en pondération continue) + entrées wishlist (écouter avant d'acheter). Score combiné : note RYM (lookupRym, ×2, facteur dominant) + bonus priorité wishlist (🔴 +3 / 🟡 +1.5 / 🟢 +0.5, uniquement pour les entrées wishlist). Carte : pochette/avatar, artiste/album/année/genre, badges (source Possédé/Wishlist, priorité wishlist le cas échéant, note RYM), bouton "▶️ Écouter sur YouTube Music" (openYouTubeMusicForAlbum si possédé avec lien direct connu, sinon recherche), "📄 Ouvrir la fiche" (albums possédés uniquement), "⏭ Suivant" pour passer à la suggestion suivante. File recalculée à chaque ouverture de l'écran (buildNextToListenQueue), jamais persistée — comme ratingQueue, filtrée en continu contre les mutations survenues ailleurs dans l'app (album désormais écouté, entrée wishlist supprimée/acquise). Aucune migration SQL, aucun appel réseau supplémentaire (réutilise rymData/wishlist/albums déjà en mémoire). -->
+
 
 
 
@@ -120,9 +125,16 @@
     <span class="nav-icon">🖼</span> Pochettes
     <span class="nav-badge warn" id="nav-covers-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('completeness')">
+    <span class="nav-icon">🧩</span> Complétude
+    <span class="nav-badge warn" id="nav-completeness-count">0</span>
+  </div>
   <div class="nav-item" onclick="nav('ratesession')">
     <span class="nav-icon">🎯</span> Session notation
     <span class="nav-badge warn" id="nav-ratesession-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('nexttrack')">
+    <span class="nav-icon">🎧</span> Prochain à écouter
   </div>
   <div class="nav-item" onclick="nav('notestoreport')">
     <span class="nav-icon">📋</span> Notes à reporter
@@ -130,6 +142,9 @@
   </div>
   <div class="nav-item" onclick="nav('journal')">
     <span class="nav-icon">📰</span> Journal
+  </div>
+  <div class="nav-item" onclick="nav('insights')">
+    <span class="nav-icon">📊</span> Insights
   </div>
   <div class="nav-item" onclick="nav('import')">
     <span class="nav-icon">📥</span> Import / Export
@@ -158,7 +173,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-13</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-17</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1228,6 +1243,27 @@
       </div>
     </div>
 
+    <!-- ==================== COMPLÉTUDE DES FICHES ==================== -->
+    <div class="section" id="sec-completeness">
+      <div class="toolbar" style="margin-bottom:12px">
+        <input type="text" id="completeness-search" placeholder="Filtrer artiste/album…" oninput="completenessPage=1;renderCompleteness()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:220px"/>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
+          <input type="checkbox" id="completeness-hide-complete" checked onchange="completenessPage=1;renderCompleteness()"> Masquer les fiches déjà complètes
+        </label>
+        <div class="toolbar-right">
+          <button class="btn btn-sm" onclick="resetCompletenessFilters()">↺ Réinitialiser</button>
+        </div>
+      </div>
+      <div id="completeness-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Album</th><th style="width:70px;text-align:center">🖼 Pochette</th><th style="width:70px;text-align:center">🎨 Genre</th><th style="width:70px;text-align:center">⭐ Note</th><th style="width:70px;text-align:center">📀 Tracklist</th><th style="width:100px;text-align:right">Score</th></tr></thead>
+        <tbody id="completeness-tbody"></tbody>
+      </table></div>
+      <div style="text-align:center;margin-top:20px">
+        <button class="btn" id="btn-completeness-more" onclick="loadMoreCompleteness()" style="display:none">Charger plus</button>
+      </div>
+    </div>
+
     <!-- SESSION DE NOTATION -->
     <div class="section" id="sec-ratesession">
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:20px">
@@ -1299,6 +1335,36 @@
       </div>
     </div>
 
+    <!-- PROCHAIN À ÉCOUTER -->
+    <div class="section" id="sec-nexttrack">
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:20px">
+        Suggestion pondérée : note RYM haute + jamais écouté (albums possédés) + priorité wishlist —
+        pour découvrir quoi écouter ensuite plutôt que quoi noter.
+      </div>
+      <div id="nt-empty" style="display:none;text-align:center;padding:60px 20px;color:var(--text3)">
+        <div style="font-size:40px;margin-bottom:12px">🎧</div>
+        <div style="font-size:15px;color:var(--text2)">Rien à suggérer — tous les albums possédés ont déjà des écoutes connues, et la wishlist est vide.</div>
+      </div>
+      <div id="nt-card-wrap" style="display:none">
+        <div class="rate-session-card">
+          <div class="rate-session-cover" id="nt-cover"></div>
+          <div class="rate-session-info">
+            <div class="rate-session-title" id="nt-title"></div>
+            <div class="rate-session-artist" id="nt-artist"></div>
+            <div class="rate-session-meta" id="nt-meta"></div>
+            <div id="nt-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px"></div>
+            <div class="rate-session-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="nt-listen-btn">▶️ Écouter sur YouTube Music</button>
+              <button class="btn btn-sm" id="nt-open-btn">📄 Ouvrir la fiche</button>
+            </div>
+            <div class="rate-session-nav">
+              <button class="btn btn-sm" onclick="ntSkipCurrent()">⏭ Suivant</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- NOTES À REPORTER -->
     <div class="section" id="sec-notestoreport">
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:14px">
@@ -1336,6 +1402,63 @@
         <span id="journal-status" style="font-size:12px;color:var(--text3)"></span>
       </div>
       <div id="journal-results"></div>
+    </div>
+
+    <!-- INSIGHTS -->
+    <div class="section" id="sec-insights">
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat-card"><div class="stat-val accent" id="ins-owned">0</div><div class="stat-label">Albums possédés</div></div>
+        <div class="stat-card"><div class="stat-val" id="ins-plays">0</div><div class="stat-label">Écoutes last.fm (total)</div></div>
+        <div class="stat-card"><div class="stat-val" id="ins-rated-pct">–</div><div class="stat-label">Albums notés</div></div>
+        <div class="stat-card"><div class="stat-val" id="ins-avg-note">–</div><div class="stat-label">Note moyenne</div></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">🎨 Genres (top 12, albums possédés)</h3>
+          <div id="ins-genres"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">📅 Décennies (albums possédés)</h3>
+          <div id="ins-decades"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">🔥 Top 10 artistes — écoutes last.fm</h3>
+          <div id="ins-top-played"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">💿 Top 10 artistes — nb d'albums possédés</h3>
+          <div id="ins-top-owned"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <h3 style="font-size:14px;margin:0">📈 Évolution des écoutes (par mois)</h3>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="ins-evolution-meta" style="font-size:11px;color:var(--text3)"></span>
+            <button class="btn btn-sm" id="ins-evolution-btn" onclick="loadListeningEvolution()">🔄 Charger l'historique (24 derniers mois)</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+          Reconstitué à la demande depuis les weekly charts last.fm (pas de pré-fetch automatique — des dizaines d'appels API sont nécessaires). Mis en cache après le premier calcul, à rafraîchir manuellement si besoin.
+        </div>
+        <div id="ins-evolution"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <h3 style="font-size:14px;margin:0">🗓️ Heatmap d'écoute (90 derniers jours)</h3>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="ins-heatmap-meta" style="font-size:11px;color:var(--text3)"></span>
+            <button class="btn btn-sm" id="ins-heatmap-btn" onclick="loadListeningHeatmap()">🔄 Charger la heatmap (90 derniers jours)</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+          Calendrier type GitHub sur les scrobbles récents (last.fm), à la demande — fenêtre bornée à 90 jours pour rester raisonnable en appels API. Mis en cache après le premier calcul, à rafraîchir manuellement si besoin.
+        </div>
+        <div id="ins-heatmap" style="overflow-x:auto"></div>
+      </div>
     </div>
 
   </div><!-- /content -->

@@ -30,6 +30,19 @@ let trackYoutubeCache = {}; // { [mb_recording_id]: url ('' = déjà cherché, r
 // isolé que pour une piste de tracklist d'album) plutôt qu'un ID propre à chaque table — évite
 // de dupliquer le cache par source. Stocké à part comme trackNoteOverrides, jamais dans les
 // tables tracks/album_tracks elles-mêmes (qui sont réécrites entièrement à chaque réimport XML).
+let listeningEvolution = []; // [{ month:'YYYY-MM', plays }] — todo section 11, Dashboard d'insights.
+// Calculé À LA DEMANDE (bouton dédié) depuis les weekly charts Last.fm (user.getweeklychartlist +
+// user.getweeklyartistchart, bornée aux 104 dernières semaines) — jamais en auto, ni sur toute
+// l'historique du compte (des centaines d'appels API pour 100k+ scrobbles, pour un gain marginal
+// sur un simple dashboard). Persisté (comme trackYoutubeCache) pour éviter de recalculer à
+// chaque visite de l'écran Insights ; rafraîchissable manuellement.
+let _listeningEvolutionComputedAt = null;
+let listeningHeatmap = []; // [{ date:'YYYY-MM-DD', plays }] — todo section 11, "Heatmap d'écoute".
+// Calculé À LA DEMANDE depuis user.getrecenttracks (comme "Scrobbles récents"), borné aux 90
+// derniers jours via le paramètre from= de l'API (filtre côté serveur last.fm, pas de sur-fetch) —
+// contrairement à l'évolution mensuelle ci-dessus qui s'appuie sur les weekly charts (résolution
+// hebdo insuffisante pour une heatmap calendrier). Persisté comme listeningEvolution.
+let _listeningHeatmapComputedAt = null;
 let modalNote = 0;
 let trackNote = 0;
 let currentPage = 1;
@@ -61,7 +74,7 @@ function _saveToStorageImpl() {
         await saveToSupabase();
       } else {
         const now = new Date().toISOString();
-        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, trackYoutubeCache, nextId, savedAt: now };
+        const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, trackYoutubeCache, listeningEvolution, listeningEvolutionComputedAt: _listeningEvolutionComputedAt, listeningHeatmap, listeningHeatmapComputedAt: _listeningHeatmapComputedAt, nextId, savedAt: now };
         localStorage.setItem(LS_KEY, JSON.stringify(data));
         if (lastfmData.length) {
           const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
@@ -96,6 +109,10 @@ function loadFromStorage() {
     notesToReport = data.notesToReport || [];
     trackNoteOverrides = data.trackNoteOverrides || {};
     trackYoutubeCache = data.trackYoutubeCache || {};
+    listeningEvolution = data.listeningEvolution || [];
+    _listeningEvolutionComputedAt = data.listeningEvolutionComputedAt || null;
+    listeningHeatmap = data.listeningHeatmap || [];
+    _listeningHeatmapComputedAt = data.listeningHeatmapComputedAt || null;
     nextId = Math.max(nextId, data.nextId || 0, computeNextId());
     if (repairDuplicateIds()) saveToStorage();
     setSaveIndicator('saved', data.savedAt);
@@ -517,6 +534,8 @@ async function saveToSupabase(opts) {
       { key: 'notes_to_report_data', value: JSON.stringify(notesToReport) },
       { key: 'track_note_overrides_data', value: JSON.stringify(trackNoteOverrides) },
       { key: 'track_youtube_cache_data', value: JSON.stringify(trackYoutubeCache) },
+      { key: 'listening_evolution_data', value: JSON.stringify({ data: listeningEvolution, computedAt: _listeningEvolutionComputedAt }) },
+      { key: 'listening_heatmap_data', value: JSON.stringify({ data: listeningHeatmap, computedAt: _listeningHeatmapComputedAt }) },
     ], { onConflict: 'key' });
 
     // ── Bump atomique du compteur de version (v2026.07.09) ────────────────────
@@ -595,6 +614,8 @@ async function loadFromSupabase() {
         if (metaMap.notes_to_report_data) { try { notesToReport = JSON.parse(metaMap.notes_to_report_data) || []; } catch(e) {} }
         if (metaMap.track_note_overrides_data) { try { trackNoteOverrides = JSON.parse(metaMap.track_note_overrides_data) || {}; } catch(e) {} }
         if (metaMap.track_youtube_cache_data) { try { trackYoutubeCache = JSON.parse(metaMap.track_youtube_cache_data) || {}; } catch(e) {} }
+        if (metaMap.listening_evolution_data) { try { const le = JSON.parse(metaMap.listening_evolution_data); listeningEvolution = le.data || []; _listeningEvolutionComputedAt = le.computedAt || null; } catch(e) {} }
+        if (metaMap.listening_heatmap_data) { try { const lh = JSON.parse(metaMap.listening_heatmap_data); listeningHeatmap = lh.data || []; _listeningHeatmapComputedAt = lh.computedAt || null; } catch(e) {} }
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
@@ -766,6 +787,12 @@ async function loadFromSupabase() {
       }
       if (metaMap.track_youtube_cache_data) {
         try { trackYoutubeCache = JSON.parse(metaMap.track_youtube_cache_data) || {}; } catch(e) {}
+      }
+      if (metaMap.listening_evolution_data) {
+        try { const le = JSON.parse(metaMap.listening_evolution_data); listeningEvolution = le.data || []; _listeningEvolutionComputedAt = le.computedAt || null; } catch(e) {}
+      }
+      if (metaMap.listening_heatmap_data) {
+        try { const lh = JSON.parse(metaMap.listening_heatmap_data); listeningHeatmap = lh.data || []; _listeningHeatmapComputedAt = lh.computedAt || null; } catch(e) {}
       }
       if (metaMap.lastfm_status) {
         try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {}
@@ -1165,7 +1192,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'ratesession', 'notestoreport', 'journal', 'import',
+  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'ratesession', 'nexttrack', 'notestoreport', 'journal', 'insights', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -1181,7 +1208,8 @@ function nav(id) {
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
-    ratesession: 'Session notation', notestoreport: 'Notes à reporter', journal: 'Journal des changements', import: 'Import / Export'
+    completeness: 'Complétude',
+    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1191,9 +1219,12 @@ function nav(id) {
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
     rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
     covers: 'Galerie & résolution des pochettes',
+    completeness: 'Pochette / genre / note / tracklist — repérer les fiches négligées',
     ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
+    nexttrack: 'Suggestion pondérée : note RYM + jamais écouté + priorité wishlist',
     notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
     journal: 'Ce qui a changé depuis un snapshot — pour vérifier l\u2019effet d\u2019un import',
+    insights: 'Genres, décennies, artistes, écoutes',
     import: 'Sources externes & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
@@ -1211,9 +1242,12 @@ function nav(id) {
   if (id === 'album-tracks')  renderAlbumTracks();
   if (id === 'track-wishlist') renderTrackWishlist();
   if (id === 'covers') renderCoversGallery();
+  if (id === 'completeness') renderCompleteness();
   if (id === 'ratesession') initRatingSession();
+  if (id === 'nexttrack') initNextToListen();
   if (id === 'notestoreport') renderNotesToReport();
   if (id === 'journal') renderJournal();
+  if (id === 'insights') renderInsights();
 }
 
 function onSearch() {
@@ -2435,6 +2469,8 @@ function updateNavBadges() {
     if (stockBadge) stockBadge.textContent = stockItems.length;
     const coversBadge = document.getElementById('nav-covers-count');
     if (coversBadge) coversBadge.textContent = ownedAlbumsForCovers().filter(a => !a.cover_url).length;
+    const completenessBadge = document.getElementById('nav-completeness-count');
+    if (completenessBadge) completenessBadge.textContent = ownedAlbumsForCovers().filter(a => computeAlbumCompleteness(a).score <= 2).length;
     const rsBadge = document.getElementById('nav-ratesession-count');
     if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length + tracks.filter(t => !t.note).length;
     const ntrBadge = document.getElementById('nav-notestoreport-count');
@@ -3358,6 +3394,80 @@ function renderCoverCard(a) {
     <div class="sub">${esc(a.artist)}</div>
     ${meta ? `<div class="sub" style="opacity:0.7">${esc(meta)}</div>` : ''}
   </div>`;
+}
+
+// ===================== SCORE DE COMPLÉTUDE DE FICHE =====================
+// Todo section 11, item ⬜ "Score de complétude de fiche (pochette / genre / note / tracklist
+// présents) pour repérer les fiches négligées — variante des diagnostics existants (🩺, Pochettes)."
+// 4 critères binaires, calculés 100% côté client à partir des données déjà chargées :
+// albumTracksCache est rempli en bloc pour toute la collection au démarrage (loadAlbumTracks()),
+// donc aucun appel réseau supplémentaire ici — contrairement au panneau tracklist de la fiche
+// album qui, lui, ne fait que piocher dans ce même cache déjà prêt.
+const COMPLETENESS_CRITERIA = [
+  { key: 'cover',     check: a => !!a.cover_url },
+  { key: 'genre',     check: a => !!(a.genre && a.genre.trim()) },
+  { key: 'note',      check: a => !!a.note },
+  { key: 'tracklist', check: a => !!(albumTracksCache[a.id] && albumTracksCache[a.id].length) },
+];
+
+function computeAlbumCompleteness(a) {
+  const flags = {};
+  let score = 0;
+  COMPLETENESS_CRITERIA.forEach(c => { const ok = c.check(a); flags[c.key] = ok; if (ok) score++; });
+  return { flags, score, max: COMPLETENESS_CRITERIA.length };
+}
+
+function completenessList() {
+  return ownedAlbumsForCovers().map(a => ({ album: a, ...computeAlbumCompleteness(a) }));
+}
+
+let completenessPage = 1;
+const COMPLETENESS_PAGE_SIZE = 50;
+
+function resetCompletenessFilters() {
+  document.getElementById('completeness-search').value = '';
+  document.getElementById('completeness-hide-complete').checked = true;
+  completenessPage = 1;
+  renderCompleteness();
+}
+
+function loadMoreCompleteness() {
+  completenessPage++;
+  renderCompleteness();
+}
+
+function renderCompleteness() {
+  const q = (document.getElementById('completeness-search')?.value || '').toLowerCase().trim();
+  const hideComplete = document.getElementById('completeness-hide-complete')?.checked !== false;
+
+  const full = completenessList();
+  let list = full;
+  if (q) list = list.filter(x => x.album.artist.toLowerCase().includes(q) || x.album.album.toLowerCase().includes(q));
+  if (hideComplete) list = list.filter(x => x.score < x.max);
+  // Pires fiches en premier (score croissant) — puis ordre alphabétique pour stabilité d'affichage.
+  list.sort((x, y) => x.score - y.score || x.album.artist.localeCompare(y.album.artist) || x.album.album.localeCompare(y.album.album));
+
+  const counter = document.getElementById('completeness-counter');
+  const neglected = full.filter(x => x.score <= 2).length;
+  if (counter) counter.textContent = `${list.length} fiche(s) affichée(s) — ${neglected} négligée(s) (≤ 2/4) sur ${full.length} album(s) possédé(s)`;
+
+  const shown = list.slice(0, completenessPage * COMPLETENESS_PAGE_SIZE);
+  const tbody = document.getElementById('completeness-tbody');
+  if (tbody) {
+    tbody.innerHTML = shown.map(x => {
+      const a = x.album;
+      const cell = (ok) => `<td style="text-align:center">${ok ? '<span style="color:var(--accent)">✓</span>' : '<span style="color:var(--text3);opacity:0.5">✗</span>'}</td>`;
+      const pct = Math.round(x.score / x.max * 100);
+      return `<tr onclick="editAlbum('${sid(a.id)}')" style="cursor:pointer">
+        <td><div style="display:flex;align-items:center;gap:8px"><div style="width:28px;height:28px;border-radius:4px;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--bg3);font-size:11px">${albumAvatar(a)}</div><div><div style="font-weight:500">${esc(a.album)}</div><div style="font-size:11px;color:var(--text3)">${esc(a.artist)}</div></div></div></td>
+        ${cell(x.flags.cover)}${cell(x.flags.genre)}${cell(x.flags.note)}${cell(x.flags.tracklist)}
+        <td class="mono" style="text-align:right;font-size:12px;color:${x.score === x.max ? 'var(--text3)' : 'var(--amber)'}">${x.score}/${x.max} (${pct}%)</td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="6"><div class="empty" style="padding:24px"><div class="empty-icon">🧩</div>${hideComplete ? 'Toutes les fiches affichées sont déjà complètes !' : 'Aucun album possédé.'}</div></td></tr>`;
+  }
+
+  const moreBtn = document.getElementById('btn-completeness-more');
+  if (moreBtn) moreBtn.style.display = list.length > shown.length ? 'inline-block' : 'none';
 }
 
 async function scanCoverResolutions() {
@@ -11425,6 +11535,284 @@ async function compareJournal() {
   }
 }
 
+// ===================== DASHBOARD D'INSIGHTS =====================
+// Todo section 11, "Dashboard d'insights" (nouveau — discuté juillet 2026). Tout ce qui suit
+// est calculé côté client à partir des données déjà chargées (albums[], _lastfmTrackCounts) —
+// sauf l'évolution des écoutes par mois, qui nécessite un appel dédié à l'API Last.fm (weekly
+// charts), fait UNIQUEMENT à la demande (bouton), jamais en auto : reconstituer un historique
+// complet sur 100k+ scrobbles représenterait des centaines d'appels API pour un gain marginal
+// sur un simple dashboard — même logique de prudence que "Scrobbles récents", volontairement
+// non persisté lui aussi.
+
+function insightsOwnedAlbums() {
+  return ownedAlbumsForCovers();
+}
+
+function computeGenreDistribution() {
+  const counts = {};
+  insightsOwnedAlbums().forEach(a => {
+    const g = a.genre || 'Sans genre';
+    counts[g] = (counts[g] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12);
+}
+
+function computeDecadeDistribution() {
+  const counts = {};
+  insightsOwnedAlbums().forEach(a => {
+    const y = parseInt(a.year, 10);
+    if (!y || y < 1900 || y > 2100) return;
+    const dec = (Math.floor(y / 10) * 10) + 's';
+    counts[dec] = (counts[dec] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+// Top artistes par ÉCOUTES last.fm (agrégé depuis _lastfmTrackCounts, tous morceaux confondus,
+// possédés ou non) — à comparer au classement par NOMBRE D'ALBUMS POSSÉDÉS ci-dessous : les deux
+// classements divergent souvent (artistes très écoutés en streaming/scrobbles mais peu achetés,
+// ou l'inverse pour des artistes achetés "en confiance" mais peu réécoutés).
+function computeTopArtistsByPlays(n = 10) {
+  const counts = {};
+  Object.values(_lastfmTrackCounts).forEach(d => {
+    if (!d.artist) return;
+    counts[d.artist] = (counts[d.artist] || 0) + (d.plays || 0);
+  });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+
+function computeTopArtistsByOwned(n = 10) {
+  const counts = {};
+  insightsOwnedAlbums().forEach(a => {
+    if (!a.artist) return;
+    counts[a.artist] = (counts[a.artist] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+
+// Rendu générique d'une liste à barres horizontales (genres, décennies, top artistes) — même
+// composant réutilisé pour les 4 blocs du dashboard, pas de lib de graphique externe (cohérent
+// avec le reste de l'app, aucune dépendance JS ajoutée hors Supabase/SheetJS déjà présentes).
+function renderBarList(containerId, data, opts) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!data.length) { el.innerHTML = '<div class="empty" style="padding:12px;font-size:12px">Aucune donnée.</div>'; return; }
+  const max = Math.max(...data.map(d => d[1]), 1);
+  const labelWidth = opts?.labelWidth || 120;
+  el.innerHTML = data.map(([label, val]) => `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <div style="width:${labelWidth}px;flex-shrink:0;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(label)}">${esc(label)}</div>
+      <div style="flex:1;background:var(--bg3);border-radius:3px;overflow:hidden;height:14px">
+        <div style="width:${(val/max*100).toFixed(1)}%;background:var(--accent);height:100%"></div>
+      </div>
+      <div class="mono" style="width:48px;text-align:right;font-size:11px;color:var(--text3);flex-shrink:0">${val.toLocaleString('fr-FR')}</div>
+    </div>`).join('');
+}
+
+function renderInsights() {
+  const owned = insightsOwnedAlbums();
+  const rated = owned.filter(a => a.note);
+  const totalPlays = Object.values(_lastfmTrackCounts).reduce((s, d) => s + (d.plays || 0), 0);
+
+  const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  setText('ins-owned', owned.length.toLocaleString('fr-FR'));
+  setText('ins-plays', totalPlays.toLocaleString('fr-FR'));
+  setText('ins-rated-pct', owned.length ? Math.round(rated.length / owned.length * 100) + '%' : '–');
+  setText('ins-avg-note', rated.length ? (rated.reduce((s, a) => s + a.note, 0) / rated.length).toFixed(1) : '–');
+
+  renderBarList('ins-genres', computeGenreDistribution());
+  renderBarList('ins-decades', computeDecadeDistribution(), { labelWidth: 56 });
+  renderBarList('ins-top-played', computeTopArtistsByPlays());
+  renderBarList('ins-top-owned', computeTopArtistsByOwned());
+
+  renderListeningEvolution();
+  renderListeningHeatmap();
+}
+
+// ── Évolution des écoutes par mois (weekly charts Last.fm, à la demande) ──────────────────
+function renderListeningEvolution() {
+  const wrap = document.getElementById('ins-evolution');
+  const meta = document.getElementById('ins-evolution-meta');
+  if (!wrap) return;
+  if (!listeningEvolution.length) {
+    wrap.innerHTML = '<div class="empty" style="padding:12px;font-size:12px">Pas encore calculée — clique sur "🔄 Charger l\'historique".</div>';
+    if (meta) meta.textContent = '';
+    return;
+  }
+  const max = Math.max(...listeningEvolution.map(d => d.plays), 1);
+  wrap.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:110px">` +
+    listeningEvolution.map(d => `
+      <div style="flex:1;display:flex;align-items:flex-end;height:100%" title="${d.month} : ${d.plays.toLocaleString('fr-FR')} écoutes">
+        <div style="width:100%;background:var(--accent);border-radius:2px 2px 0 0;height:${Math.max(2, d.plays / max * 100).toFixed(1)}%"></div>
+      </div>`).join('') +
+    `</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px">
+      <span>${listeningEvolution[0]?.month || ''}</span><span>${listeningEvolution[listeningEvolution.length - 1]?.month || ''}</span>
+    </div>`;
+  if (meta) meta.textContent = _listeningEvolutionComputedAt ? `Calculé ${formatProvenanceAge(_listeningEvolutionComputedAt)}` : '';
+}
+
+// Reconstitue l'évolution mensuelle des écoutes via les weekly charts Last.fm : liste des
+// semaines disponibles depuis l'inscription (user.getweeklychartlist), puis le total d'écoutes
+// de chacune des 104 dernières semaines (~2 ans, via user.getweeklyartistchart — un seul appel
+// par semaine, somme des playcounts par artiste = total de la semaine). Bornée à 2 ans pour
+// rester raisonnable : l'historique complet du compte (100k+ scrobbles, potentiellement des
+// centaines de semaines) coûterait des centaines d'appels séquentiels pour un gain marginal sur
+// ce dashboard. Résultat mis en cache (listeningEvolution), jamais recalculé automatiquement.
+async function loadListeningEvolution() {
+  if (!_lastfmUser || !_lastfmApiKey) { toast('Configure last.fm dans Import / Export d\'abord', 'warn'); return; }
+  const btn = document.getElementById('ins-evolution-btn');
+  const meta = document.getElementById('ins-evolution-meta');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Chargement…'; }
+  try {
+    const listUrl = `${LASTFM_BASE}?method=user.getweeklychartlist&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json`;
+    const listRes = await fetch(listUrl);
+    const listData = await listRes.json();
+    const allWeeks = listData.weeklychartlist?.chart || [];
+    if (!allWeeks.length) throw new Error('Aucune semaine disponible côté last.fm');
+    const weeks = allWeeks.slice(-104); // ~2 ans max
+
+    const monthTotals = {};
+    for (let i = 0; i < weeks.length; i++) {
+      const w = weeks[i];
+      if (meta) meta.textContent = `Semaine ${i + 1}/${weeks.length}…`;
+      const url = `${LASTFM_BASE}?method=user.getweeklyartistchart&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&from=${w.from}&to=${w.to}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const artists = data.weeklyartistchart?.artist || [];
+      const weekTotal = artists.reduce((s, a) => s + (parseInt(a.playcount, 10) || 0), 0);
+      const monthKey = new Date(parseInt(w.from, 10) * 1000).toISOString().slice(0, 7); // YYYY-MM
+      monthTotals[monthKey] = (monthTotals[monthKey] || 0) + weekTotal;
+      if (i % 8 === 7) await new Promise(r => setTimeout(r, 200)); // pause légère tous les 8 appels
+    }
+    listeningEvolution = Object.entries(monthTotals)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, plays]) => ({ month, plays }));
+    _listeningEvolutionComputedAt = new Date().toISOString();
+    saveToStorage();
+    renderListeningEvolution();
+    toast('Historique d\'écoute chargé');
+  } catch(e) {
+    console.error('loadListeningEvolution:', e.message || e);
+    toast('Erreur last.fm : ' + (e.message || e), 'warn');
+    if (meta) meta.textContent = '';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Charger l\'historique (24 derniers mois)'; }
+  }
+}
+
+// ── Heatmap d'écoute (calendrier type GitHub, sur les scrobbles récents) ──────────────────
+// Todo section 11, item ⬜ "Heatmap d'écoute (type calendrier GitHub) sur les scrobbles
+// récents." Contrairement à l'évolution mensuelle ci-dessus (weekly charts, résolution
+// hebdomadaire), une heatmap calendrier a besoin d'une résolution journalière — reconstituée ici
+// depuis user.getrecenttracks (même endpoint que le panneau "Scrobbles récents"), filtré côté
+// serveur last.fm via from= pour ne récupérer que les 90 derniers jours plutôt que de paginer sur
+// tout l'historique. Résultat mis en cache (listeningHeatmap), jamais recalculé automatiquement.
+const LISTENING_HEATMAP_DAYS = 90;
+
+function renderListeningHeatmap() {
+  const wrap = document.getElementById('ins-heatmap');
+  const meta = document.getElementById('ins-heatmap-meta');
+  if (!wrap) return;
+  if (!listeningHeatmap.length) {
+    wrap.innerHTML = '<div class="empty" style="padding:12px;font-size:12px">Pas encore calculée — clique sur "🔄 Charger la heatmap".</div>';
+    if (meta) meta.textContent = '';
+    return;
+  }
+  const byDate = {};
+  listeningHeatmap.forEach(d => { byDate[d.date] = d.plays; });
+  const max = Math.max(...listeningHeatmap.map(d => d.plays), 1);
+
+  // Fenêtre de LISTENING_HEATMAP_DAYS jours se terminant aujourd'hui, étendue jusqu'au dimanche
+  // précédent et au samedi de la semaine en cours pour obtenir des blocs de 7 jours complets
+  // (rendu calendrier régulier type GitHub, colonnes = semaines). Les jours au-delà d'aujourd'hui
+  // (fin de la dernière semaine) sont marqués `future` et rendus en cellule vide/invisible.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - (LISTENING_HEATMAP_DAYS - 1));
+  start.setDate(start.getDate() - start.getDay());
+  const end = new Date(today);
+  end.setDate(end.getDate() + (6 - end.getDay()));
+
+  const days = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const iso = cursor.toISOString().slice(0, 10);
+    const future = cursor > today;
+    days.push({ date: iso, plays: future ? null : (byDate[iso] || 0) });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  const weeks = [];
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+
+  const cellStyle = (d) => {
+    if (d.plays === null) return 'background:transparent';
+    if (!d.plays) return 'background:var(--bg3)';
+    const ratio = Math.max(0.28, d.plays / max);
+    return `background:var(--accent);opacity:${ratio.toFixed(2)}`;
+  };
+  const cellTitle = (d) => d.plays === null ? '' : `${d.date} : ${d.plays} écoute(s)`;
+
+  wrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(${weeks.length},11px);grid-template-rows:repeat(7,11px);grid-auto-flow:column;gap:2px">
+      ${weeks.map(week => week.map(d => `<div style="width:11px;height:11px;border-radius:2px;${cellStyle(d)}" title="${escAttr(cellTitle(d))}"></div>`).join('')).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:6px">
+      <span>${start.toISOString().slice(0, 10)}</span><span>${today.toISOString().slice(0, 10)}</span>
+    </div>`;
+  if (meta) meta.textContent = _listeningHeatmapComputedAt ? `Calculé ${formatProvenanceAge(_listeningHeatmapComputedAt)}` : '';
+}
+
+async function loadListeningHeatmap() {
+  if (!_lastfmUser || !_lastfmApiKey) { toast('Configure last.fm dans Import / Export d\'abord', 'warn'); return; }
+  const btn = document.getElementById('ins-heatmap-btn');
+  const meta = document.getElementById('ins-heatmap-meta');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Chargement…'; }
+  try {
+    const cutoffTs = Math.floor(Date.now() / 1000) - LISTENING_HEATMAP_DAYS * 86400;
+    const dayTotals = {};
+    let page = 1;
+    let totalPages = 1;
+    // Garde-fou de pagination : from= filtre déjà côté serveur last.fm aux 90 derniers jours, donc
+    // le nombre de pages attendu reste modeste sauf usage extrême (>200 écoutes/jour en moyenne
+    // sur 90 jours) ; plafond défensif pour ne jamais boucler indéfiniment en cas de réponse
+    // anormale de l'API, avec dégradation gracieuse (heatmap partielle plutôt que blocage).
+    const MAX_PAGES = 60;
+    while (page <= totalPages && page <= MAX_PAGES) {
+      if (meta) meta.textContent = `Page ${page}…`;
+      const url = `${LASTFM_BASE}?method=user.getrecenttracks&user=${encodeURIComponent(_lastfmUser)}&api_key=${_lastfmApiKey}&format=json&limit=200&page=${page}&from=${cutoffTs}&extended=0`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.error) throw new Error(data.message || String(data.error));
+      totalPages = parseInt(data.recenttracks?.['@attr']?.totalPages || 1);
+      const rawTracks = data.recenttracks?.track || [];
+      rawTracks.forEach(t => {
+        if (t['@attr']?.nowplaying) return;
+        const ts = parseInt(t.date?.uts || 0);
+        if (!ts || ts < cutoffTs) return;
+        const day = new Date(ts * 1000).toISOString().slice(0, 10);
+        dayTotals[day] = (dayTotals[day] || 0) + 1;
+      });
+      page++;
+      if (page % 6 === 0) await new Promise(r => setTimeout(r, 200)); // pause légère tous les 6 appels
+    }
+    listeningHeatmap = Object.entries(dayTotals)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, plays]) => ({ date, plays }));
+    _listeningHeatmapComputedAt = new Date().toISOString();
+    saveToStorage();
+    renderListeningHeatmap();
+    toast('Heatmap d\'écoute chargée');
+  } catch (e) {
+    console.error('loadListeningHeatmap:', e.message || e);
+    toast('Erreur last.fm : ' + (e.message || e), 'warn');
+    if (meta) meta.textContent = '';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Charger la heatmap (90 derniers jours)'; }
+  }
+}
+
 // ===================== YOUTUBE MUSIC (recherche simple, sans API) =====================
 // Pas de clé API nécessaire : music.youtube.com/search accepte une requête texte en query
 // param et fonctionne sans connexion pour parcourir/écouter (contrairement à Qobuz qui a posé
@@ -11553,6 +11941,105 @@ function getAlbumTrackRating(albumId, title) {
   if (mbT) return mbT.rating || 0;
   const dT = atracks.find(t => t.source === 'discogs' && t.title === title);
   return dT?.rating || 0;
+}
+
+// ===================== "PROCHAIN À ÉCOUTER" =====================
+// Todo section 11, item ⬜ « "Prochain à écouter" : suggestion pondérée note RYM haute + jamais
+// écouté + priorité wishlist, pendant écoute — logique proche de celle déjà en place pour la
+// Session notation. » Même principe de carte/file unique que la Session notation (buildRatingQueue)
+// mais objectif inverse : la Session notation priorise ce qui est DÉJÀ beaucoup écouté et pas
+// encore noté, ici on cherche quoi écouter ENSUITE.
+// Candidats : (1) albums possédés jamais écoutés (a.plays === 0/falsy côté last.fm) — "jamais
+// écouté" devient un filtre d'éligibilité plutôt qu'une simple pondération continue, plus lisible
+// que d'essayer de comparer 0 écoute à 1 écoute sur une échelle continue ; (2) entrées wishlist
+// (pas encore possédées, écouter avant d'acheter). Score combiné : note RYM (0–5, facteur
+// dominant ×2, "note RYM haute") + bonus priorité wishlist (🔴 haute +3 / 🟡 moyenne +1.5 /
+// 🟢 basse +0.5 — uniquement pour les entrées wishlist, les albums possédés n'ont pas cette
+// notion de priorité). Recalculée à chaque ouverture de l'écran, jamais persistée (comme
+// ratingQueue) — les 2 informations sources (plays, wishlist) sont déjà à jour dans l'état de l'app.
+const NEXTTRACK_WISH_PRIO_BONUS = { high: 3, mid: 1.5, low: 0.5 };
+const NEXTTRACK_PRIO_LABEL = { high: 'haute', mid: 'moyenne', low: 'basse' };
+
+let nextToListenQueue = []; // [{ source:'owned'|'wishlist', id, score, rymRating }]
+
+function _nextToListenRym(artist, album) {
+  return (lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album))?.rating || 0;
+}
+
+function buildNextToListenQueue() {
+  const owned = ownedAlbumsForCovers()
+    .filter(a => !a.plays)
+    .map(a => {
+      const rymRating = _nextToListenRym(a.artist, a.album);
+      return { source: 'owned', id: a.id, score: rymRating * 2, rymRating };
+    });
+  const wish = wishlist.map(w => {
+    const rymRating = _nextToListenRym(w.artist, w.album);
+    const bonus = NEXTTRACK_WISH_PRIO_BONUS[w.prio] || 0;
+    return { source: 'wishlist', id: w.id, score: rymRating * 2 + bonus, rymRating };
+  });
+  return [...owned, ...wish].sort((x, y) =>
+    y.score - x.score || (x.source === 'owned' ? 0 : 1) - (y.source === 'owned' ? 0 : 1)
+  );
+}
+
+function initNextToListen() {
+  nextToListenQueue = buildNextToListenQueue();
+  renderNextToListen();
+}
+
+function ntSkipCurrent() {
+  nextToListenQueue.shift();
+  renderNextToListen();
+}
+
+function renderNextToListen() {
+  // Retirer de la file les entrées devenues invalides entretemps (album désormais écouté ou
+  // supprimé ailleurs dans l'app, entrée wishlist supprimée/acquise) — même filet de sécurité
+  // que ratingQueue dans renderRatingSession().
+  nextToListenQueue = nextToListenQueue.filter(entry => {
+    if (entry.source === 'owned') { const a = albums.find(x => x.id === entry.id); return a && !a.plays; }
+    return wishlist.some(w => w.id === entry.id);
+  });
+
+  const emptyEl = document.getElementById('nt-empty');
+  const cardEl = document.getElementById('nt-card-wrap');
+  if (!nextToListenQueue.length) {
+    if (emptyEl) emptyEl.style.display = 'block';
+    if (cardEl) cardEl.style.display = 'none';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (cardEl) cardEl.style.display = 'block';
+
+  const entry = nextToListenQueue[0];
+  const a = entry.source === 'owned' ? albums.find(x => x.id === entry.id) : null;
+  const w = entry.source === 'wishlist' ? wishlist.find(x => x.id === entry.id) : null;
+  if (!a && !w) { nextToListenQueue.shift(); renderNextToListen(); return; }
+  const artist = a ? a.artist : w.artist;
+  const album  = a ? a.album  : w.album;
+
+  document.getElementById('nt-cover').innerHTML = a ? albumAvatar(a) : initials(artist || '?');
+  document.getElementById('nt-title').textContent = album;
+  document.getElementById('nt-artist').textContent = artist;
+  document.getElementById('nt-meta').textContent = a ? [a.year, a.genre].filter(Boolean).join(' · ') : (w.year || '');
+
+  const badges = [];
+  badges.push(a
+    ? `<span class="badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(200,240,100,0.2)">💿 Possédé — jamais écouté</span>`
+    : `<span class="badge" style="background:var(--purple-dim);color:var(--purple);border:1px solid rgba(176,140,255,0.2)">🎯 Wishlist</span>`);
+  if (w?.prio) badges.push(`<span class="badge" style="background:rgba(255,255,255,0.06);color:var(--text2);border:1px solid var(--border2)">${({high:'🔴',mid:'🟡',low:'🟢'})[w.prio] || ''} priorité ${esc(NEXTTRACK_PRIO_LABEL[w.prio] || w.prio)}</span>`);
+  if (entry.rymRating) badges.push(`<span class="badge" style="background:var(--amber-dim);color:var(--amber);border:1px solid rgba(255,192,96,0.2)">⭐ ${entry.rymRating.toFixed(2)} RYM</span>`);
+  document.getElementById('nt-badges').innerHTML = badges.join('');
+
+  const listenBtn = document.getElementById('nt-listen-btn');
+  if (listenBtn) listenBtn.onclick = () => a ? openYouTubeMusicForAlbum(a) : openYouTubeMusicSearch(artist, album);
+
+  const openBtn = document.getElementById('nt-open-btn');
+  if (openBtn) {
+    openBtn.style.display = a ? 'inline-block' : 'none';
+    if (a) openBtn.onclick = () => editAlbum(sid(a.id));
+  }
 }
 
 // ===================== SCROBBLES RÉCENTS (Session notation) =====================
