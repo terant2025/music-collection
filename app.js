@@ -1587,6 +1587,13 @@ const FILTER_PRESET_VIEWS = {
     renderFn: () => renderWishlist(),
     fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio'],
     noteOpPairs: []
+  },
+  rym: {
+    selectId: 'filter-preset-select-rym',
+    resetPage: false,
+    renderFn: () => renderRYM(),
+    fields: ['filter-rym-artist', 'filter-rym-album', 'filter-rym-genre', 'filter-rym-year', 'rym-threshold'],
+    noteOpPairs: []
   }
 };
 
@@ -9269,7 +9276,44 @@ function rymStars(rating) {
   return `<span style="font-size:13px">${s}</span> <span style="font-family:var(--mono);font-size:11px;color:var(--text2)">${rating.toFixed(2)}</span>`;
 }
 
+function rymGenreList() {
+  const set = new Set();
+  rymData.forEach(r => { if (r.genre) set.add(r.genre); });
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function updateRymGenreFilter() {
+  const sel = document.getElementById('filter-rym-genre');
+  if (!sel) return;
+  const cur = sel.value;
+  const genres = rymGenreList();
+  sel.innerHTML = '<option value="">Tous genres</option>' + genres.map(g => `<option value="${esc(g)}" ${g === cur ? 'selected' : ''}>${esc(g)}</option>`).join('');
+}
+
+function resetRymFilters() {
+  ['filter-rym-artist', 'filter-rym-album', 'filter-rym-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const genreSel = document.getElementById('filter-rym-genre');
+  if (genreSel) genreSel.value = '';
+  renderRYM();
+}
+
+// Filtres locaux à l'onglet RYM (Artiste/Album/Genre/Année) — s'ajoutent à la recherche globale
+// (#global-search, déjà appliquée plus bas) et au seuil de note (rym-threshold, qui ne
+// s'applique qu'à la liste "Notés — absents"). Appliqués aux 4 listes de l'écran.
+function rymFilterMatch(r) {
+  const fArtist = (document.getElementById('filter-rym-artist')?.value || '').toLowerCase().trim();
+  const fAlbum  = (document.getElementById('filter-rym-album')?.value  || '').toLowerCase().trim();
+  const fGenre  = document.getElementById('filter-rym-genre')?.value || '';
+  const fYear   = (document.getElementById('filter-rym-year')?.value  || '').trim();
+  if (fArtist && !r.artist.toLowerCase().includes(fArtist)) return false;
+  if (fAlbum  && !r.album.toLowerCase().includes(fAlbum)) return false;
+  if (fGenre  && r.genre !== fGenre) return false;
+  if (fYear   && !(r.year || '').startsWith(fYear)) return false;
+  return true;
+}
+
 function renderRYM() {
+  updateRymGenreFilter();
   if (!rymData.length) {
     document.getElementById('rym-missing-list').innerHTML =
       '<div class="empty"><div class="empty-icon">⭐</div>Chargez votre fichier ratings.csv RYM ci-dessus.</div>';
@@ -9284,6 +9328,7 @@ function renderRYM() {
   // --- Notés sur RYM mais absents de la collection ---
   let missing = computeRYMMissing();
   if (q) missing = missing.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  missing = missing.filter(rymFilterMatch);
   document.getElementById('rym-missing-count').textContent = missing.length;
   const missingEl = document.getElementById('rym-missing-list');
   if (!missing.length) {
@@ -9319,6 +9364,7 @@ function renderRYM() {
   // --- Non notés sur RYM ---
   let unrated = computeRYMUnrated();
   if (q) unrated = unrated.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  unrated = unrated.filter(rymFilterMatch);
   document.getElementById('rym-unrated-count').textContent = unrated.length;
   const unratedEl = document.getElementById('rym-unrated-list');
   if (!unrated.length) {
@@ -9345,6 +9391,7 @@ function renderRYM() {
   // --- Ownership renseigné mais introuvable ---
   let orphans = computeRYMOrphans();
   if (q) orphans = orphans.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  orphans = orphans.filter(rymFilterMatch);
   document.getElementById('rym-orphan-count').textContent = orphans.length;
   const orphanEl = document.getElementById('rym-orphan-list');
   if (!orphanEl) { updateNavBadges(); return; }
@@ -9373,6 +9420,7 @@ function renderRYM() {
   // --- Notés et possédés mais non associés manuellement ---
   let unlinked = computeRYMUnlinked();
   if (q) unlinked = unlinked.filter(r => (r.artist + ' ' + r.album).toLowerCase().includes(q));
+  unlinked = unlinked.filter(rymFilterMatch);
   const unlinkedBadge = document.getElementById('rym-unlinked-count');
   if (unlinkedBadge) unlinkedBadge.textContent = unlinked.length;
   const unlinkedEl = document.getElementById('rym-unlinked-list');
