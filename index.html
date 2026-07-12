@@ -50,6 +50,12 @@
 <!-- APP_VERSION: v2026.07.10-31 — Nettoyage de taxonomie genre (todo section 11, item ⬜ « détection de variantes proches (casse, espaces, quasi-doublons) avec fusion assistée — dans l'esprit du diagnostic d'intégrité existant », dernier item avec Export M3U / PWA restant). Nouveau module 100% client (computeGenreClusters()) : regroupe les genres distincts de la collection par union-find sur 3 critères cumulés — égalité casse/espaces (fusion évidente), égalité une fois la ponctuation retirée ("Hip Hop"/"Hip-Hop"/"HipHop"), distance de Levenshtein tolérée proportionnelle à la longueur (seuil de longueur minimale 5 caractères pour éviter de rapprocher des genres courts sans rapport type "IDM"/"EDM"). Jamais de fusion automatique — nouvelle modale "🧬 Nettoyage des genres" (accessible depuis le diagnostic d'intégrité) liste les groupes de variantes, choix du libellé canonique par radio, bouton "Fusionner" par groupe, "✕ Ignorer" (session uniquement — pas de vrais doublons). Réutilise snapshotForUndo()/integrityLog existants (même historique annulable que le diagnostic d'intégrité) plutôt qu'un système d'annulation dédié. Aucune colonne Supabase supplémentaire (réécrit album.genre existant, déjà synchronisé). -->
 <!-- APP_VERSION: v2026.07.10-32 — PWA installable (todo section 11, dernier item ⬜ « manifest + service worker minimal pour un accès mobile plus fluide que l'export HTML offline actuel, sans refonte d'architecture » — Export M3U écarté à la demande d'Antoine, aucun chemin de fichier local n'étant persisté par l'app pour aucune piste, cf. discussion). 3 nouveaux fichiers à déployer : manifest.json (icônes 192/512/512-maskable générées aux couleurs du thème, --bg/--accent), icon-192.png, icon-512.png, icon-512-maskable.png, et sw.js (service worker). Portée volontairement réduite au shell statique (HTML/CSS/JS/icônes, stale-while-revalidate) : AUCUNE requête Supabase ou API externe interceptée — servir une réponse Supabase mise en cache serait pire que rien (données périmées présentées comme à jour). Pas d'offline complet (l'export HTML autonome existant reste la solution pour une consultation 100% déconnectée) — juste un chargement plus rapide et une installation possible (icône sur l'écran d'accueil mobile, mode standalone sans barre d'adresse). ⚠️ CACHE_VERSION dans sw.js à incrémenter à CHAQUE déploiement (même convention manuelle que APP_VERSION), sinon les visiteurs restent sur le shell caché précédemment. Enregistrement du service worker en fin de app.js, chemin relatif (compatible sous-chemin GitHub Pages), échec non bloquant (l'app reste utilisable normalement si le SW ne s'enregistre pas). -->
 <!-- APP_VERSION: v2026.07.10-33 — 🐛 Économie d'egress Supabase, signalé par Antoine (quota gratuit 5 Go/mois dépassé à 134% — 6,685 Go — alors que la DB elle-même ne faisait que 48% de son quota 500 Mo, deux limites indépendantes). Cause : aucun cache local n'était écrit quand Supabase est configuré (writeLocalCache() n'existait pas — l'écriture localStorage était scopée à la seule branche "pas de Supabase" de _saveToStorageImpl()) — chaque ouverture de l'app, sur chaque appareil/onglet, retéléchargeait donc intégralement albums + lastfm_data (38k lignes) + lastfm_tracks (116k lignes) depuis zéro, même sans le moindre changement depuis la dernière visite. Correctif : réutilise sync_state.version (déjà en place pour la détection de conflit multi-onglets) — connectSupabase() compare désormais la version distante (fetchSyncState(), appel léger 1 ligne) à la dernière version chargée avec succès par CE navigateur, persistée en localStorage (LS_SYNC_VERSION_CACHE — contrairement à _localSyncVersion, un simple `let` qui ne survivait pas à un rechargement de page). Version identique → cache local servi directement (loadFromStorage() + nouveau loadLastfmTracksFromLocalStorage(), quasi zéro egress sur les 2 plus grosses tables) ; version différente (ou 1er lancement) → rechargement réseau complet comme avant. writeLocalCache()/writeLastfmTracksCache() (nouvelles fonctions, formats compacts type tuples pour lastfm_tracks) appelées après chaque save ET chaque load réussi, avec try/catch dédié (quota localStorage 5-10 Mo selon navigateur — en cas d'échec, dégradation gracieuse vers un rechargement réseau complet au prochain lancement, jamais de blocage). Portée volontairement limitée à lastfm_data/lastfm_tracks (~154k lignes, l'essentiel du volume) pour cette 1ère passe — album_tracks/musicbee_tracks (tracklists, détection "morceaux manquants") toujours rechargés à chaque ouverture dans la branche cache local elle-même (coût modeste en comparaison, pas encore mis en cache pour limiter le risque de cette 1ère passe). -->
+<!-- APP_VERSION: v2026.07.12-01 — Nettoyage de taxonomie artiste (todo section 1, item ⬜ « même mécanisme que le nettoyage de genres, appliqué à album.artist — des variantes comme "The Beatles"/"Beatles, The"/"Beatles" fragmentent silencieusement les stats et filtres par artiste »). Même moule que le nettoyage de genre (v2026.07.10-31, union-find, jamais de fusion automatique, réutilise snapshotForUndo()) + un 3e critère dédié à l'inversion d'article ("X, The" ↔ "The X", cas le plus fréquent côté artiste, sans équivalent côté genre). Nouvelle modale "🧬 Nettoyage des artistes", accessible depuis le diagnostic d'intégrité et depuis le nouvel onglet Audit (v2026.07.12-02). Scope volontairement limité à album.artist (tracks[]/wishlist[] portent aussi un champ artist mais ne sont pas couverts, même choix de périmètre que le nettoyage de genre). Aucune colonne Supabase supplémentaire. -->
+<!-- APP_VERSION: v2026.07.12-02 — Nouvel onglet "🔎 Audit collection", regroupant 4 items ⬜ de la todo qui partagent le même besoin (« vue d'ensemble pour corriger en série » plutôt que fiche par fiche) : (1) Scores MusicBrainz bas (section 6) — tri global croissant de album.mb_match_score déjà stocké, 100% client. (2) Notes perso vs RYM très divergentes (section 1) — écart ≥1.5★ entre album.note et le rating RYM associé (lookupRym), purement informatif, 100% client. (3) Divergences Discogs/MusicBrainz — vue globale (section 1) — généralise le panneau par-fiche existant (v2026.07.10-05) à tous les albums ayant les deux IDs liés : bouton "Scanner" qui rejoue fetchDiscogsRelease/fetchMusicBrainzRelease en masse (pacé ~800ms + 700ms entre les 2 sources d'un même album, comme fetchAllMarketplaceStats), résultat non persisté (alimente _sourceCmpCache au passage), lecture seule — ouvrir la fiche pour appliquer une valeur via le mécanisme existant. (4) Complétion de discographie — vue globale (section 11) — généralise "Discographie manquante" (v2026.07.10-23) à tous les artistes possédés (discogsId requis) : bouton "Scanner" avec 2 requêtes MusicBrainz publiques par artiste pacées ~1.1s chacune (limite non-authentifiée ~1 req/s), triés par % de complétion croissant, bouton Arrêter (peut être long sur une grosse collection — estimation affichée avant de lancer). Les 2 scans en masse sont volontairement à la demande, jamais automatiques ni persistés (diagnostic ponctuel, pas une donnée de collection) — même philosophie que _sourceCmpCache. -->
+<!-- APP_VERSION: v2026.07.12-03 — Évolution du goût dans le temps + "Ce jour-là" (todo section 11, 2 items ⬜). (1) Évolution du goût : nouveau bloc "🎼 Évolution du goût (genres)" dans Insights, calculé DANS LA MÊME boucle que loadListeningEvolution() (v2026.07.10-14) — aucun appel réseau supplémentaire, chaque semaine des weekly charts last.fm donne déjà un total par artiste, il suffisait de retrouver le genre de chaque artiste (via les albums possédés, artistVariants()) pour ventiler ce total par genre en plus du total mensuel déjà calculé. Comparaison 12 derniers mois vs 12 précédents (pas de vraie série temporelle, pas de lib de graphique dans l'app — une comparaison de période répond directement à l'exemple de la todo "plus de jazz cette année qu'il y a deux ans"), triée par plus gros mouvement absolu. Nouvelle variable genreEvolution, persistée comme listeningEvolution (meta.genre_evolution_data + cache local egress). (2) "Ce jour-là" : nouveau bloc en haut de l'onglet Insights, 2 volets — 🎂 anniversaires de sortie aujourd'hui (100% client, à partir de album.release_date déjà persisté par les enrichissements Discogs/MusicBrainz existants quand la source donne une date complète jour/mois, donc partiel par nature) et 🕰️ écoutes ce même jour les années passées (à la demande, 1 appel last.fm par année en arrière borné à ce jour calendaire via from=/to=, jamais persisté — périmé dès le lendemain de toute façon). -->
+<!-- APP_VERSION: v2026.07.12-04 — Historique de valeur collection (todo section 11, dernier item ⬜ « Valeur collection est un instantané figé — conserver un point de valeur par mois donnerait une vraie courbe »). Nouveau bloc "📈 Historique de valeur" dans l'onglet Valeur collection (v2026.07.10-24) : photo des prix DÉJÀ estimés (marketplace_price), capturée automatiquement à chaque visite de l'onglet — aucun appel réseau, contrairement à "🔄 Estimer les prix manquants" qui va chercher les prix eux-mêmes. Un seul point par mois (recordMarketValueSnapshot() écrase le point du mois en cours s'il existe déjà, comme demandé). ⚠️ Avertissement affiché sous le graphe : une hausse peut simplement refléter plus de CD estimés depuis la dernière visite, pas forcément une vraie hausse de cote. Nouvelle variable marketValueHistory, persistée comme listeningEvolution (meta.market_value_history_data + cache local egress) — aucune colonne Supabase supplémentaire, tout dans le meta JSON générique. Todo section 11 intégralement traitée hors glisser-déposer pochette (bloqué, décision de stockage binaire à trancher séparément). -->
+<!-- APP_VERSION: v2026.07.12-05 — 🐛 Correctif : "Décennies" dans Insights (computeDecadeDistribution()) utilisait album.year (année du pressage/édition en collection — peut être une réédition/remaster tardive) au lieu de l'année de 1re parution, alors que mb_original_year/discogs_master_year existent déjà sur l'album (v2026.07.06-5, v2026.07.10-10) précisément pour ça. Signalé par Antoine en questionnant l'écran. Nouveau helper originalYearOf() : priorité mb_original_year → discogs_master_year → repli sur year si aucune des deux sources n'est disponible. Tooltip ajouté sur le titre de la carte pour expliciter la source utilisée. -->
+<!-- APP_VERSION: v2026.07.12-06 — 9 nouveaux blocs "gratuits" dans Insights (100% client, aucun appel réseau, aucune migration SQL), suite à une revue des pistes d'amélioration possibles pour cet onglet. 2 nouvelles cartes stats : complétude moyenne des fiches (COMPLETENESS_CRITERIA réutilisé), écart moyen note perso/RYM (computeRymDeltaSummary), série d'écoute en cours/record (computeListeningStreaks — calculée sur la heatmap 90j déjà chargée, zéro appel last.fm en plus, vide si la heatmap n'a jamais été chargée), résumé Wishlist par priorité. Nouvelle section "📀 Composition de la collection" : support (réutilise _journalFolderLabel du Journal), format numérique (FLAC/MP3/digital/CD seul), top 10 labels, albums studio vs compilations, provenance des données (barres empilées manuel/auto/import/vide sur les 4 champs suivis par PROVENANCE_FIELDS existant — "data health" visuel, distinct de l'onglet Audit qui corrige plutôt qu'il ne mesure). Nouvelle section "⭐ Notes & goût" : distribution des notes perso (histogramme par demi-étoile), écoutes moyennes par tranche de note (lastfmData déjà chargé, index Map construit une fois pour éviter les .find() linéaires), top genres × décennies (matrice compacte, réutilise originalYearOf() de v2026.07.12-05). -->
 
 
 
@@ -151,6 +157,9 @@
     <span class="nav-icon">🧩</span> Complétude
     <span class="nav-badge warn" id="nav-completeness-count">0</span>
   </div>
+  <div class="nav-item" onclick="nav('audit')">
+    <span class="nav-icon">🔎</span> Audit collection
+  </div>
   <div class="nav-item" onclick="nav('ratesession')">
     <span class="nav-icon">🎯</span> Session notation
     <span class="nav-badge warn" id="nav-ratesession-count">0</span>
@@ -206,7 +215,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.10-33</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.12-06</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1309,6 +1318,55 @@
       </div>
     </div>
 
+    <!-- AUDIT COLLECTION -->
+    <div class="section" id="sec-audit">
+      <div style="display:flex;flex-wrap:wrap;gap:16px">
+
+        <div style="flex:1 1 420px;min-width:320px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <h3 style="margin:0;font-size:14px">🔎 Scores MusicBrainz bas</h3>
+            <button class="btn btn-sm" onclick="renderAuditMbScores()" title="Relancer">↻</button>
+          </div>
+          <div id="audit-mbscore-counter" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
+          <div id="audit-mbscore-list" style="max-height:320px;overflow-y:auto"></div>
+        </div>
+
+        <div style="flex:1 1 420px;min-width:320px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <h3 style="margin:0;font-size:14px">⭐ Notes perso vs RYM très divergentes</h3>
+            <button class="btn btn-sm" onclick="renderAuditRymDivergence()" title="Relancer">↻</button>
+          </div>
+          <div id="audit-rymdiv-counter" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
+          <div id="audit-rymdiv-list" style="max-height:320px;overflow-y:auto"></div>
+        </div>
+
+        <div style="flex:1 1 100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+            <h3 style="margin:0;font-size:14px">🔍 Divergences Discogs / MusicBrainz — vue globale</h3>
+            <button class="btn btn-sm" id="audit-cmp-scan-btn" onclick="scanAllSourceDivergences()">🔍 Scanner les divergences</button>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin:0 0 8px">Rejoue le fetch Discogs + MusicBrainz pour tous les albums ayant les deux IDs liés — lecture seule, ouvre la fiche pour appliquer une valeur.</p>
+          <div id="audit-cmp-status" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
+          <div id="audit-cmp-list" style="max-height:340px;overflow-y:auto"></div>
+        </div>
+
+        <div style="flex:1 1 100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+            <h3 style="margin:0;font-size:14px">🕸️ Complétion de discographie — vue globale</h3>
+            <button class="btn btn-sm" id="audit-discog-scan-btn" onclick="scanAllMissingDiscography()">🔍 Scanner la discographie</button>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin:0 0 8px">1 recherche MusicBrainz par artiste possédé (pacée ~2,2s) — triés par % de complétion croissant. Peut être long sur une grosse collection, bouton pour arrêter en cours de route.</p>
+          <div id="audit-discog-status" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
+          <div id="audit-discog-list" style="max-height:340px;overflow-y:auto"></div>
+        </div>
+
+        <div style="flex:1 1 100%;text-align:center;padding:4px 0">
+          <button class="btn btn-sm" onclick="openArtistCleanupModal()">🧬 Nettoyage de taxonomie artiste (voir aussi le diagnostic d'intégrité)</button>
+        </div>
+
+      </div>
+    </div>
+
     <!-- SESSION DE NOTATION -->
     <div class="section" id="sec-ratesession">
       <div class="covers-toolbar" style="justify-content:center;margin-bottom:20px">
@@ -1443,6 +1501,13 @@
         <button class="btn btn-accent" id="mv-fetch-btn" onclick="fetchAllMarketplaceStats()">🔄 Estimer les prix manquants (Discogs)</button>
         <span id="mv-fetch-status" style="font-size:12px;color:var(--text3)"></span>
       </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3 style="font-size:14px;margin-bottom:6px">📈 Historique de valeur</h3>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+          1 point par mois, capturé automatiquement à l'ouverture de cet onglet (aucun appel réseau — juste une photo des prix déjà estimés). ⚠️ Une hausse peut simplement venir de plus de CD estimés depuis la dernière visite, pas forcément d'une vraie hausse de cote.
+        </div>
+        <div id="mv-history"></div>
+      </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Album</th><th style="text-align:right">Prix</th><th style="text-align:right">En vente</th><th>Récupéré</th></tr></thead>
         <tbody id="mv-tbody"></tbody>
@@ -1502,11 +1567,36 @@
 
     <!-- INSIGHTS -->
     <div class="section" id="sec-insights">
+      <div class="card" style="margin-bottom:16px">
+        <h3 style="font-size:14px;margin-bottom:10px">📅 Ce jour-là</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:500">🎂 Anniversaires de sortie aujourd'hui</div>
+            <div id="ins-anniversaries"></div>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+              <span style="font-size:12px;color:var(--text2);font-weight:500">🕰️ Écoutes ce même jour, les années passées</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span id="ins-onthisday-status" style="font-size:11px;color:var(--text3)"></span>
+                <button class="btn btn-sm" id="ins-onthisday-btn" onclick="loadOnThisDayListening()">🔄 Charger les écoutes passées</button>
+              </div>
+            </div>
+            <div id="ins-onthisday-list"></div>
+          </div>
+        </div>
+      </div>
       <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
         <div class="stat-card"><div class="stat-val accent" id="ins-owned">0</div><div class="stat-label">Albums possédés</div></div>
         <div class="stat-card"><div class="stat-val" id="ins-plays">0</div><div class="stat-label">Écoutes last.fm (total)</div></div>
         <div class="stat-card"><div class="stat-val" id="ins-rated-pct">–</div><div class="stat-label">Albums notés</div></div>
         <div class="stat-card"><div class="stat-val" id="ins-avg-note">–</div><div class="stat-label">Note moyenne</div></div>
+      </div>
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr);margin-top:12px">
+        <div class="stat-card"><div class="stat-val" id="ins-avg-completeness">–</div><div class="stat-label">Complétude moyenne des fiches</div></div>
+        <div class="stat-card"><div class="stat-val" id="ins-rym-delta" title="Positif = tu notes en moyenne plus généreusement que RYM">–</div><div class="stat-label">Écart moyen note perso / RYM</div></div>
+        <div class="stat-card"><div class="stat-val" id="ins-streak" title="Calculé sur la heatmap 90 jours déjà chargée — vide si jamais chargée">–</div><div class="stat-label">Série d'écoute (jours consécutifs)</div></div>
+        <div class="stat-card"><div class="stat-val" id="ins-wish-summary">–</div><div class="stat-label">Wishlist (par priorité)</div></div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
@@ -1515,7 +1605,7 @@
           <div id="ins-genres"></div>
         </div>
         <div class="card">
-          <h3 style="font-size:14px;margin-bottom:10px">📅 Décennies (albums possédés)</h3>
+          <h3 style="font-size:14px;margin-bottom:10px" title="Année de 1re parution (MusicBrainz/Discogs master) quand elle est connue, sinon année du pressage/édition en collection">📅 Décennies (albums possédés)</h3>
           <div id="ins-decades"></div>
         </div>
         <div class="card">
@@ -1525,6 +1615,46 @@
         <div class="card">
           <h3 style="font-size:14px;margin-bottom:10px">💿 Top 10 artistes — nb d'albums possédés</h3>
           <div id="ins-top-owned"></div>
+        </div>
+      </div>
+
+      <h3 style="font-size:13px;color:var(--text3);margin:20px 0 10px;font-weight:600">📀 Composition de la collection</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">📂 Support</h3>
+          <div id="ins-support"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">💾 Format numérique</h3>
+          <div id="ins-format"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">🏷️ Top 10 labels</h3>
+          <div id="ins-labels"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">📀 Albums studio vs compilations</h3>
+          <div id="ins-compilations"></div>
+        </div>
+        <div class="card" style="grid-column:1/-1">
+          <h3 style="font-size:14px;margin-bottom:10px" title="Proportion manuel / auto (Discogs, MusicBrainz) / import direct (MusicBee, Discogs CSV) / vide, pour les 4 champs suivis par la provenance">🩺 Provenance des données</h3>
+          <div id="ins-provenance"></div>
+        </div>
+      </div>
+
+      <h3 style="font-size:13px;color:var(--text3);margin:20px 0 10px;font-weight:600">⭐ Notes &amp; goût</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px">📊 Distribution des notes perso</h3>
+          <div id="ins-note-dist"></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:10px" title="Écoutes last.fm moyennes par tranche de note perso">🎧 Écoutes moyennes par note</h3>
+          <div id="ins-note-plays"></div>
+        </div>
+        <div class="card" style="grid-column:1/-1">
+          <h3 style="font-size:14px;margin-bottom:10px">🎨 Top genres × décennies</h3>
+          <div id="ins-genre-decade"></div>
         </div>
       </div>
 
@@ -1540,6 +1670,17 @@
           Reconstitué à la demande depuis les weekly charts last.fm (pas de pré-fetch automatique — des dizaines d'appels API sont nécessaires). Mis en cache après le premier calcul, à rafraîchir manuellement si besoin.
         </div>
         <div id="ins-evolution"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <h3 style="font-size:14px;margin:0">🎼 Évolution du goût (genres)</h3>
+          <span id="ins-genre-evolution-meta" style="font-size:11px;color:var(--text3)"></span>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+          Mois récents (barre pleine) vs mois plus anciens (barre grise) sur la même fenêtre que "Évolution des écoutes" ci-dessus — recalculée avec elle, aucun appel réseau en plus. Triés par plus gros mouvement.
+        </div>
+        <div id="ins-genre-evolution"></div>
       </div>
 
       <div class="card" style="margin-top:16px">
@@ -1944,6 +2085,7 @@
       <button class="btn btn-sm btn-danger" onclick="resetLastfmCompletely()" title="Efface tout (Supabase + local) et repart de zéro depuis l'API last.fm — pour des écoutes qui restent doublées malgré une resync classique">☢️ Reset complet last.fm</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();nav('assocreview');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openGenreCleanupModal()">🧬 Nettoyage des genres</button>
+      <button class="btn btn-sm" onclick="closeIntegrityModal();openArtistCleanupModal()">🧬 Nettoyage des artistes</button>
     </div>
     <div id="integrity-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
     <div id="integrity-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
@@ -1967,6 +2109,23 @@
     <div class="modal-footer">
       <button class="btn" onclick="renderGenreCleanup()">↻ Relancer le scan</button>
       <button class="btn" onclick="closeGenreCleanupModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal nettoyage de taxonomie artiste -->
+<div class="modal-overlay" id="modal-artist-cleanup">
+  <div class="modal" style="width:760px;max-width:92vw">
+    <h2>🧬 Nettoyage des artistes</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:10px">
+      Variantes probables détectées (casse, espaces, inversion d'article "The X"/"X, The", quasi-doublons) parmi les artistes de la collection.
+      Choisis le libellé canonique par groupe puis fusionne — jamais automatique, deux artistes proches peuvent être légitimement distincts (collaboration, homonyme).
+    </p>
+    <div id="artist-cleanup-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+    <div id="artist-cleanup-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="renderArtistCleanup()">↻ Relancer le scan</button>
+      <button class="btn" onclick="closeArtistCleanupModal()">Fermer</button>
     </div>
   </div>
 </div>
