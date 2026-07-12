@@ -60,6 +60,14 @@
 <!-- APP_VERSION: v2026.07.12-08 — Nouveau filtre "Wishlist" dans l'onglet Albums (collection), demandé par Antoine. Sélecteur filter-wishlist (Tous / 🎯 En wishlist / Pas en wishlist) dans filteredAlbums(), correspondance EXACTE artiste+album (normalizeKey, même logique que wishlistOwnedSet()/pruneWishlistOwned() — pas de correspondance floue par artistVariants pour éviter les faux positifs). Utile notamment pour repérer les albums encore listés en wishlist alors qu'ils sont déjà en collection (Stock non-Discogs typiquement — cf. wishlistOwnedSet() : seul Discogs auto-retire de la wishlist, donc ce cas est normal et pas un bug). Ajouté à FILTER_PRESET_VIEWS.collection.fields pour que les préréglages de filtres existants le sauvegardent/restaurent aussi. -->
 <!-- APP_VERSION: v2026.07.12-09 — 🐛 Correctif : badge "📦 Stock" fantôme persistant après déplacement Stock→Ok dans MusicBee + réimport. Diagnostiqué via un dump console fourni par Antoine (2 cas distincts confirmés). Cause racine : primaryFolder était une valeur "sticky" — mis à 'stock' (ex.primaryFolder = 'stock') dès qu'un album matchait un stockAlbums de l'export courant dans importMusicBeeXML(), mais jamais recalculé quand l'album sortait du stock : folders[] se corrigeait bien (v2026.07.12-07) mais primaryFolder restait figé sur 'stock' indéfiniment — exactement ce que teste isStock (renderAlbums, ligne ~2140) en fallback `|| a.primaryFolder === 'stock'`, d'où le badge fantôme même quand folders=['ok'] seul. Nouveau helper derivePrimaryFolder(folders) (hiérarchie discographie > forsale > ok > stock > album, 'ok' prime volontairement sur 'stock'), appelé sur TOUS les albums en une passe après que folders[] a fini de bouger (boucle principale + nettoyage orphelins + réconciliation stock) — remplace les 3 affectations ad hoc `primaryFolder = 'stock'` du bloc de réconciliation stock. Second cas identifié dans le dump (ex: "The Power Out") où folders contient VRAIMENT 'ok' ET 'stock' en même temps : pas un bug applicatif — signifie que cet album a encore un fichier sous le chemin Stock dans MusicBee en plus de sa copie dans Ok (déplacement incomplet côté bibliothèque), l'app reflète fidèlement les 2 emplacements tant que le doublon n'est pas nettoyé dans MusicBee. -->
 <!-- APP_VERSION: v2026.07.12-10 — Export offline Android étendu, demandé par Antoine : inclut désormais aussi les entrées RYM/last.fm hors collection (notées/scrobblées mais non possédées, flag outOfCollection), en plus des albums possédés. Nouvelle fonction computeOutOfCollectionEntries() : fusionne computeRYMMissing()-like (sans le seuil de note — l'export est un inventaire, pas une liste d'action, cf. onglet ⭐ RYM qui applique un seuil lui) et computeMissing() (onglet Manquants, last.fm) en une seule liste par artiste+album, réutilisant les définitions d'ownership déjà établies (getOwnedRymKeys/associations) plutôt que d'en recréer une 3e. Template HTML autonome (buildOfflineHtml) : nouveau filtre "f-status" (Tous / En collection / Hors collection), badge "🔭 Hors collection" + bordure en pointillés sur les cartes concernées. Notes DC/MB/RYM déjà affichées par entrée pour les albums possédés (badges existants) ; pour les entrées hors collection, DC et MB restent vides à raison (pas d'album possédé = pas de note perso MusicBee ni de note Discogs personnelle), seule RYM (note perso RYM) et les écoutes last.fm peuvent être renseignées. -->
+<!-- APP_VERSION: v2026.07.12-11 — Actions de masse sur l'onglet "last.fm — Morceaux" (sec-missing-tracks), demandé par Antoine. Jusqu'ici 🚫 Ignorer / 🎯 Wishlist / ＋ Ajouter ne s'appliquaient qu'à une ligne à la fois. Même moule que la sélection multiple de l'onglet Albums (selectedAlbumIds/renderBulkActionsBar) mais clé de sélection = normalizeKey(artiste,titre) plutôt qu'un id ou un index de ligne — computeMissingTracks() reconstruit sa liste à chaque appel, une clé texte survit à un changement de filtre/tri entre deux sélections là où un index de ligne redeviendrait invalide. Nouvelle case à cocher par ligne + "sélectionner tout (page courante)" + barre d'actions (🚫 Ignorer, 🎯 Wishlist, ＋ Ajouter aux morceaux isolés, Annuler la sélection) avec compteur. bulkSetMissingTrackStatus() réutilise la même sémantique toggle que setMissingTrackStatus() (ré-appliquer le même statut à un morceau qui l'a déjà = le retirer). L'action 🔗 Associer reste volontairement individuelle (modale de choix par morceau, non batchable), comme la recherche YouTube Music. -->
+<!-- APP_VERSION: v2026.07.12-12 — Fusion "Prochain à écouter" → Session notation + ordre aléatoire, demandé par Antoine. Onglet "🎧 Prochain à écouter" (v2026.07.10-17) supprimé intégralement (nav, section HTML, SECTIONS, titres/sous-titres, buildNextToListenQueue/renderNextToListen/initNextToListen/ntSkipCurrent/_nextToListenRym/NEXTTRACK_*). Son rôle (surfacer les albums possédés jamais écoutés) est repris par Session notation elle-même : buildRatingQueue()/buildRatingQueueTracks() ne trient plus par écoutes last.fm décroissantes (nouveau helper shuffleArray(), Fisher-Yates) — l'ancien tri reléguait structurellement les albums/morceaux à 0 écoute en toute fin de file, ils n'étaient donc quasiment jamais proposés. Les jamais-écoutés étaient déjà dans cette file (tout album/morceau non noté y entre, indépendamment des écoutes) : seul le tri les enterrait, pas besoin de logique de fusion supplémentaire. La wishlist n'a jamais fait partie de cette file et n'y entre toujours pas — Session notation ne note que des éléments POSSÉDÉS, contrairement à l'ancien "Prochain à écouter" qui mélangeait les deux. File toujours recalculée (donc re-mélangée) à chaque ouverture de l'onglet. -->
+<!-- APP_VERSION: v2026.07.12-13 — 🐛 Simplification calcul album.note depuis MusicBee, demandé par Antoine suite à une question sur le mécanisme. Avant : agrégation par fréquence (valeur la plus fréquente parmi les tags "Album Rating" de toutes les pistes de l'album, pour absorber un tag isolé désynchronisé) — indirect, et le départage en cas d'égalité de fréquence entre 2 valeurs n'était pas prévisible (ordre d'itération Object.entries). Après : prend directement le 1er tag "Album Rating" non nul rencontré parmi les pistes de l'album, sans agrégation — "Album Rating" est déjà censé être identique sur toutes les pistes d'un album quand MusicBee est correctement synchronisé, la fréquence n'apportait rien de fiable en pratique. Supprime albumRatingCounts (plus utilisé nulle part). Comportement inchangé si toutes les pistes d'un album partagent la même note (cas normal) ; ne change que le cas désynchronisé, dont le résultat était de toute façon imprévisible avant. -->
+<!-- APP_VERSION: v2026.07.12-14 — Le verrou 🔒 (Provenance des champs) est désormais respecté par le réimport MusicBee pour genre et artiste, demandé par Antoine (n'étant pas maître de la donnée MusicBee/Discogs — simples synchros avec leurs propres BDD — corriger le tag à la source n'est pas une option pour lui). Avant : MusicBee écrasait genre/artiste sans condition à chaque réimport, même verrouillé (seule exception documentée au principe "un champ verrouillé n'est plus jamais écrasé") — une fusion du Nettoyage des genres/artistes était donc silencieusement annulée dès le réimport suivant si le tag MusicBee lui-même n'était pas corrigé. Genre : import XML principal (importMusicBeeXML) ajoute la garde !isManualField(existing,'genre') ; l'import M3U la respectait déjà. Artiste : ajouté au système de provenance générique (PROVENANCE_FIELDS/PROVENANCE_FIELD_LABELS, n'existait pas encore comme champ suivi) + garde !isManualField(existing,'artist') dans importMusicBeeXML, en plus de la protection déjà existante pour les albums avec discogsId. mergeGenreCluster()/mergeArtistCluster() (Nettoyage des genres/artistes) verrouillent désormais automatiquement tous les albums du groupe fusionné (setProvenance(...,'manual')) — la fusion tient donc définitivement dès le premier clic, sans étape manuelle supplémentaire par fiche. Revers du compromis, indiqué dans les 2 modales : si le tag est un jour vraiment corrigé côté MusicBee/Discogs, il faudra déverrouiller manuellement (🔒→🔓 dans Provenance des champs) pour que la nouvelle valeur soit reprise. -->
+<!-- APP_VERSION: v2026.07.12-15 — 🐛 Correctif majeur : cache local (localStorage) quasi systématiquement non écrit ("Cache local non écrit — quota probablement dépassé" en boucle dans la console d'Antoine). Root cause identifiée par calcul : le cache lastfm_tracks (197 247 morceaux chez Antoine) pesait à lui seul ~9,6 Mo une fois sérialisé en tuples JSON compacts — au-dessus du quota localStorage typique (5-10 Mo, PARTAGÉ avec le reste de l'app), qui plus est dans un SEUL try/catch avec le cache principal (LS_KEY, albums+tracks+etc ~3 Mo) donc un échec sur l'un bloquait aussi les 2 autres écritures (discotheque_lastfm, discotheque_rym) qui auraient pourtant probablement réussi seules. Conséquence réelle au-delà du warning console : l'optimisation d'egress de juillet (sync_state.version, v2026.07.10-33) ne jouait plus son rôle pour lastfm_tracks — rechargement complet silencieux depuis Supabase à chaque session. Correctifs : (1) writeLastfmTracksCache() sérialise désormais en une seule string délimitée par \x1f (~14-30% plus compact selon la distribution réelle des écoutes) et retente automatiquement avec un seuil d'écoutes minimum croissant (0→1→2→3→5) si le quota est dépassé — garde en cache les morceaux les plus écoutés (les plus utiles pour Manquants/Session notation, déjà triés par écoutes) plutôt que d'abandonner tout le cache d'un coup. (2) writeLocalCache() : chaque clé (LS_KEY, discotheque_lastfm, discotheque_rym) a désormais son propre try/catch — un échec sur l'une n'empêche plus les 2 autres. (3) discotheque_lastfm/discotheque_rym servis aussi au format délimité \x1f. Loaders (loadLastfmTracksFromLocalStorage/loadLastfmFromLocalStorage/loadRymFromLocalStorage) mis à jour en conséquence, avec repli de lecture sur l'ancien format JSON le temps de la transition (se réécrit tout seul au prochain saveToStorage()). -->
+<!-- APP_VERSION: v2026.07.12-16 — Nouvelle "🎤 Vue Artiste", demandée par Antoine suite à une discussion sur l'Audit collection ("divergences Discogs/MusicBrainz" + "complétion de discographie") : une vue centrée sur un artiste qui s'appuie sur MusicBrainz pour lister toute sa discographie (albums possédés ET manquants) et y rapatrie ce que l'app sait déjà (note perso, note RYM, écoutes last.fm, statut wishlist). Réutilise le même pattern de fetch que searchMissingDiscography() (recherche artiste puis release-groups, 2 appels MusicBrainz publics) mais construit une liste FUSIONNÉE plutôt que juste les manquants. Chargement automatique à l'ouverture (à la demande d'Antoine, contrairement aux scans en masse de l'Audit qui restent à la demande — ici 2 requêtes seulement, délai raisonnable). 2 points d'entrée : nouvel onglet dédié avec barre de recherche (nav sidebar "🎤 Vue Artiste"), ET nouveau helper artistLink() qui rend le nom d'artiste cliquable (stopPropagation, ouvre la Vue Artiste sans déclencher le clic de ligne existant) dans Collection, Discographie, Wishlist albums et Artistes similaires — pas étendu à Pochettes/Audit/Insights pour cette 1ère passe, extensible plus tard si utile. En-tête : % de complétion, écoutes last.fm cumulées (albums + morceaux isolés), note moyenne perso, genres, + lien direct vers "Artistes similaires" pour cet artiste (préremplit le filtre existant). Clic sur un album possédé de la liste → ouvre sa fiche ; les manquants affichent note RYM/écoutes si connues même sans être possédés, et un badge 🎯 s'ils sont déjà en wishlist. -->
+<!-- APP_VERSION: v2026.07.12-17 — Import/Export réorganisé en 3 sous-onglets, demandé par Antoine. (1) "📥 Sources" : contenu existant inchangé (Discogs/MusicBee/RYM/last.fm/export). (2) "🔗 Associations" : bascule de l'ex-onglet top-level dédié (sec-assocreview supprimée, nav sidebar retirée) — HTML/logique inchangés (renderAssocReview), juste déplacés ; le bouton "Associations introuvables" du diagnostic d'intégrité pointe désormais vers nav('import')+switchImportTab('assoc') au lieu de nav('assocreview'). (3) "🆔 IDs manquants" (nouveau) : albums sans discogsId NI mb_release_id, et morceaux isolés sans mb_recording_id, avec interface de recherche/liaison — nouvelle modale modal-link-id. MusicBrainz : recherche live via l'API publique (release pour un album, recording pour un morceau, même principe que la recherche artiste de Discographie manquante — aucun changement d'Edge Function), résultats cliquables. Discogs : pas de recherche live possible sans changement d'Edge Function (get-release-info.ts n'a qu'un mode "fetch par ID connu", pas de mode recherche) — ouvre plutôt une recherche Discogs.com préremplie dans un nouvel onglet, avec collage manuel de l'ID trouvé (fonctionne immédiatement, sans dépendre d'un déploiement supplémentaire). Un vrai mode recherche Discogs pourrait être ajouté plus tard côté Edge Function (branche "discogs_search") si le collage manuel s'avère trop fastidieux à l'usage. Lier un album ouvre sa fiche ensuite pour faciliter un "🔄 Rafraîchir depuis la source" immédiat. switchImportTab() gère l'affichage/masquage des 3 sous-vues, même pattern que les boutons de mode de Session notation (covers-filter-btn). -->
+<!-- APP_VERSION: v2026.07.12-18 — Vraie recherche Discogs pour "IDs manquants", suite à Antoine qui a fourni le code source actuel de l'Edge Function get-release-info.ts. ⚠️ NÉCESSITE UN DÉPLOIEMENT MANUEL de l'Edge Function (fichier fourni séparément, get-release-info.ts) : nouvelle branche "discogs_search" (endpoint Discogs /database/search?type=release, réutilise DISCOGS_TOKEN déjà configuré côté serveur — même pattern d'auth que les branches discogs/discogs_stats existantes). searchDiscogs(artist, album) ajouté côté app (même moule que searchMusicBrainz déjà existant, découvert en relisant le code — d'ailleurs déjà utilisé côté import mais jamais exposé dans une UI de sélection manuelle jusqu'ici). openLinkIdModal/searchLinkIdResults réécrits pour unifier les 3 chemins de recherche (Discogs via Edge Function, MusicBrainz release via Edge Function/searchMusicBrainz, MusicBrainz recording en direct côté client — pas de branche Edge Function pour la recherche recording, l'API MusicBrainz publique reste directement joignable pour la recherche comme ailleurs dans l'app) derrière un format de résultat normalisé {resultId, title, subtitle}. Le lien externe Discogs.com + collage manuel restent disponibles en complément/repli de la recherche intégrée (pressage précis introuvable, etc.). -->
 
 
 
@@ -149,10 +157,6 @@
     <span class="nav-icon">⭐</span> RYM
     <span class="nav-badge warn" id="nav-rym-count">0</span>
   </div>
-  <div class="nav-item" onclick="nav('assocreview')">
-    <span class="nav-icon">🔗</span> Associations
-    <span class="nav-badge" id="nav-assoc-count">0</span>
-  </div>
   <div class="nav-item" onclick="nav('covers')">
     <span class="nav-icon">🖼</span> Pochettes
     <span class="nav-badge warn" id="nav-covers-count">0</span>
@@ -168,8 +172,8 @@
     <span class="nav-icon">🎯</span> Session notation
     <span class="nav-badge warn" id="nav-ratesession-count">0</span>
   </div>
-  <div class="nav-item" onclick="nav('nexttrack')">
-    <span class="nav-icon">🎧</span> Prochain à écouter
+  <div class="nav-item" onclick="nav('artistview')">
+    <span class="nav-icon">🎤</span> Vue Artiste
   </div>
   <div class="nav-item" onclick="nav('artistlinks')">
     <span class="nav-icon">🕸️</span> Artistes similaires
@@ -219,7 +223,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.12-10</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.12-18</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -732,10 +736,19 @@
           <button class="btn btn-sm" onclick="exportMissingTracksCSV()" title="Exporter CSV">⬇ CSV</button>
         </div>
       </div>
+      <div id="mtrack-bulk-bar" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="mtrack-bulk-count" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm" onclick="bulkSetMissingTrackStatus('ignored')" title="Ignorer les morceaux sélectionnés (ré-appliquer retire le statut)">🚫 Ignorer</button>
+        <button class="btn btn-sm" onclick="bulkSetMissingTrackStatus('wishlist')" title="Ajouter les morceaux sélectionnés à la wishlist morceaux">🎯 Wishlist</button>
+        <button class="btn btn-sm btn-accent" onclick="bulkAddMissingTracksToIsolated()" title="Ajouter les morceaux sélectionnés aux morceaux isolés">＋ Ajouter aux morceaux isolés</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearMissingTrackSelection()">Annuler la sélection</button>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:26px"><input type="checkbox" id="select-all-mtracks" onchange="toggleSelectAllMissingTracks(this.checked)" title="Sélectionner tout (page courante)"></th>
               <th>Titre</th>
               <th>Artiste</th>
               <th>Album</th>
@@ -888,37 +901,6 @@
     </div>
 
     <!-- ==================== ASSOC REVIEW ==================== -->
-    <div class="section" id="sec-assocreview">
-      <div class="toolbar" style="margin-bottom:12px">
-        <select id="filter-assoc-type" onchange="renderAssocReview()">
-			<option value="">Tous types</option>
-			<option value="discogs-num">Discogs ↔ Numérique</option>
-			<option value="rym">RYM ↔ Album</option>
-			<option value="lastfm">last.fm aliases</option>
-			<option value="broken">⚠️ Introuvables</option>
-		</select>
-        <input id="filter-assoc-q" type="text" placeholder="Artiste / Album…" oninput="renderAssocReview()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:200px"/>
-        <div class="toolbar-right">
-          <span id="assoc-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
-          <button class="btn btn-sm btn-danger" id="btn-delete-selected-assoc" onclick="deleteSelectedAssoc()" style="display:none">🗑 Supprimer la sélection</button>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:30px"><input type="checkbox" id="assoc-check-all" onchange="toggleAllAssoc(this)"></th>
-              <th>Type</th>
-              <th>Source (A)</th>
-              <th>Cible (B)</th>
-              <th style="width:100px"></th>
-            </tr>
-          </thead>
-          <tbody id="assoc-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-
     <!-- ==================== OK ALBUMS ==================== -->
     <div class="section" id="sec-ok-albums">
       <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums du dossier <code>Ok/</code> — écoutés, potentiellement à wishlist. Numériques uniquement si pas de CD Discogs.</p>
@@ -1131,6 +1113,13 @@
 
     <!-- ==================== IMPORT ==================== -->
     <div class="section" id="sec-import">
+      <div class="covers-toolbar" style="margin-bottom:16px">
+        <button class="covers-filter-btn active" id="import-tab-btn-sources" onclick="switchImportTab('sources')">📥 Sources</button>
+        <button class="covers-filter-btn" id="import-tab-btn-assoc" onclick="switchImportTab('assoc')">🔗 Associations <span id="nav-assoc-count" style="opacity:0.7">0</span></button>
+        <button class="covers-filter-btn" id="import-tab-btn-missingids" onclick="switchImportTab('missingids')">🆔 IDs manquants <span id="import-missingids-badge" style="opacity:0.7">0</span></button>
+      </div>
+
+      <div id="import-tab-sources">
       <div class="import-grid">
 
         <!-- DISCOGS -->
@@ -1264,6 +1253,63 @@
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
         </div>
         <div class="status" id="status-json-reimport" style="margin-top:6px"></div>
+      </div>
+      </div>
+
+      <!-- ASSOCIATIONS (déplacé depuis l'onglet dédié, v2026.07.12-17) -->
+      <div id="import-tab-assoc" style="display:none">
+        <div class="toolbar" style="margin-bottom:12px">
+          <select id="filter-assoc-type" onchange="renderAssocReview()">
+              <option value="">Tous types</option>
+              <option value="discogs-num">Discogs ↔ Numérique</option>
+              <option value="rym">RYM ↔ Album</option>
+              <option value="lastfm">last.fm aliases</option>
+              <option value="broken">⚠️ Introuvables</option>
+          </select>
+          <input id="filter-assoc-q" type="text" placeholder="Artiste / Album…" oninput="renderAssocReview()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:200px"/>
+          <div class="toolbar-right">
+            <span id="assoc-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+            <button class="btn btn-sm btn-danger" id="btn-delete-selected-assoc" onclick="deleteSelectedAssoc()" style="display:none">🗑 Supprimer la sélection</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:30px"><input type="checkbox" id="assoc-check-all" onchange="toggleAllAssoc(this)"></th>
+                <th>Type</th>
+                <th>Source (A)</th>
+                <th>Cible (B)</th>
+                <th style="width:100px"></th>
+              </tr>
+            </thead>
+            <tbody id="assoc-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- IDs MANQUANTS (nouveau, v2026.07.12-17) -->
+      <div id="import-tab-missingids" style="display:none">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:12px">
+          Albums sans ID Discogs ni MusicBrainz, et morceaux isolés sans MBID — recherche MusicBrainz intégrée (résultats cliquables) ou collage manuel d'un ID Discogs/MBID.
+        </p>
+        <div class="toolbar" style="margin-bottom:12px">
+          <input id="filter-missingids-q" type="text" placeholder="Artiste / titre…" oninput="renderMissingIds()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:220px"/>
+        </div>
+        <h3 style="font-size:14px;margin:0 0 8px">💿 Albums <span id="missingids-albums-counter" style="font-size:12px;color:var(--text3);font-weight:400"></span></h3>
+        <div class="table-wrap" style="margin-bottom:20px">
+          <table>
+            <thead><tr><th>Artiste / Album</th><th>Année</th><th style="width:200px">Actions</th></tr></thead>
+            <tbody id="missingids-albums-tbody"></tbody>
+          </table>
+        </div>
+        <h3 style="font-size:14px;margin:0 0 8px">🎧 Morceaux isolés <span id="missingids-tracks-counter" style="font-size:12px;color:var(--text3);font-weight:400"></span></h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Artiste / Titre</th><th style="width:200px">Actions</th></tr></thead>
+            <tbody id="missingids-tracks-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -1447,34 +1493,13 @@
       </div>
     </div>
 
-    <!-- PROCHAIN À ÉCOUTER -->
-    <div class="section" id="sec-nexttrack">
-      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:20px">
-        Suggestion pondérée : note RYM haute + jamais écouté (albums possédés) + priorité wishlist —
-        pour découvrir quoi écouter ensuite plutôt que quoi noter.
+    <!-- VUE ARTISTE -->
+    <div class="section" id="sec-artistview">
+      <div class="toolbar" style="margin-bottom:16px">
+        <input type="text" id="av-search" placeholder="Nom d'artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:13px;padding:8px 12px;border-radius:var(--radius);outline:none;flex:1;max-width:360px" onkeydown="if(event.key==='Enter'){event.preventDefault();searchArtistView();}">
+        <button class="btn btn-accent" onclick="searchArtistView()">🔍 Rechercher</button>
       </div>
-      <div id="nt-empty" style="display:none;text-align:center;padding:60px 20px;color:var(--text3)">
-        <div style="font-size:40px;margin-bottom:12px">🎧</div>
-        <div style="font-size:15px;color:var(--text2)">Rien à suggérer — tous les albums possédés ont déjà des écoutes connues, et la wishlist est vide.</div>
-      </div>
-      <div id="nt-card-wrap" style="display:none">
-        <div class="rate-session-card">
-          <div class="rate-session-cover" id="nt-cover"></div>
-          <div class="rate-session-info">
-            <div class="rate-session-title" id="nt-title"></div>
-            <div class="rate-session-artist" id="nt-artist"></div>
-            <div class="rate-session-meta" id="nt-meta"></div>
-            <div id="nt-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px"></div>
-            <div class="rate-session-actions" style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn" id="nt-listen-btn">▶️ Écouter sur YouTube Music</button>
-              <button class="btn btn-sm" id="nt-open-btn">📄 Ouvrir la fiche</button>
-            </div>
-            <div class="rate-session-nav">
-              <button class="btn btn-sm" onclick="ntSkipCurrent()">⏭ Suivant</button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <div id="av-content"></div>
     </div>
 
     <!-- ARTISTES SIMILAIRES (crédits MusicBrainz croisés avec la collection) -->
@@ -2092,7 +2117,7 @@
       <button class="btn btn-sm" onclick="closeIntegrityModal();openDupFinderModal()">🔍 Doublons potentiels</button>
       <button class="btn btn-sm" onclick="cleanupLastfmDuplicates()">🧹 Doublons last.fm</button>
       <button class="btn btn-sm btn-danger" onclick="resetLastfmCompletely()" title="Efface tout (Supabase + local) et repart de zéro depuis l'API last.fm — pour des écoutes qui restent doublées malgré une resync classique">☢️ Reset complet last.fm</button>
-      <button class="btn btn-sm" onclick="closeIntegrityModal();nav('assocreview');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
+      <button class="btn btn-sm" onclick="closeIntegrityModal();nav('import');switchImportTab('assoc');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openGenreCleanupModal()">🧬 Nettoyage des genres</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openArtistCleanupModal()">🧬 Nettoyage des artistes</button>
     </div>
@@ -2112,6 +2137,7 @@
     <p style="font-size:13px;color:var(--text2);margin-bottom:10px">
       Variantes probables détectées (casse, espaces, ponctuation, quasi-doublons) parmi les genres utilisés dans la collection.
       Choisis le libellé canonique par groupe puis fusionne — jamais automatique, une variante peut être volontaire.
+      La fusion verrouille 🔒 le genre des albums concernés, pour qu'elle tienne face au prochain réimport MusicBee.
     </p>
     <div id="genre-cleanup-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
     <div id="genre-cleanup-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
@@ -2129,6 +2155,7 @@
     <p style="font-size:13px;color:var(--text2);margin-bottom:10px">
       Variantes probables détectées (casse, espaces, inversion d'article "The X"/"X, The", quasi-doublons) parmi les artistes de la collection.
       Choisis le libellé canonique par groupe puis fusionne — jamais automatique, deux artistes proches peuvent être légitimement distincts (collaboration, homonyme).
+      La fusion verrouille 🔒 l'artiste des albums concernés, pour qu'elle tienne face au prochain réimport MusicBee.
     </p>
     <div id="artist-cleanup-counter" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
     <div id="artist-cleanup-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>
@@ -2152,6 +2179,29 @@
     <div id="merge-list" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:10px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeMergeAlbumModal()">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal liaison ID Discogs/MusicBrainz (onglet Import/Export → IDs manquants) -->
+<div class="modal-overlay" id="modal-link-id">
+  <div class="modal" style="width:520px">
+    <h2 id="link-id-modal-title">🆔 Lier un ID</h2>
+    <div id="link-id-title" style="font-size:13px;color:var(--text2);margin-bottom:14px"></div>
+
+    <a id="link-id-discogs-link" href="#" target="_blank" style="display:none;margin-bottom:12px" class="btn btn-sm">🔎 Chercher sur Discogs.com ↗</a>
+
+    <div id="link-id-mb-results" style="display:none;max-height:260px;overflow-y:auto;margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);padding:0 10px"></div>
+
+    <div class="form-row">
+      <label id="link-id-manual-label">Coller un ID manuellement</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="link-id-manual" placeholder="ID…" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();applyLinkIdManual();}">
+        <button class="btn btn-accent" onclick="applyLinkIdManual()">Appliquer</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeLinkIdModal()">Fermer</button>
     </div>
   </div>
 </div>

@@ -76,6 +76,18 @@ function stableAlbumId(artist, album, mb_release_id, discogs_id) {
   return base;
 }
 
+// Mélange Fisher-Yates in-place (retourne le même tableau pour chaînage) — utilisé notamment
+// par la Session notation (v2026.07.12-12, demandé par Antoine : ordre aléatoire plutôt que
+// trié par écoutes, pour que les albums/morceaux jamais écoutés aient autant de chances
+// d'apparaître en premier que les plus scrobblés).
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 // primaryFolder DOIT toujours être une fonction pure de folders[] (jamais un flag manuel —
 // confirmé par grep, aucun bouton UI ne l'écrit directement) — hiérarchie : discographie >
 // forsale > ok > stock > album. 'ok' prime sur 'stock' intentionnellement (cf. correctif
@@ -128,36 +140,76 @@ function _saveToStorageImpl() {
 // grosse collection — dans ce cas le cache reste simplement absent/partiel (silencieux, non
 // bloquant), connectSupabase() retombera sur un rechargement réseau complet comme avant ce
 // correctif. Supabase reste dans tous les cas la source de vérité, jamais ce cache.
+// 🐛 v2026.07.12-15 (Antoine, "Cache local non écrit" en boucle) : les 3 clés étaient écrites
+// dans UN SEUL try/catch — si LS_KEY (le plus gros, ~3 Mo albums+tracks+etc) dépassait le
+// quota, les 2 écritures suivantes (discotheque_lastfm, discotheque_rym — plus petites, plus
+// susceptibles de rentrer) n'étaient même pas tentées. Chaque clé a maintenant son propre
+// try/catch : un échec sur l'une n'empêche plus les autres. lastfmData/rymData servi aussi en
+// format compact délimité (\x1f) plutôt qu'un tableau d'objets JSON, même logique que
+// writeLastfmTracksCache() ci-dessus, pour un peu de marge en plus sur le quota partagé.
 function writeLocalCache() {
+  const now = new Date().toISOString();
   try {
-    const now = new Date().toISOString();
     const data = { albums, tracks, stockItems, associations, rymAssociations, wishlist, trackWishlist, notesToReport, trackNoteOverrides, trackYoutubeCache, listeningEvolution, listeningEvolutionComputedAt: _listeningEvolutionComputedAt, listeningHeatmap, listeningHeatmapComputedAt: _listeningHeatmapComputedAt, genreEvolution, genreEvolutionComputedAt: _genreEvolutionComputedAt, marketValueHistory, nextId, savedAt: now };
     localStorage.setItem(LS_KEY, JSON.stringify(data));
-    if (lastfmData.length) {
-      const compact = lastfmData.map(d => ({ a: d.artist, b: d.album, p: d.plays }));
-      localStorage.setItem('discotheque_lastfm', JSON.stringify(compact));
-    }
-    if (rymData.length) {
-      const compact = rymData.map(d => ({ a: d.artist, b: d.album, r: d.rating, o: d.ownership||'' }));
-      localStorage.setItem('discotheque_rym', JSON.stringify(compact));
-    }
   } catch(e) {
     console.warn('Cache local (localStorage) non écrit — quota probablement dépassé, prochain chargement retéléchargera tout —', e.message || e);
   }
+  try {
+    if (lastfmData.length) {
+      const payload = lastfmData.map(d => [d.artist, d.album, d.plays || 0].join('\x1f')).join('\n');
+      localStorage.setItem('discotheque_lastfm', payload);
+    }
+  } catch(e) {
+    console.warn('Cache local lastfm (albums) non écrit —', e.message || e);
+  }
+  try {
+    if (rymData.length) {
+      const payload = rymData.map(d => [d.artist, d.album, d.rating || 0, d.ownership || ''].join('\x1f')).join('\n');
+      localStorage.setItem('discotheque_rym', payload);
+    }
+  } catch(e) {
+    console.warn('Cache local RYM non écrit —', e.message || e);
+  }
 }
 
-// Cache séparé pour _lastfmTrackCounts (table lastfm_tracks, 100k+ lignes chez Antoine) — à part
+// Cache séparé pour _lastfmTrackCounts (table lastfm_tracks, 197k+ lignes chez Antoine) — à part
 // de writeLocalCache() car alimentée par un fetch en arrière-plan qui peut se terminer bien après
 // le reste (voir loadLastfmFromSupabase()), et volumineuse (tuples compacts plutôt qu'objets,
 // pour rester sous le quota localStorage autant que possible).
+// 🐛 v2026.07.12-15 (Antoine, "Cache local lastfm_tracks non écrit" en boucle) : sur 197k
+// morceaux, même en tuples JSON compacts [artist,track,album,plays], le poids sérialisé
+// dépasse ~9,6 Mo — au-dessus du quota localStorage typique (5-10 Mo, PARTAGÉ avec le reste
+// de l'app, cf. writeLocalCache) à lui seul. Résultat concret avant ce correctif : ce cache
+// n'était quasiment jamais écrit avec succès, donc l'optimisation d'egress de juillet
+// (sync_state.version, cf. v2026.07.10-33) ne jouait plus son rôle pour cette table — un
+// rechargement complet depuis Supabase (197k lignes) à chaque session, silencieusement.
+// 2 leviers : (1) sérialisation en une seule string délimitée par \x1f plutôt qu'un tableau de
+// tuples JSON — évite de répéter crochets/guillemets/virgules par ligne, ~25-30% plus compact
+// pour ce volume ; (2) si ça ne suffit toujours pas, réessaie avec un seuil d'écoutes minimum
+// croissant (0 → 1 → 2 → 3 → 5) plutôt que d'abandonner tout le cache d'un coup — mieux vaut
+// garder en cache les morceaux les plus écoutés (les plus utiles pour "Manquants — Morceaux"
+// et Session notation, déjà triés par écoutes) que perdre 100% du cache pour quelques milliers
+// d'entrées à 1 écoute qui ne remontent de toute façon jamais en tête des listes triées.
 function writeLastfmTracksCache() {
   try {
     const entries = Object.values(_lastfmTrackCounts || {});
     if (!entries.length) return;
-    const compact = entries.map(d => [d.artist, d.track, d.album || '', d.plays || 0]);
-    localStorage.setItem(LS_LASTFM_TRACKS_KEY, JSON.stringify(compact));
+    const sorted = entries.slice().sort((a, b) => (b.plays || 0) - (a.plays || 0));
+    const thresholds = [0, 1, 2, 3, 5];
+    for (const minPlays of thresholds) {
+      const subset = minPlays === 0 ? sorted : sorted.filter(d => (d.plays || 0) >= minPlays);
+      if (!subset.length) break;
+      const payload = subset.map(d => [d.artist, d.track, d.album || '', d.plays || 0].join('\x1f')).join('\n');
+      try {
+        localStorage.setItem(LS_LASTFM_TRACKS_KEY, payload);
+        if (minPlays > 0) console.warn(`Cache lastfm_tracks réduit à ${subset.length}/${entries.length} morceaux (≥${minPlays} écoute(s)) pour tenir sous le quota localStorage.`);
+        return;
+      } catch(e) { /* essai suivant avec un seuil plus élevé */ }
+    }
+    console.warn('Cache local lastfm_tracks non écrit — quota dépassé même réduit au maximum, prochain chargement retéléchargera tout.');
   } catch(e) {
-    console.warn('Cache local lastfm_tracks non écrit — quota probablement dépassé —', e.message || e);
+    console.warn('Cache local lastfm_tracks non écrit —', e.message || e);
   }
 }
 
@@ -1080,26 +1132,41 @@ async function loadLastfmFromSupabase() {
 function loadLastfmFromLocalStorage() {
   try {
     const raw = localStorage.getItem('discotheque_lastfm');
-    if (raw) {
+    if (!raw) return;
+    // Nouveau format délimité \x1f (v2026.07.12-15) ; repli sur l'ancien format JSON si un
+    // cache pré-existant de l'ancien format traîne encore (transition, se réécrit tout seul
+    // au prochain saveToStorage()).
+    if (raw[0] === '[') {
       const compact = JSON.parse(raw);
       lastfmData = compact.map(d => ({ artist: d.a || d.artist, album: d.b || d.album, plays: d.p || d.plays }));
+    } else {
+      lastfmData = raw.split('\n').filter(Boolean).map(line => {
+        const [artist, album, plays] = line.split('\x1f');
+        return { artist, album, plays: parseInt(plays, 10) || 0 };
+      });
     }
   } catch(e) {}
 }
 
-// Restaure _lastfmTrackCounts depuis le cache localStorage (tuples compacts, voir
-// writeLastfmTracksCache()) — reconstruit le même format de clé que
+// Restaure _lastfmTrackCounts depuis le cache localStorage (format délimité \x1f, voir
+// writeLastfmTracksCache() — v2026.07.12-15) — reconstruit le même format de clé que
 // loadLastfmFromSupabase()/importLastfmTracks() pour rester interchangeable.
 function loadLastfmTracksFromLocalStorage() {
   try {
     const raw = localStorage.getItem(LS_LASTFM_TRACKS_KEY);
     if (!raw) return false;
-    const compact = JSON.parse(raw);
     const counts = {};
-    compact.forEach(([artist, track, album, plays]) => {
+    raw.split('\n').forEach(line => {
+      if (!line) return;
+      const [artist, track, album, plays] = line.split('\x1f');
+      if (!artist || !track) return;
       const kt = normalizeKey(artist, track) + '|' + normalizeKey('', album || '');
-      counts[kt] = { artist, track, album: album || '', plays: plays || 0 };
+      counts[kt] = { artist, track, album: album || '', plays: parseInt(plays, 10) || 0 };
     });
+    // Ancien format (tableau JSON, jusqu'à v2026.07.12-14) tombe ici avec 0 entrée valide
+    // (pas de \x1f dans un JSON) — repli propre sur false plutôt que de prétendre avoir chargé
+    // un cache vide, l'appelant retombera sur le rechargement Supabase normal.
+    if (!Object.keys(counts).length) return false;
     _lastfmTrackCounts = counts;
     return true;
   } catch(e) { return false; }
@@ -1109,9 +1176,17 @@ function loadLastfmTracksFromLocalStorage() {
 function loadRymFromLocalStorage() {
   try {
     const raw = localStorage.getItem('discotheque_rym');
-    if (raw) {
+    if (!raw) return;
+    // Nouveau format délimité \x1f (v2026.07.12-15) ; repli sur l'ancien format JSON, même
+    // logique de transition que loadLastfmFromLocalStorage() ci-dessus.
+    if (raw[0] === '[') {
       const compact = JSON.parse(raw);
       rymData = compact.map(d => ({ artist: d.a || d.artist, album: d.b || d.album, rating: d.r || d.rating, ownership: d.o || d.ownership || '' }));
+    } else {
+      rymData = raw.split('\n').filter(Boolean).map(line => {
+        const [artist, album, rating, ownership] = line.split('\x1f');
+        return { artist, album, rating: parseFloat(rating) || 0, ownership: ownership || '' };
+      });
     }
   } catch(e) {}
 }
@@ -1377,7 +1452,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'assocreview', 'covers', 'completeness', 'audit', 'ratesession', 'nexttrack', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'journal', 'insights', 'import',
+  'missing', 'missing-tracks', 'rym', 'covers', 'completeness', 'audit', 'ratesession', 'artistview', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'journal', 'insights', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -1392,10 +1467,10 @@ function nav(id) {
     'all-tracks': 'Tous les morceaux', 'album-tracks': 'Morceaux des albums',
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
-    rym: 'RateYourMusic', assocreview: 'Associations', covers: 'Pochettes',
+    rym: 'RateYourMusic', covers: 'Pochettes',
     completeness: 'Complétude',
     audit: 'Audit collection',
-    ratesession: 'Session notation', nexttrack: 'Prochain à écouter', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
+    ratesession: 'Session notation', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1403,12 +1478,12 @@ function nav(id) {
     'all-tracks': 'Tous les morceaux (albums + isolés)', 'album-tracks': 'Pistes issues des albums MusicBee',
     tracks: 'Fichiers isolés (top titres)', 'track-wishlist': 'Morceaux à acquérir',
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
-    rym: 'Croisement collection & ratings', assocreview: 'Revue & correction des associations',
+    rym: 'Croisement collection & ratings',
     covers: 'Galerie & résolution des pochettes',
     completeness: 'Pochette / genre / note / tracklist — repérer les fiches négligées',
     audit: 'Vues globales : scores MB bas, écarts note/RYM, divergences Discogs/MusicBrainz, discographie manquante',
-    ratesession: 'Un album ou morceau non noté à la fois, priorisé par écoutes last.fm',
-    nexttrack: 'Suggestion pondérée : note RYM + jamais écouté + priorité wishlist',
+    ratesession: 'Un album ou morceau non noté à la fois, ordre aléatoire (albums possédés jamais écoutés inclus)',
+    artistview: 'Discographie MusicBrainz complète — possédés et manquants, notes et écoutes rapatriées',
     artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
     marketvalue: 'Estimation via le marketplace Discogs — indicatif, pas une cote officielle',
     loans: 'CD physiques actuellement prêtés',
@@ -1426,7 +1501,6 @@ function nav(id) {
   if (id === 'missing') renderMissing();
   if (id === 'rym') renderRYM();
   if (id === 'wishlist')      renderWishlist();
-  if (id === 'assocreview')   renderAssocReview();
   if (id === 'missing-tracks') renderMissingTracks();
   if (id === 'all-tracks')    renderAllTracks();
   if (id === 'album-tracks')  renderAlbumTracks();
@@ -1435,7 +1509,8 @@ function nav(id) {
   if (id === 'completeness') renderCompleteness();
   if (id === 'audit') renderAudit();
   if (id === 'ratesession') initRatingSession();
-  if (id === 'nexttrack') initNextToListen();
+  if (id === 'import') { renderAssocReview(); renderMissingIds(); }
+  if (id === 'artistview') renderArtistView();
   if (id === 'artistlinks') renderArtistLinks();
   if (id === 'marketvalue') renderMarketValue();
   if (id === 'loans') renderLoans();
@@ -1452,7 +1527,6 @@ function onSearch() {
   if (active === 'missing') renderMissing();
   if (active === 'rym') renderRYM();
   if (active === 'wishlist')      renderWishlist();
-  if (active === 'assocreview')   renderAssocReview();
   if (active === 'missing-tracks') renderMissingTracks();
   if (active === 'all-tracks')    renderAllTracks();
   if (active === 'album-tracks')  renderAlbumTracks();
@@ -2199,7 +2273,7 @@ function renderAlbums() {
           <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}${mbTypeBadge(a)}</div>
-            <div class="sub">${esc(a.artist)}${!isStock && a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
+            <div class="sub">${artistLink(a.artist)}${!isStock && a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
           </div>
         </div>
       </td>
@@ -3099,7 +3173,7 @@ function renderMissingTracks() {
 
   const tbody = document.getElementById('mtrack-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🎵</div>' +
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎵</div>' +
       (Object.keys(_lastfmTrackCounts).length ? 'Aucun résultat avec ces filtres.' : 'Lancez la "Sync morceaux complète" dans Import pour charger les données.') +
       '</div></td></tr>';
     return;
@@ -3127,6 +3201,7 @@ function renderMissingTracks() {
       ? ' <span style="font-size:10px;color:var(--amber)" title="Cet album est dans la wishlist albums">🎯💿</span>'
       : '';
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
+    <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-key="${sid(key)}" ${selectedMissingTrackKeys.has(key) ? 'checked' : ''} onchange="toggleMissingTrackSelected('${sid(key)}', this.checked)"></td>
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
     <td style="color:var(--text2);font-size:13px">${esc(d.artist)}</td>
     <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}${albumBadge}</td>
@@ -3139,9 +3214,12 @@ function renderMissingTracks() {
       <button class="btn btn-sm" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
     </td>
   </tr>`;
-  }).join('') + (list.length > 200 ? `<tr><td colspan="5" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
+  }).join('') + (list.length > 200 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
 
   renderMissingTracks._cache = slice;
+  const selAllCb = document.getElementById('select-all-mtracks');
+  if (selAllCb) selAllCb.checked = slice.length > 0 && slice.every(d => selectedMissingTrackKeys.has(normalizeKey(d.artist, d.track)));
+  renderMtrackBulkBar();
 }
 
 function addTrackFromMissingIdx(idx) {
@@ -3155,6 +3233,98 @@ function addTrackFromMissingIdx(idx) {
   saveToStorage();
   renderMissingTracks();
   toast(`Ajouté : ${d.artist} — ${d.track}`);
+}
+
+// ── Sélection multiple & actions de masse (last.fm — Morceaux) ──────────────────────────
+// Demandé par Antoine : jusqu'ici chaque action (🚫 Ignorer, 🎯 Wishlist, ＋ Ajouter) ne
+// s'appliquait qu'à une ligne à la fois — fastidieux sur une longue liste de morceaux écoutés
+// et jamais nettoyés depuis l'import last.fm. Même moule que la sélection multiple de l'onglet
+// Albums (selectedAlbumIds/renderBulkActionsBar) mais clé de sélection = normalizeKey(artiste,
+// titre) plutôt qu'un id — computeMissingTracks() reconstruit sa liste à chaque appel (pas
+// d'id stable), et la clé texte survit aux changements de filtre/tri entre deux sélections,
+// contrairement à un index de ligne qui redevient invalide dès qu'on retrie/filtre.
+let selectedMissingTrackKeys = new Set();
+
+function toggleMissingTrackSelected(keySid, checked) {
+  const key = unsid(keySid);
+  if (checked) selectedMissingTrackKeys.add(key); else selectedMissingTrackKeys.delete(key);
+  renderMtrackBulkBar();
+  const selAllCb = document.getElementById('select-all-mtracks');
+  if (selAllCb) {
+    const slice = renderMissingTracks._cache || [];
+    selAllCb.checked = slice.length > 0 && slice.every(d => selectedMissingTrackKeys.has(normalizeKey(d.artist, d.track)));
+  }
+}
+
+function toggleSelectAllMissingTracks(checked) {
+  const slice = renderMissingTracks._cache || [];
+  slice.forEach(d => {
+    const key = normalizeKey(d.artist, d.track);
+    if (checked) selectedMissingTrackKeys.add(key); else selectedMissingTrackKeys.delete(key);
+  });
+  renderMtrackBulkBar();
+  document.querySelectorAll('#mtrack-tbody .row-select').forEach(cb => { cb.checked = checked; });
+}
+
+function clearMissingTrackSelection() {
+  selectedMissingTrackKeys.clear();
+  renderMissingTracks();
+}
+
+function renderMtrackBulkBar() {
+  const n = selectedMissingTrackKeys.size;
+  const bar = document.getElementById('mtrack-bulk-bar');
+  if (!bar) return;
+  const countEl = document.getElementById('mtrack-bulk-count');
+  if (countEl) countEl.textContent = n ? `${n} morceau${n > 1 ? 'x' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+// Réutilise la même sémantique toggle que setMissingTrackStatus (ré-appliquer le même statut
+// à un morceau qui l'a déjà = le retirer) — cohérent avec le comportement ligne par ligne.
+function bulkSetMissingTrackStatus(status) {
+  if (!selectedMissingTrackKeys.size) return;
+  const byKey = new Map(computeMissingTracks().map(d => [normalizeKey(d.artist, d.track), d]));
+  let changed = 0, wishAdded = 0;
+  selectedMissingTrackKeys.forEach(key => {
+    const d = byKey.get(key);
+    if (!d) return; // sélection issue d'un filtre différent, morceau plus dans la liste courante
+    const current = _lastfmTrackStatus[key]?.status;
+    if (current === status) {
+      delete _lastfmTrackStatus[key];
+    } else {
+      if (!_lastfmTrackStatus[key]) _lastfmTrackStatus[key] = {};
+      _lastfmTrackStatus[key].status = status;
+      if (status === 'wishlist' && !trackWishlist.find(w => normalizeKey(w.artist, w.title) === key)) {
+        trackWishlist.push({ id: uid(), artist: d.artist, title: d.track, album: d.album || '', prio: 'mid', addedAt: Date.now() });
+        wishAdded++;
+      }
+    }
+    changed++;
+  });
+  persistLastfmTrackStatus();
+  if (wishAdded) { updateNavBadges(); saveToStorage(); }
+  invalidateCache();
+  clearMissingTrackSelection();
+  const label = status === 'ignored' ? 'ignoré(s)/réactivé(s)' : status === 'wishlist' ? 'ajouté(s)/retiré(s) de la wishlist' : status;
+  toast(`${changed} morceau(x) ${label}`);
+}
+
+function bulkAddMissingTracksToIsolated() {
+  if (!selectedMissingTrackKeys.size) return;
+  const byKey = new Map(computeMissingTracks().map(d => [normalizeKey(d.artist, d.track), d]));
+  let added = 0, skipped = 0;
+  selectedMissingTrackKeys.forEach(key => {
+    const d = byKey.get(key);
+    if (!d) return;
+    if (tracks.find(t => normalizeKey(t.artist, t.title) === key)) { skipped++; return; }
+    tracks.push({ id: uid(), title: d.track, artist: d.artist, album: d.album || '', format: 'mp3', duration: '', note: 0 });
+    added++;
+  });
+  invalidateCache();
+  saveToStorage();
+  clearMissingTrackSelection();
+  toast(`${added} morceau(x) ajouté(s) aux morceaux isolés${skipped ? ` — ${skipped} déjà présent(s)` : ''}`);
 }
 
 // ── Statuts morceaux last.fm ─────────────────────────────────────────────────
@@ -3520,7 +3690,7 @@ async function fetchCoverForModal() {
 let coverFilter = 'missing';
 let coverGalleryPage = 1;
 const COVERS_PAGE_SIZE = 60;
-let ratingQueue = []; // file d'ids albums non notés, triée par écoutes last.fm décroissantes
+let ratingQueue = []; // file d'ids albums non notés, ordre aléatoire (v2026.07.12-12)
 const COVER_LOWRES_THRESHOLD = 300; // px — en dessous, considéré basse résolution
 
 function ownedAlbumsForCovers() {
@@ -4314,7 +4484,7 @@ async function importMusicBeeXML(input) {
         const albumRating = parseRating(num(d, 'Album Rating'));
 		if (!grouped[key]) {
 		grouped[key] = { artist: effectiveArtist, album, year: year.slice(0,4), genre,
-			flac: false, mp3: false, digital: false, albumRating: 0, albumRatingCounts: {},
+			flac: false, mp3: false, digital: false, albumRating: 0,
 			isCompilation, trackArtists: [],
 			okFolder: false, forSaleFolder: false, discoFolder: false,
 			primaryFolder: folder === 'discographie' ? 'discographie'
@@ -4340,14 +4510,17 @@ async function importMusicBeeXML(input) {
         else grouped[key].digital = true;
         if (!grouped[key].year && year) grouped[key].year = year.slice(0,4);
         if (!grouped[key].genre && genre) grouped[key].genre = genre;
-        if (albumRating) {
-          grouped[key].albumRatingCounts[albumRating] = (grouped[key].albumRatingCounts[albumRating] || 0) + 1;
-          // Valeur la plus fréquente parmi les tags Album Rating de l'album (robuste face à un tag isolé non synchronisé)
-          let bestRating = 0, bestCount = 0;
-          for (const [val, cnt] of Object.entries(grouped[key].albumRatingCounts)) {
-            if (cnt > bestCount) { bestCount = cnt; bestRating = parseFloat(val); }
-          }
-          grouped[key].albumRating = bestRating;
+        // Prend directement le tag "Album Rating" tel qu'exporté par MusicBee — un seul, le
+        // 1er non nul rencontré (les pistes suivantes du même album n'écrasent plus rien).
+        // Avant (v2026.07.12-13) : agrégation par fréquence (valeur la plus fréquente parmi
+        // les tags des pistes, pour absorber un tag isolé désynchronisé) — trop indirect
+        // (l'album affiché n'était pas forcément CE que MusicBee affiche comme Album Rating)
+        // et le départage en cas d'égalité de fréquence n'était pas prévisible. Simplifié à la
+        // demande d'Antoine : "Album Rating" est déjà censé être identique sur toutes les
+        // pistes d'un même album côté MusicBee quand il est correctement synchronisé — inutile
+        // de recalculer, autant prendre directement la valeur telle quelle.
+        if (albumRating && !grouped[key].albumRating) {
+          grouped[key].albumRating = albumRating;
         }
         // Pour les compilations : collecter les artistes individuels (Array, pas de doublon)
         if (isCompilation && artist && artist !== 'Various Artists') {
@@ -4516,7 +4689,13 @@ async function importMusicBeeXML(input) {
         touchedAlbumIds.add(existing.id);
         // Mettre à jour toujours depuis XML
         if (g.year)  { existing.year  = g.year;  setProvenance(existing, 'year',  'musicbee'); }
-        if (g.genre) { existing.genre = g.genre; setProvenance(existing, 'genre', 'musicbee'); }
+        // Genre : respecte désormais le verrou manuel (v2026.07.12-14, demandé par Antoine) —
+        // jusqu'ici MusicBee écrasait le genre sans condition même verrouillé (seule exception
+        // au principe "un champ verrouillé n'est plus jamais écrasé"), ce qui annulait
+        // silencieusement les fusions du Nettoyage des genres au réimport suivant tant que le
+        // tag MusicBee lui-même n'était pas corrigé — impossible pour Antoine, qui n'est pas
+        // maître de la donnée MusicBee/Discogs (synchros avec leurs propres BDD).
+        if (g.genre && !isManualField(existing, 'genre')) { existing.genre = g.genre; setProvenance(existing, 'genre', 'musicbee'); }
         const newNote = g.albumRating;
         if (newNote) existing.note = newNote;
         if (fmt) existing.format = fmt;
@@ -4524,9 +4703,10 @@ async function importMusicBeeXML(input) {
         existing.flac    = existing.format === 'flac';
         existing.mp3     = existing.format === 'mp3';
         existing.digital = existing.format === 'digital';
-        // Normaliser artiste
+        // Normaliser artiste — respecte le verrou manuel (même raison que le genre ci-dessus),
+        // en plus de la protection déjà existante pour les albums avec discogsId.
         if (g.artist && normalizeKey(g.artist, '') !== normalizeKey(existing.artist, '')) {
-          if (!existing.discogsId) existing.artist = g.artist;
+          if (!existing.discogsId && !isManualField(existing, 'artist')) existing.artist = g.artist;
         }
         // Folders : 'ok' et 'discographie' sont purement dérivés du chemin physique du
         // fichier dans le XML courant (pas de flag manuel équivalent à forSale) — on les
@@ -6257,6 +6437,13 @@ async function searchMusicBrainz(artist, album) {
   return data.results || []; // [{ mb_release_id, score, title, artist, release_date, cover_url, ... }]
 }
 
+// Rechercher sur Discogs via Edge Function (v2026.07.12-18 — nécessite le déploiement de la
+// branche "discogs_search" de get-release-info.ts, DISCOGS_TOKEN déjà configuré côté serveur).
+async function searchDiscogs(artist, album) {
+  const data = await callEdgeFn({ source: 'discogs_search', artist, album });
+  return data.results || []; // [{ id, title, year, format, label, country, thumb }]
+}
+
 // Récupérer tracklist MusicBrainz par ID via Edge Function
 async function fetchMusicBrainzRelease(mbId) {
   const data = await callEdgeFn({ source: 'musicbrainz', mb_id: mbId });
@@ -6326,7 +6513,7 @@ async function saveTracklist(albumId, tracks_) {
 // plusieurs sources sans traçabilité. field_provenance = { [champ]: { source, synced_at } }
 // distingue une valeur manuelle (jamais écrasée par un import/enrichissement auto)
 // d'une valeur auto (rafraîchissable, avec indicateur de fraîcheur).
-const PROVENANCE_FIELDS = ['year', 'genre', 'cover_url', 'label'];
+const PROVENANCE_FIELDS = ['year', 'genre', 'artist', 'cover_url', 'label'];
 const PROVENANCE_SOURCE_LABELS = {
   manual:      'Manuel',
   discogs:     'Discogs',
@@ -8228,7 +8415,7 @@ function renderWishlist() {
     <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${w.id}" ${selectedWishIds.has(w.id) ? 'checked' : ''} onchange="toggleWishSelected(${w.id}, this.checked)"></td>
     <td>
       <div style="font-weight:500">${esc(w.album)}</div>
-      <div style="font-size:12px;color:var(--text2)">${esc(w.artist)}</div>
+      <div style="font-size:12px;color:var(--text2)">${artistLink(w.artist)}</div>
     </td>
     <td class="mono">${w.year || '–'}</td>
     <td style="font-size:12px">${srcLabel[w.source] || w.source}</td>
@@ -8822,7 +9009,7 @@ function renderDiscographie() {
           <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}${mbTypeBadge(a)}</div>
-            <div class="sub">${esc(a.artist)}</div>
+            <div class="sub">${artistLink(a.artist)}</div>
           </div>
         </div>
       </td>
@@ -11746,12 +11933,22 @@ function mergeGenreCluster(clusterIndex, key) {
   if (!variantGenres.size) { toast('Rien à fusionner (déjà uniforme)', 'warn'); return; }
 
   snapshotForUndo(`Genres fusionnés vers "${canon}" (${[...variantGenres].join(', ')})`);
-  let fixed = 0;
-  albums.forEach(a => { if (a.genre && variantGenres.has(a.genre)) { a.genre = canon; fixed++; } });
+  // Toutes les valeurs du groupe (variantes + canon lui-même) — sert à verrouiller aussi les
+  // albums déjà sur la valeur canonique, pas seulement ceux qu'on vient de changer.
+  const allClusterGenres = new Set(cluster.variants.map(v => v.genre));
+  let fixed = 0, locked = 0;
+  albums.forEach(a => {
+    if (!a.genre || !allClusterGenres.has(a.genre)) return;
+    if (a.genre !== canon) { a.genre = canon; fixed++; }
+    // Verrouille pour que ça tienne face au prochain réimport MusicBee (v2026.07.12-14,
+    // demandé par Antoine — n'étant pas maître de la donnée MusicBee, une fusion non
+    // verrouillée était silencieusement annulée dès que MusicBee réexportait l'ancien tag).
+    if (!isManualField(a, 'genre')) { setProvenance(a, 'genre', 'manual'); locked++; }
+  });
   invalidateCache();
   saveToStorage();
   updateNavBadges();
-  toast(`${fixed} album(s) reclassé(s) vers "${canon}" ✓`);
+  toast(`${fixed} album(s) reclassé(s) et ${locked} verrouillé(s) vers "${canon}" ✓`);
   renderGenreCleanup();
 }
 
@@ -11889,12 +12086,23 @@ function mergeArtistCluster(clusterIndex, key) {
   if (!variantArtists.size) { toast('Rien à fusionner (déjà uniforme)', 'warn'); return; }
 
   snapshotForUndo(`Artistes fusionnés vers "${canon}" (${[...variantArtists].join(', ')})`);
-  let fixed = 0;
-  albums.forEach(a => { if (a.artist && variantArtists.has(a.artist)) { a.artist = canon; fixed++; } });
+  // Toutes les valeurs du groupe (variantes + canon lui-même) — sert à verrouiller aussi les
+  // albums déjà sur la valeur canonique, pas seulement ceux qu'on vient de changer.
+  const allClusterArtists = new Set(cluster.variants.map(v => v.artist));
+  let fixed = 0, locked = 0;
+  albums.forEach(a => {
+    if (!a.artist || !allClusterArtists.has(a.artist)) return;
+    if (a.artist !== canon) { a.artist = canon; fixed++; }
+    // Verrouille pour que ça tienne face au prochain réimport MusicBee (v2026.07.12-14,
+    // demandé par Antoine — même raison que pour le genre). Les albums avec discogsId étaient
+    // déjà protégés (Discogs fait autorité sur l'artiste), le verrou protège maintenant aussi
+    // les albums Stock/numériques purs qui n'ont pas cette protection.
+    if (!isManualField(a, 'artist')) { setProvenance(a, 'artist', 'manual'); locked++; }
+  });
   invalidateCache();
   saveToStorage();
   updateNavBadges();
-  toast(`${fixed} album(s) reclassé(s) vers "${canon}" ✓`);
+  toast(`${fixed} album(s) reclassé(s) et ${locked} verrouillé(s) vers "${canon}" ✓`);
   renderArtistCleanup();
 }
 
@@ -13039,19 +13247,25 @@ function listenToAlbumTrack(encodedAlbumId, encodedTitle, encodedMbId) {
 let ratingSessionMode = 'albums'; // 'albums' | 'tracks' | 'scrobbles'
 let ratingQueueTracks = [];
 
+// Todo-adjacent (demandé par Antoine, session du 12/07/2026) : ordre aléatoire complet plutôt
+// que trié par écoutes décroissantes — l'ancien tri reléguait structurellement les albums/
+// morceaux jamais écoutés (0 écoute) en toute fin de file, ils n'étaient donc quasiment jamais
+// proposés à la notation. "Prochain à écouter" (onglet séparé, suggestion pondérée note RYM +
+// wishlist) est supprimé à la demande d'Antoine : son rôle de surfacer les albums possédés
+// jamais écoutés est repris ici par le simple fait qu'ils ont maintenant une chance égale à
+// tous les autres de sortir en premier (ils étaient déjà dans cette file avant, comme tout
+// album non noté — seul le tri les enterrait). La wishlist n'a jamais fait partie de cette
+// file et n'y entre toujours pas (Session notation ne note que des éléments POSSÉDÉS).
 function buildRatingQueue() {
-  return ownedAlbumsForCovers()
-    .filter(a => !a.note)
-    .sort((a, b) => (b.plays || 0) - (a.plays || 0))
-    .map(a => a.id);
+  return shuffleArray(
+    ownedAlbumsForCovers().filter(a => !a.note).map(a => a.id)
+  );
 }
 
 function buildRatingQueueTracks() {
-  const lfExact = getLfExactMap();
-  return tracks
-    .filter(t => !t.note)
-    .sort((a, b) => (lfExact.get(normalizeKey(b.artist, b.title)) || 0) - (lfExact.get(normalizeKey(a.artist, a.title)) || 0))
-    .map(t => t.id);
+  return shuffleArray(
+    tracks.filter(t => !t.note).map(t => t.id)
+  );
 }
 
 // Note actuelle d'une piste d'album (override utilisateur sinon note MusicBee/Discogs importée) —
@@ -13065,105 +13279,6 @@ function getAlbumTrackRating(albumId, title) {
   if (mbT) return mbT.rating || 0;
   const dT = atracks.find(t => t.source === 'discogs' && t.title === title);
   return dT?.rating || 0;
-}
-
-// ===================== "PROCHAIN À ÉCOUTER" =====================
-// Todo section 11, item ⬜ « "Prochain à écouter" : suggestion pondérée note RYM haute + jamais
-// écouté + priorité wishlist, pendant écoute — logique proche de celle déjà en place pour la
-// Session notation. » Même principe de carte/file unique que la Session notation (buildRatingQueue)
-// mais objectif inverse : la Session notation priorise ce qui est DÉJÀ beaucoup écouté et pas
-// encore noté, ici on cherche quoi écouter ENSUITE.
-// Candidats : (1) albums possédés jamais écoutés (a.plays === 0/falsy côté last.fm) — "jamais
-// écouté" devient un filtre d'éligibilité plutôt qu'une simple pondération continue, plus lisible
-// que d'essayer de comparer 0 écoute à 1 écoute sur une échelle continue ; (2) entrées wishlist
-// (pas encore possédées, écouter avant d'acheter). Score combiné : note RYM (0–5, facteur
-// dominant ×2, "note RYM haute") + bonus priorité wishlist (🔴 haute +3 / 🟡 moyenne +1.5 /
-// 🟢 basse +0.5 — uniquement pour les entrées wishlist, les albums possédés n'ont pas cette
-// notion de priorité). Recalculée à chaque ouverture de l'écran, jamais persistée (comme
-// ratingQueue) — les 2 informations sources (plays, wishlist) sont déjà à jour dans l'état de l'app.
-const NEXTTRACK_WISH_PRIO_BONUS = { high: 3, mid: 1.5, low: 0.5 };
-const NEXTTRACK_PRIO_LABEL = { high: 'haute', mid: 'moyenne', low: 'basse' };
-
-let nextToListenQueue = []; // [{ source:'owned'|'wishlist', id, score, rymRating }]
-
-function _nextToListenRym(artist, album, albumId) {
-  return (lookupRym(artist, album, albumId) || lookupRym(cleanDiscogsArtist(artist), album, albumId))?.rating || 0;
-}
-
-function buildNextToListenQueue() {
-  const owned = ownedAlbumsForCovers()
-    .filter(a => !a.plays)
-    .map(a => {
-      const rymRating = _nextToListenRym(a.artist, a.album, a.id);
-      return { source: 'owned', id: a.id, score: rymRating * 2, rymRating };
-    });
-  const wish = wishlist.map(w => {
-    const rymRating = _nextToListenRym(w.artist, w.album);
-    const bonus = NEXTTRACK_WISH_PRIO_BONUS[w.prio] || 0;
-    return { source: 'wishlist', id: w.id, score: rymRating * 2 + bonus, rymRating };
-  });
-  return [...owned, ...wish].sort((x, y) =>
-    y.score - x.score || (x.source === 'owned' ? 0 : 1) - (y.source === 'owned' ? 0 : 1)
-  );
-}
-
-function initNextToListen() {
-  nextToListenQueue = buildNextToListenQueue();
-  renderNextToListen();
-}
-
-function ntSkipCurrent() {
-  nextToListenQueue.shift();
-  renderNextToListen();
-}
-
-function renderNextToListen() {
-  // Retirer de la file les entrées devenues invalides entretemps (album désormais écouté ou
-  // supprimé ailleurs dans l'app, entrée wishlist supprimée/acquise) — même filet de sécurité
-  // que ratingQueue dans renderRatingSession().
-  nextToListenQueue = nextToListenQueue.filter(entry => {
-    if (entry.source === 'owned') { const a = albums.find(x => x.id === entry.id); return a && !a.plays; }
-    return wishlist.some(w => w.id === entry.id);
-  });
-
-  const emptyEl = document.getElementById('nt-empty');
-  const cardEl = document.getElementById('nt-card-wrap');
-  if (!nextToListenQueue.length) {
-    if (emptyEl) emptyEl.style.display = 'block';
-    if (cardEl) cardEl.style.display = 'none';
-    return;
-  }
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (cardEl) cardEl.style.display = 'block';
-
-  const entry = nextToListenQueue[0];
-  const a = entry.source === 'owned' ? albums.find(x => x.id === entry.id) : null;
-  const w = entry.source === 'wishlist' ? wishlist.find(x => x.id === entry.id) : null;
-  if (!a && !w) { nextToListenQueue.shift(); renderNextToListen(); return; }
-  const artist = a ? a.artist : w.artist;
-  const album  = a ? a.album  : w.album;
-
-  document.getElementById('nt-cover').innerHTML = a ? albumAvatar(a) : initials(artist || '?');
-  document.getElementById('nt-title').textContent = album;
-  document.getElementById('nt-artist').textContent = artist;
-  document.getElementById('nt-meta').textContent = a ? [a.year, a.genre].filter(Boolean).join(' · ') : (w.year || '');
-
-  const badges = [];
-  badges.push(a
-    ? `<span class="badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(200,240,100,0.2)">💿 Possédé — jamais écouté</span>`
-    : `<span class="badge" style="background:var(--purple-dim);color:var(--purple);border:1px solid rgba(176,140,255,0.2)">🎯 Wishlist</span>`);
-  if (w?.prio) badges.push(`<span class="badge" style="background:rgba(255,255,255,0.06);color:var(--text2);border:1px solid var(--border2)">${({high:'🔴',mid:'🟡',low:'🟢'})[w.prio] || ''} priorité ${esc(NEXTTRACK_PRIO_LABEL[w.prio] || w.prio)}</span>`);
-  if (entry.rymRating) badges.push(`<span class="badge" style="background:var(--amber-dim);color:var(--amber);border:1px solid rgba(255,192,96,0.2)">⭐ ${entry.rymRating.toFixed(2)} RYM</span>`);
-  document.getElementById('nt-badges').innerHTML = badges.join('');
-
-  const listenBtn = document.getElementById('nt-listen-btn');
-  if (listenBtn) listenBtn.onclick = () => a ? openYouTubeMusicForAlbum(a) : openYouTubeMusicSearch(artist, album);
-
-  const openBtn = document.getElementById('nt-open-btn');
-  if (openBtn) {
-    openBtn.style.display = a ? 'inline-block' : 'none';
-    if (a) openBtn.onclick = () => editAlbum(sid(a.id));
-  }
 }
 
 // ===================== ARTISTES SIMILAIRES (crédits MusicBrainz croisés) =====================
@@ -13230,8 +13345,8 @@ function renderArtistLinks() {
   tbody.innerHTML = list.map(c => {
     const label = MB_CREDIT_ROLE_LABELS[c.role] || (c.role.charAt(0).toUpperCase() + c.role.slice(1));
     return `<tr>
-      <td style="font-weight:500">${esc(c.fromArtist)}</td>
-      <td style="font-weight:500">${esc(c.toArtist)}</td>
+      <td style="font-weight:500">${artistLink(c.fromArtist)}</td>
+      <td style="font-weight:500">${artistLink(c.toArtist)}</td>
       <td style="font-size:12px;color:var(--text2)">${esc(label)}</td>
       <td onclick="editAlbum('${sid(c.albumId)}')" style="cursor:pointer;font-size:12px;color:var(--text3)">${esc(c.album)}</td>
     </tr>`;
@@ -14213,7 +14328,7 @@ function resetMbMatch(albumIdSid) {
 // ===================== PANNEAU PROVENANCE DES CHAMPS =====================
 // Todo section 2 — remplace le besoin de boutons ad hoc par champ/source (comme
 // refreshMbYearGenres) par un panneau générique dans la fiche album.
-const PROVENANCE_FIELD_LABELS = { year: 'Année', genre: 'Genre', cover_url: 'Pochette', label: 'Label' };
+const PROVENANCE_FIELD_LABELS = { year: 'Année', genre: 'Genre', artist: 'Artiste', cover_url: 'Pochette', label: 'Label' };
 
 function renderProvenancePanel(albumId) {
   const wrap = document.getElementById('modal-field-provenance');
@@ -14758,6 +14873,373 @@ function renderAudit() {
     const n = ownedArtistsList().length;
     discogBtn.textContent = `🔍 Scanner la discographie (${n} artistes, ~${Math.ceil(n * 2.4 / 60)} min)`;
   }
+}
+
+// ===================== IMPORT/EXPORT — SOUS-ONGLETS =====================
+// Demandé par Antoine : bascule "Associations" (ex-onglet top-level dédié) dans Import/Export,
+// et ajoute un nouveau sous-onglet "IDs manquants". Même pattern de bascule que Session
+// notation (boutons covers-filter-btn) plutôt qu'un vrai système de nav — ce sont 3 vues
+// mutuellement exclusives DANS le même écran, pas 3 destinations de navigation distinctes.
+function switchImportTab(tab) {
+  ['sources', 'assoc', 'missingids'].forEach(t => {
+    const el = document.getElementById('import-tab-' + t);
+    if (el) el.style.display = t === tab ? '' : 'none';
+    const btn = document.getElementById('import-tab-btn-' + t);
+    if (btn) btn.classList.toggle('active', t === tab);
+  });
+  if (tab === 'assoc') renderAssocReview();
+  if (tab === 'missingids') renderMissingIds();
+}
+
+// ===================== IDs MANQUANTS =====================
+// Demandé par Antoine : albums sans discogsId NI mb_release_id, et morceaux isolés sans
+// mb_recording_id — avec une interface de recherche (MusicBrainz, en direct, résultats
+// cliquables) ou de collage manuel d'un ID (Discogs ou MBID).
+// MusicBrainz : recherche live via l'API publique (release pour un album, recording pour un
+// morceau) — même principe que la recherche artiste de "Discographie manquante", aucun
+// changement d'Edge Function nécessaire. Discogs : pas de recherche live possible sans passer
+// par l'Edge Function (CORS + token) — get-release-info.ts n'a actuellement qu'un mode "fetch
+// par ID connu", pas de mode recherche. Plutôt que de supposer un endpoint qui n'existe peut-
+// être pas, on ouvre la recherche Discogs.com dans un nouvel onglet (préremplie) et on colle
+// l'ID trouvé manuellement — fonctionne immédiatement, sans dépendre d'un déploiement Edge
+// Function supplémentaire. Un vrai mode recherche Discogs pourrait être ajouté plus tard côté
+// Edge Function si utile (branche "discogs_search" sur /database/search).
+function albumsWithoutIds() {
+  return albums.filter(a => !a.discogsId && !a.mb_release_id);
+}
+function tracksWithoutMbid() {
+  return tracks.filter(t => !t.mb_recording_id);
+}
+
+function renderMissingIds() {
+  const q = (document.getElementById('filter-missingids-q')?.value || '').toLowerCase().trim();
+  const albumRows = albumsWithoutIds().filter(a => !q || (a.artist + ' ' + a.album).toLowerCase().includes(q));
+  const trackRows = tracksWithoutMbid().filter(t => !q || (t.artist + ' ' + t.title).toLowerCase().includes(q));
+
+  const badge = document.getElementById('import-missingids-badge');
+  if (badge) badge.textContent = albumsWithoutIds().length + tracksWithoutMbid().length;
+  const ac = document.getElementById('missingids-albums-counter');
+  if (ac) ac.textContent = `(${albumRows.length})`;
+  const tc = document.getElementById('missingids-tracks-counter');
+  if (tc) tc.textContent = `(${trackRows.length})`;
+
+  const albumsTbody = document.getElementById('missingids-albums-tbody');
+  if (albumsTbody) {
+    const slice = albumRows.slice(0, 200);
+    albumsTbody.innerHTML = slice.map(a => `<tr>
+      <td><div style="font-weight:500">${esc(a.album)}</div><div style="font-size:11px;color:var(--text3)">${esc(a.artist)}</div></td>
+      <td class="mono">${a.year || '–'}</td>
+      <td style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="openLinkIdModal('album','${sid(a.id)}','mb_release_id')">🔍 MusicBrainz</button>
+        <button class="btn btn-sm" onclick="openLinkIdModal('album','${sid(a.id)}','discogsId')">🔗 Discogs</button>
+      </td>
+    </tr>`).join('') || `<tr><td colspan="3"><div class="empty" style="padding:20px"><div class="empty-icon">✅</div>${q ? 'Aucun résultat pour ce filtre.' : 'Tous les albums ont un ID Discogs ou MusicBrainz.'}</div></td></tr>`;
+    if (albumRows.length > 200) albumsTbody.innerHTML += `<tr><td colspan="3" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… et ${(albumRows.length - 200).toLocaleString('fr-FR')} autres — affine la recherche</td></tr>`;
+  }
+
+  const tracksTbody = document.getElementById('missingids-tracks-tbody');
+  if (tracksTbody) {
+    const slice = trackRows.slice(0, 200);
+    tracksTbody.innerHTML = slice.map(t => `<tr>
+      <td><div style="font-weight:500">${esc(t.title)}</div><div style="font-size:11px;color:var(--text3)">${esc(t.artist)}</div></td>
+      <td><button class="btn btn-sm" onclick="openLinkIdModal('track','${sid(t.id)}','mb_recording_id')">🔍 MusicBrainz</button></td>
+    </tr>`).join('') || `<tr><td colspan="2"><div class="empty" style="padding:20px"><div class="empty-icon">✅</div>${q ? 'Aucun résultat pour ce filtre.' : 'Tous les morceaux isolés ont un MBID.'}</div></td></tr>`;
+    if (trackRows.length > 200) tracksTbody.innerHTML += `<tr><td colspan="2" style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… et ${(trackRows.length - 200).toLocaleString('fr-FR')} autres — affine la recherche</td></tr>`;
+  }
+}
+
+// ── Modale de liaison (recherche MusicBrainz live ou collage manuel) ──────────────────────
+let _linkIdTarget = null; // { type:'album'|'track', id, artist, title, field }
+let _linkIdResults = [];
+
+async function openLinkIdModal(type, idSid, field) {
+  const id = unsid(idSid);
+  const entity = type === 'album' ? albums.find(a => a.id === id) : tracks.find(t => t.id === id);
+  if (!entity) return;
+  const artist = entity.artist;
+  const title = type === 'album' ? entity.album : entity.title;
+  _linkIdTarget = { type, id, artist, title, field };
+
+  document.getElementById('link-id-modal-title').textContent = field === 'discogsId' ? '🔗 Lier à Discogs' : '🆔 Lier à MusicBrainz';
+  document.getElementById('link-id-title').textContent = `${artist} — ${title}`;
+  document.getElementById('link-id-manual').value = '';
+
+  const discogsLink = document.getElementById('link-id-discogs-link');
+  const manualLabel = document.getElementById('link-id-manual-label');
+
+  // Le lien externe Discogs.com reste affiché même avec la recherche intégrée — utile en
+  // repli si la recherche ne trouve pas la bonne édition précise (variante/pressage).
+  discogsLink.style.display = field === 'discogsId' ? 'inline-block' : 'none';
+  if (field === 'discogsId') {
+    discogsLink.href = `https://www.discogs.com/search/?q=${encodeURIComponent(artist + ' ' + title)}&type=release`;
+  }
+  manualLabel.textContent = field === 'discogsId'
+    ? 'Ou coller l\'ID Discogs manuellement (numérique, trouvé dans l\'URL de la release)'
+    : 'Ou coller un MBID MusicBrainz manuellement';
+
+  document.getElementById('modal-link-id').classList.add('open');
+  await searchLinkIdResults();
+}
+
+// Recherche unifiée — 3 chemins selon le champ à lier : Discogs (Edge Function, v2026.07.12-18)
+// et MusicBrainz release (Edge Function, réutilise searchMusicBrainz() déjà existant) passent
+// par le serveur (auth Discogs / rate-limit MusicBrainz géré côté Edge Function) ; MusicBrainz
+// recording (morceaux) reste en appel direct côté client — l'API MusicBrainz publique est
+// directement joignable sans CORS pour la recherche (déjà le cas ailleurs dans l'app, ex.
+// Discographie manquante) et il n'existe pas encore de branche Edge Function pour ça.
+// Les résultats sont normalisés en {resultId, title, subtitle} quelle que soit la source, pour
+// un rendu et une application uniques (applyLinkIdResult).
+async function searchLinkIdResults() {
+  const t = _linkIdTarget;
+  if (!t) return;
+  const resEl = document.getElementById('link-id-mb-results');
+  resEl.style.display = 'block';
+  const sourceLabel = t.field === 'discogsId' ? 'Discogs' : 'MusicBrainz';
+  resEl.innerHTML = `<div style="padding:12px;color:var(--text3);font-size:12px">Recherche ${sourceLabel}…</div>`;
+  try {
+    let normalized = [];
+    if (t.field === 'discogsId') {
+      const results = await searchDiscogs(t.artist, t.title);
+      normalized = results.map(r => ({
+        resultId: r.id,
+        title: r.title,
+        subtitle: [r.year, r.format, r.label, r.country].filter(Boolean).join(' · '),
+      }));
+    } else if (t.field === 'mb_release_id') {
+      const results = await searchMusicBrainz(t.artist, t.title);
+      normalized = results.map(r => ({
+        resultId: r.mb_release_id,
+        title: r.title + (r.disambiguation ? ` — ${r.disambiguation}` : ''),
+        subtitle: [r.artist, r.release_date, r.country, r.label].filter(Boolean).join(' · '),
+      }));
+    } else { // mb_recording_id — appel direct MusicBrainz public, pas de branche Edge Function
+      const q = `artist:"${t.artist}" AND recording:"${t.title}"`;
+      const res = await fetch(`https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(q)}&fmt=json&limit=10`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      normalized = (data.recordings || []).map(r => ({
+        resultId: r.id,
+        title: r.title + (r.disambiguation ? ` — ${r.disambiguation}` : ''),
+        subtitle: [(r['artist-credit'] || []).map(c => c.name).join(', '), r.length ? Math.round(r.length/1000)+'s' : ''].filter(Boolean).join(' · '),
+      }));
+    }
+    _linkIdResults = normalized;
+    if (!normalized.length) {
+      resEl.innerHTML = `<div style="padding:12px;color:var(--text3);font-size:12px">Aucun résultat ${sourceLabel} — essaie de coller un ID manuellement ci-dessous.</div>`;
+      return;
+    }
+    resEl.innerHTML = normalized.map((r, i) => `<div style="padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="applyLinkIdResult(${i})">
+        <div style="font-weight:500;font-size:13px">${esc(r.title)}</div>
+        <div style="font-size:11px;color:var(--text3)">${esc(r.subtitle)}</div>
+      </div>`).join('');
+  } catch (e) {
+    resEl.innerHTML = `<div style="padding:12px;color:var(--red);font-size:12px">Erreur ${sourceLabel} : ${esc(e.message || e)}${t.field === 'discogsId' ? ' — vérifie que la branche discogs_search est bien déployée sur l\'Edge Function' : ''}</div>`;
+  }
+}
+
+function applyLinkIdResult(i) {
+  const r = _linkIdResults[i];
+  if (!r) return;
+  applyLinkId(r.resultId);
+}
+
+function applyLinkIdManual() {
+  const val = (document.getElementById('link-id-manual').value || '').trim();
+  if (!val) return;
+  applyLinkId(val);
+}
+
+function applyLinkId(value) {
+  const t = _linkIdTarget;
+  if (!t) return;
+  const entity = t.type === 'album' ? albums.find(a => a.id === t.id) : tracks.find(x => x.id === t.id);
+  if (!entity) return;
+  entity[t.field] = value;
+  invalidateCache();
+  saveToStorage();
+  closeLinkIdModal();
+  renderMissingIds();
+  toast(`Lié : ${t.artist} — ${t.title}${t.type === 'album' ? ' — ouvre la fiche pour rafraîchir les métadonnées' : ''}`);
+  if (t.type === 'album') editAlbum(sid(t.id));
+}
+
+function closeLinkIdModal() {
+  document.getElementById('modal-link-id').classList.remove('open');
+  _linkIdTarget = null;
+}
+document.getElementById('modal-link-id').addEventListener('click', function(e) {
+  if (e.target === this) closeLinkIdModal();
+});
+
+// ===================== VUE ARTISTE =====================
+// Demandé par Antoine suite à une discussion sur "Divergences Discogs/MusicBrainz" et
+// "Complétion de discographie" (Audit collection) : une vue centrée sur UN artiste, qui
+// s'appuie sur MusicBrainz pour lister toute sa discographie (albums possédés ET manquants)
+// et y rapatrie ce que l'app sait déjà (note perso, note RYM, écoutes last.fm, statut wishlist).
+// Réutilise le même pattern de fetch que searchMissingDiscography() (recherche artiste puis
+// release-groups, 2 appels MusicBrainz publics non-authentifiés) mais construit une liste
+// FUSIONNÉE (pas juste les manquants) avec les stats déjà en mémoire côté possédé/RYM/last.fm.
+// Chargement automatique à l'ouverture de la vue (à la demande d'Antoine) — contrairement aux
+// scans en masse de l'Audit, une recherche par artiste ne coûte que 2 requêtes, un délai à
+// l'ouverture reste raisonnable.
+// Nom d'artiste cliquable → ouvre la Vue Artiste. stopPropagation() systématique car utilisé
+// dans des lignes de tableau qui ont elles-mêmes un onclick (ouverture de la fiche album) —
+// cliquer spécifiquement sur le nom doit ouvrir la Vue Artiste, pas la fiche.
+function artistLink(name) {
+  if (!name) return '';
+  return `<span onclick="event.stopPropagation();openArtistView('${sid(name)}')" style="cursor:pointer" title="Voir la Vue Artiste">${esc(name)}</span>`;
+}
+
+let _artistViewData = null; // { mbArtist, rows, stats, notFound }
+let _artistViewLoading = false;
+
+// Agrégats côté données déjà en mémoire (albums possédés, écoutes, notes) pour cet artiste —
+// toutes variantes de nom confondues (artistVariants(), même mécanisme que le reste de l'app).
+function computeArtistAggregates(artist) {
+  const variants = artistVariants(artist);
+  const inVariants = (name) => [...artistVariants(name)].some(v => variants.has(v));
+  const ownedAlbums = albums.filter(a => a.artist && inVariants(a.artist));
+  const albumPlays = ownedAlbums.reduce((s, a) => s + (a.plays || 0), 0);
+  const trackPlays = Object.values(_lastfmTrackCounts).filter(t => inVariants(t.artist)).reduce((s, t) => s + (t.plays || 0), 0);
+  const rated = ownedAlbums.filter(a => a.note);
+  return {
+    ownedCount: ownedAlbums.length,
+    totalPlays: albumPlays + trackPlays,
+    avgNote: rated.length ? rated.reduce((s, a) => s + a.note, 0) / rated.length : null,
+    ratedCount: rated.length,
+    genres: [...new Set(ownedAlbums.map(a => a.genre).filter(Boolean))],
+  };
+}
+
+async function openArtistView(artistSid) {
+  const artist = unsid(artistSid);
+  nav('artistview');
+  const input = document.getElementById('av-search');
+  if (input) input.value = artist;
+  await loadArtistView(artist);
+}
+
+async function searchArtistView() {
+  const artist = (document.getElementById('av-search')?.value || '').trim();
+  if (!artist) return;
+  await loadArtistView(artist);
+}
+
+async function loadArtistView(artist) {
+  if (!artist || _artistViewLoading) return;
+  _artistViewLoading = true;
+  _artistViewData = null;
+  renderArtistView(); // affiche l'état "chargement"
+  try {
+    const sRes = await fetch(`https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent('artist:"' + artist + '"')}&fmt=json&limit=5`);
+    if (!sRes.ok) throw new Error('MusicBrainz indisponible (HTTP ' + sRes.status + ')');
+    const sData = await sRes.json();
+    const best = (sData.artists || [])[0];
+    if (!best) { _artistViewData = { notFound: true, query: artist }; return; }
+
+    await new Promise(r => setTimeout(r, 1100)); // limite MusicBrainz non-authentifiée ~1 req/s
+    const rRes = await fetch(`https://musicbrainz.org/ws/2/release-group?artist=${best.id}&type=album|ep&limit=100&fmt=json`);
+    if (!rRes.ok) throw new Error('MusicBrainz indisponible (HTTP ' + rRes.status + ')');
+    const rData = await rRes.json();
+    const groups = (rData['release-groups'] || []).filter(g => !((g['secondary-types'] || []).some(s => DISCOG_SCAN_EXCLUDED_SECONDARY.includes(s))));
+
+    const variants = artistVariants(artist);
+    const inVariants = (name) => [...artistVariants(name)].some(v => variants.has(v));
+    const ownedByTitle = new Map();
+    albums.forEach(a => { if (a.artist && inVariants(a.artist)) ownedByTitle.set(normalizeKey('', a.album).replace('|||', ''), a); });
+    const wishByTitle = new Set(wishlist.filter(w => inVariants(w.artist)).map(w => normalizeKey('', w.album).replace('|||', '')));
+    const lfByTitle = new Map();
+    lastfmData.forEach(d => { if (inVariants(d.artist)) lfByTitle.set(normalizeKey('', d.album).replace('|||', ''), d.plays || 0); });
+
+    const rows = groups.map(g => {
+      const key = normalizeKey('', g.title || '').replace('|||', '');
+      const album = ownedByTitle.get(key);
+      const rymEntry = album ? lookupRym(album.artist, album.album, album.id) : lookupRym(artist, g.title);
+      return {
+        title: g.title,
+        year: (g['first-release-date'] || '').slice(0, 4),
+        type: g['primary-type'] || '',
+        owned: !!album,
+        albumId: album?.id || null,
+        note: album?.note || 0,
+        rymRating: rymEntry?.rating || 0,
+        plays: album ? (album.plays || 0) : (lfByTitle.get(key) || 0),
+        wishlisted: !album && wishByTitle.has(key),
+      };
+    }).sort((a, b) => (a.year || '9999').localeCompare(b.year || '9999'));
+
+    _artistViewData = { mbArtist: best, rows, stats: computeArtistAggregates(artist), query: artist };
+  } catch (e) {
+    console.error('loadArtistView:', e);
+    _artistViewData = { error: e.message || String(e), query: artist };
+  } finally {
+    _artistViewLoading = false;
+    renderArtistView();
+  }
+}
+
+function renderArtistView() {
+  const el = document.getElementById('av-content');
+  if (!el) return;
+  if (_artistViewLoading) {
+    el.innerHTML = '<div class="empty" style="padding:40px"><div class="empty-icon">🎤</div>Recherche MusicBrainz…</div>';
+    return;
+  }
+  if (!_artistViewData) {
+    el.innerHTML = '<div class="empty" style="padding:40px"><div class="empty-icon">🎤</div>Cherche un artiste ci-dessus, ou clique sur un nom d\'artiste n\'importe où dans l\'app.</div>';
+    return;
+  }
+  if (_artistViewData.notFound) {
+    el.innerHTML = `<div class="empty" style="padding:40px"><div class="empty-icon">🔍</div>Artiste introuvable sur MusicBrainz pour "${esc(_artistViewData.query)}".</div>`;
+    return;
+  }
+  if (_artistViewData.error) {
+    el.innerHTML = `<div class="empty" style="padding:40px"><div class="empty-icon">⚠️</div>Erreur MusicBrainz : ${esc(_artistViewData.error)}</div>`;
+    return;
+  }
+
+  const { mbArtist, rows, stats, query } = _artistViewData;
+  const total = rows.length;
+  const pct = total ? Math.round(stats.ownedCount / total * 100) : 0;
+
+  const header = `
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+        <div>
+          <h3 style="margin:0;font-size:18px">${esc(mbArtist.name)}</h3>
+          <div style="font-size:12px;color:var(--text3)">${esc(mbArtist.disambiguation || mbArtist.type || '')}</div>
+        </div>
+        <button class="btn btn-sm" onclick="document.getElementById('artistlinks-search').value=${JSON.stringify(query)};nav('artistlinks');renderArtistLinks()" title="Voir les collaborations connues avec d'autres artistes de ta collection">🕸️ Artistes similaires</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center">
+        <div><div style="font-size:20px;font-weight:600;color:var(--accent)">${stats.ownedCount}/${total}</div><div style="font-size:11px;color:var(--text3)">possédés (${pct}%)</div></div>
+        <div><div style="font-size:20px;font-weight:600">${stats.totalPlays.toLocaleString('fr-FR')}</div><div style="font-size:11px;color:var(--text3)">écoutes last.fm</div></div>
+        <div><div style="font-size:20px;font-weight:600">${stats.avgNote != null ? stats.avgNote.toFixed(1) + '★' : '–'}</div><div style="font-size:11px;color:var(--text3)">note moy. (${stats.ratedCount})</div></div>
+        <div><div style="font-size:20px;font-weight:600">${stats.genres.length}</div><div style="font-size:11px;color:var(--text3)">${esc(stats.genres.slice(0,2).join(', ')) || 'genre(s)'}</div></div>
+        <div><div style="font-size:20px;font-weight:600">${total}</div><div style="font-size:11px;color:var(--text3)">albums/EP MusicBrainz</div></div>
+      </div>
+    </div>`;
+
+  const list = rows.map(r => {
+    const badges = [];
+    if (r.owned) badges.push('<span class="badge" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">✅ Possédé</span>');
+    else badges.push('<span class="badge">⬜ Manquant</span>');
+    if (r.wishlisted) badges.push('<span class="badge" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>');
+    if (r.type === 'EP') badges.push('<span class="badge">EP</span>');
+    const noteStr = r.note ? `${r.note.toFixed(1)}★ perso` : '';
+    const rymStr = r.rymRating ? `${r.rymRating.toFixed(2)}★ RYM` : '';
+    const playsStr = r.plays ? `${r.plays.toLocaleString('fr-FR')} écoutes` : '';
+    const metaParts = [noteStr, rymStr, playsStr].filter(Boolean).join(' · ');
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);${r.owned ? 'cursor:pointer' : ''}" ${r.owned ? `onclick="editAlbum('${sid(r.albumId)}')"` : ''}>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500">${esc(r.title)}${r.year ? ` <span style="color:var(--text3);font-weight:400">(${esc(r.year)})</span>` : ''}</div>
+        <div style="display:flex;gap:6px;margin-top:3px">${badges.join('')}</div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);text-align:right;white-space:nowrap">${metaParts}</div>
+    </div>`;
+  }).join('') || '<div class="empty" style="padding:24px">Aucun album/EP trouvé sur MusicBrainz pour cet artiste.</div>';
+
+  el.innerHTML = header + `<div class="card">${list}</div>`;
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
