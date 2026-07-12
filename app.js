@@ -4388,6 +4388,10 @@ async function importMusicBeeXML(input) {
       });
     });
 	let albumsAdded = 0, albumsUpdated = 0;
+    // Trace les albums confirmés présents dans CET export XML — sert après la boucle à
+    // détecter les albums qui avaient 'ok'/'discographie' lors d'un import précédent mais qui
+    // ont disparu de l'export courant (retagués hors scope, déplacés, etc. — cf. fix ci-dessous).
+    const touchedAlbumIds = new Set();
 	Object.values(grouped).forEach(g => {
       if (!g.artist && !g.album) return;
       // Lookup par clés exactes (mêmes que l'index)
@@ -4484,6 +4488,7 @@ async function importMusicBeeXML(input) {
       const fmt = g.flac ? 'flac' : g.mp3 ? 'mp3' : g.digital ? 'digital' : null;
 
       if (existing) {
+        touchedAlbumIds.add(existing.id);
         // Mettre à jour toujours depuis XML
         if (g.year)  { existing.year  = g.year;  setProvenance(existing, 'year',  'musicbee'); }
         if (g.genre) { existing.genre = g.genre; setProvenance(existing, 'genre', 'musicbee'); }
@@ -4555,9 +4560,30 @@ async function importMusicBeeXML(input) {
           okFolder: newFolders.includes('ok'), forSale: newFolders.includes('forsale'),
         };
         albums.push(newAlbum);
+        touchedAlbumIds.add(newAlbum.id);
         albumsAdded++;
       }
     });
+
+    // ── Nettoyage des orphelins 'ok'/'discographie' ──────────────────────────────────────
+    // 'ok' et 'discographie' sont purement dérivés du chemin physique du fichier dans l'export
+    // XML COURANT (comme rappelé plus haut pour les albums matchés) — mais jusqu'ici, un album
+    // absent de cet export (retagué hors scope, déplacé, supprimé du disque…) gardait pour
+    // toujours son statut du dernier import où il apparaissait. Signalé par Antoine : 2
+    // audiobooks retagués restaient marqués "✅ Ok" après réimport alors qu'ils n'y sont plus.
+    // Ne touche jamais 'forsale' (volontairement persistant, cf. plus haut) ni 'stock'
+    // (réconcilié séparément juste en dessous, via stockAlbums) — uniquement les albums ayant
+    // 'ok'/'discographie' et qu'AUCUNE entrée de cet export n'a confirmés présents.
+    let orphansCleaned = 0;
+    albums.forEach(a => {
+      if (touchedAlbumIds.has(a.id)) return;
+      if (!a.folders || (!a.folders.includes('ok') && !a.folders.includes('discographie'))) return;
+      a.folders = a.folders.filter(f => f !== 'ok' && f !== 'discographie');
+      if (!a.folders.length) a.folders.push('album');
+      a.okFolder = false;
+      orphansCleaned++;
+    });
+    if (orphansCleaned) console.log(`[XML import] ${orphansCleaned} album(s) retiré(s) de Ok/Discographie (absents de cet export)`);
 
     // ── Morceaux isolés : REMPLACEMENT COMPLET depuis MusicBee ──
     const existingTrackNotes = {};
@@ -4646,6 +4672,7 @@ async function importMusicBeeXML(input) {
 
     const parts = [];
     if (albumsAdded || albumsUpdated) parts.push(`${albumsAdded} albums ajoutés, ${albumsUpdated} mis à jour`);
+    if (orphansCleaned) parts.push(`${orphansCleaned} retiré(s) de Ok/Discographie`);
     parts.push(`${trackDelta} morceaux isolés`);
     parts.push(`${stockDelta} en stock`);
 
