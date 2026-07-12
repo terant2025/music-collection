@@ -10205,6 +10205,49 @@ async function reimportJSON(input) {
 // réseau/CDN) consultable dans Chrome Android sans connexion. Contient uniquement les
 // albums (pas les morceaux isolés ni les scrobbles bruts last.fm) mais avec les notes
 // croisées Discogs/MusicBrainz/RYM/last.fm déjà résolues dans l'app.
+
+// Entrées RYM notées OU last.fm scrobblées mais absentes de la collection (todo-adjacent,
+// demandé par Antoine) — fusionnées en une seule liste par artiste+album (un album peut être
+// à la fois noté sur RYM et scrobblé sur last.fm sans être possédé). Contrairement à
+// computeRYMMissing() (onglet ⭐ RYM), AUCUN seuil de note n'est appliqué ici : l'export offline
+// est un inventaire de référence, pas une liste d'action, donc pas de raison d'en cacher une
+// partie. Réutilise getOwnedRymKeys()/computeMissing() (mêmes définitions d'ownership déjà
+// établies ailleurs dans l'app) plutôt que de redéfinir un 3e critère "possédé" divergent.
+function computeOutOfCollectionEntries() {
+  const combined = new Map(); // normalizeKey(artist,album) → entrée fusionnée
+
+  // --- RYM : tout ce qui n'est pas possédé, noté ou non ---
+  if (rymData.length) {
+    const { keys: ownedKeys, mbIds: ownedMbIds } = getOwnedRymKeys();
+    const associatedRymKeys = new Set(rymAssociations.map(a => a.rymKey));
+    rymData.forEach(r => {
+      if (!r.artist || !r.album) return;
+      const albumNorm = normalizeKey('', r.album).replace('|||', '');
+      for (const av of artistVariants(r.artist)) {
+        if (ownedKeys.has(av + '|||' + albumNorm)) return; // possédé → exclu
+      }
+      const key = normalizeKey(r.artist, r.album);
+      if (associatedRymKeys.has(key)) return;              // associé manuellement → possédé
+      if (r.mb_release_id && ownedMbIds.has(r.mb_release_id)) return;
+      const entry = combined.get(key) || { artist: r.artist, album: r.album, year: '', genre: '', noteRYM: '', plays: 0 };
+      if (r.rating) entry.noteRYM = r.rating;
+      if (!entry.year && r.year) entry.year = r.year;
+      if (!entry.genre && r.genre) entry.genre = r.genre;
+      combined.set(key, entry);
+    });
+  }
+
+  // --- last.fm : réutilise computeMissing() (onglet Manquants), déjà dédupliqué/filtré non-possédé ---
+  computeMissing().forEach(d => {
+    const key = normalizeKey(d.artist, d.album);
+    const entry = combined.get(key) || { artist: d.artist, album: d.album, year: '', genre: '', noteRYM: '', plays: 0 };
+    entry.plays = d.plays || 0;
+    combined.set(key, entry);
+  });
+
+  return [...combined.values()].sort((a, b) => (b.plays - a.plays) || ((b.noteRYM || 0) - (a.noteRYM || 0)));
+}
+
 function exportOfflineAndroid() {
   const list = albums.map(a => ({
     artist: a.artist, album: a.album,
@@ -10218,10 +10261,23 @@ function exportOfflineAndroid() {
     plays: a.plays || 0,
     label: a.label || '', catno: a.catno || '',
     isCompilation: !!a.isCompilation,
+    outOfCollection: false,
   }));
-  const html = buildOfflineHtml(list);
+  // Hors collection : RYM/last.fm sans DC/MB (pas d'album possédé, donc pas de note perso
+  // MusicBee ni de note Discogs personnelle — seule la note RYM et les écoutes last.fm existent).
+  const extra = computeOutOfCollectionEntries().map(e => ({
+    artist: e.artist, album: e.album,
+    year: e.year || '', genre: e.genre || '',
+    folders: [], format: '', cd: false,
+    noteMB: 0, noteDiscogs: 0, noteRYM: e.noteRYM || '',
+    plays: e.plays || 0,
+    label: '', catno: '', isCompilation: false,
+    outOfCollection: true,
+  }));
+  const fullList = [...list, ...extra];
+  const html = buildOfflineHtml(fullList);
   download(`collection-offline-${new Date().toISOString().slice(0,10)}.html`, html, 'text/html');
-  toast(`📱 Export offline créé — ${list.length} albums (${Math.round(html.length/1024)} Ko)`);
+  toast(`📱 Export offline créé — ${list.length} possédés + ${extra.length} hors collection (${Math.round(html.length/1024)} Ko)`);
 }
 
 function buildOfflineHtml(list) {
@@ -10246,10 +10302,12 @@ function buildOfflineHtml(list) {
     '#counter{font-size:11px;color:var(--text3);margin-top:4px}',
     '#list{padding:8px}',
     '.card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:7px}',
+    '.card.oc{border-style:dashed;opacity:0.85}',
     '.title{font-size:14px;font-weight:600}',
     '.sub{font-size:12px;color:var(--text2);margin-top:2px}',
     '.badges{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}',
     '.badge{font-size:10px;padding:2px 6px;border-radius:4px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)}',
+    '.badge.oc{background:transparent;color:var(--amber);border-color:var(--amber)}',
     '.empty{text-align:center;color:var(--text3);padding:40px 10px;font-size:13px}',
     '</style>',
     '</head>',
@@ -10260,6 +10318,7 @@ function buildOfflineHtml(list) {
     '<div class="row">',
     '<select id="f-folder"><option value="">Tous dossiers</option><option value="discographie">Discographie</option><option value="ok">Ok</option><option value="stock">Stock</option><option value="forsale">Vendre</option></select>',
     '<select id="f-format"><option value="">Tous formats</option><option value="cd">CD</option><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="digital">Digital</option></select>',
+    '<select id="f-status"><option value="">Collection + hors collection</option><option value="in">En collection seulement</option><option value="out">🔭 Hors collection seulement</option></select>',
     '<select id="sort"><option value="artist">Tri : Artiste</option><option value="year">Tri : Année</option><option value="note">Tri : Note MB</option><option value="plays">Tri : Écoutes</option></select>',
     '</div>',
     '<div id="counter"></div>',
@@ -10267,14 +10326,16 @@ function buildOfflineHtml(list) {
     '<div id="list"></div>',
     '<script>',
     'const DATA = ' + dataJson + ';',
-    "const q=document.getElementById('q'), fFolder=document.getElementById('f-folder'), fFormat=document.getElementById('f-format'), sortSel=document.getElementById('sort'), listEl=document.getElementById('list'), counter=document.getElementById('counter');",
+    "const q=document.getElementById('q'), fFolder=document.getElementById('f-folder'), fFormat=document.getElementById('f-format'), fStatus=document.getElementById('f-status'), sortSel=document.getElementById('sort'), listEl=document.getElementById('list'), counter=document.getElementById('counter');",
     "function norm(s){return (s||'').toString().toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');}",
     "function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}",
     'function render(){',
     '  const query=norm(q.value.trim());',
-    '  const folder=fFolder.value, format=fFormat.value, sort=sortSel.value;',
+    '  const folder=fFolder.value, format=fFormat.value, status=fStatus.value, sort=sortSel.value;',
     '  let rows=DATA.filter(function(a){',
     "    if(query && norm(a.artist+' '+a.album).indexOf(query)===-1) return false;",
+    "    if(status==='in' && a.outOfCollection) return false;",
+    "    if(status==='out' && !a.outOfCollection) return false;",
     '    if(folder && (a.folders||[]).indexOf(folder)===-1) return false;',
     "    if(format==='cd' && !a.cd) return false;",
     "    if(format && format!=='cd' && a.format!==format) return false;",
@@ -10284,11 +10345,12 @@ function buildOfflineHtml(list) {
     "  else if(sort==='note') rows.sort(function(a,b){return (b.noteMB||0)-(a.noteMB||0);});",
     "  else if(sort==='plays') rows.sort(function(a,b){return (b.plays||0)-(a.plays||0);});",
     "  else rows.sort(function(a,b){return a.artist.localeCompare(b.artist,'fr')||a.album.localeCompare(b.album,'fr');});",
-    "  counter.textContent = rows.length.toLocaleString('fr-FR') + ' / ' + DATA.length.toLocaleString('fr-FR') + ' albums';",
+    "  counter.textContent = rows.length.toLocaleString('fr-FR') + ' / ' + DATA.length.toLocaleString('fr-FR') + ' entrées';",
     '  const slice=rows.slice(0,300);',
     "  if(!slice.length){ listEl.innerHTML='<div class=\"empty\">Aucun résultat</div>'; return; }",
     '  listEl.innerHTML = slice.map(function(a){',
     '    const badges=[];',
+    "    if(a.outOfCollection) badges.push('<span class=\"badge oc\">🔭 Hors collection</span>');",
     "    if(a.cd) badges.push('<span class=\"badge\">💿 CD</span>');",
     "    if(a.format==='flac') badges.push('<span class=\"badge\">FLAC</span>');",
     "    if(a.format==='mp3') badges.push('<span class=\"badge\">MP3</span>');",
@@ -10297,12 +10359,13 @@ function buildOfflineHtml(list) {
     "    if(a.noteRYM) badges.push('<span class=\"badge\">RYM '+a.noteRYM+'</span>');",
     "    if(a.noteDiscogs) badges.push('<span class=\"badge\">Discogs '+a.noteDiscogs+'</span>');",
     "    if(a.plays) badges.push('<span class=\"badge\">'+a.plays.toLocaleString('fr-FR')+' écoutes</span>');",
-    "    return '<div class=\"card\"><div class=\"title\">'+esc(a.album)+'</div><div class=\"sub\">'+esc(a.artist)+(a.year?' · '+esc(a.year):'')+(a.genre?' · '+esc(a.genre):'')+'</div><div class=\"badges\">'+badges.join('')+'</div></div>';",
+    "    return '<div class=\"card'+(a.outOfCollection?' oc':'')+'\"><div class=\"title\">'+esc(a.album)+'</div><div class=\"sub\">'+esc(a.artist)+(a.year?' · '+esc(a.year):'')+(a.genre?' · '+esc(a.genre):'')+'</div><div class=\"badges\">'+badges.join('')+'</div></div>';",
     "  }).join('') + (rows.length>300 ? '<div class=\"empty\">… '+(rows.length-300).toLocaleString('fr-FR')+' de plus — affine la recherche</div>' : '');",
     '}',
     "q.addEventListener('input', render);",
     "fFolder.addEventListener('change', render);",
     "fFormat.addEventListener('change', render);",
+    "fStatus.addEventListener('change', render);",
     "sortSel.addEventListener('change', render);",
     'render();',
     '<' + '/script>',
