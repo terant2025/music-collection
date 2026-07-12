@@ -76,6 +76,19 @@ function stableAlbumId(artist, album, mb_release_id, discogs_id) {
   return base;
 }
 
+// primaryFolder DOIT toujours être une fonction pure de folders[] (jamais un flag manuel —
+// confirmé par grep, aucun bouton UI ne l'écrit directement) — hiérarchie : discographie >
+// forsale > ok > stock > album. 'ok' prime sur 'stock' intentionnellement (cf. correctif
+// v2026.07.12-09 : un album déplacé de Stock vers Ok dans MusicBee doit afficher "Ok").
+function derivePrimaryFolder(folders) {
+  if (!folders) return 'album';
+  if (folders.includes('discographie')) return 'discographie';
+  if (folders.includes('forsale'))      return 'forsale';
+  if (folders.includes('ok'))           return 'ok';
+  if (folders.includes('stock'))        return 'stock';
+  return 'album';
+}
+
 // ===================== LOCALSTORAGE =====================
 const LS_KEY = 'discotheque_v2';
 const LS_CFG = 'discotheque_backend_cfg';
@@ -1712,7 +1725,7 @@ const FILTER_PRESET_VIEWS = {
     selectId: 'filter-preset-select',
     resetPage: true,
     renderFn: () => renderAlbums(),
-    fields: ['filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre',
+    fields: ['filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre', 'filter-wishlist',
       'filter-note-op', 'filter-note-val', 'filter-dc-note-op', 'filter-dc-note-val',
       'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'sort-col'],
     noteOpPairs: [['filter-note-op', 'filter-note-val'], ['filter-dc-note-op', 'filter-dc-note-val'], ['filter-rym-note-op', 'filter-rym-note-val']]
@@ -1888,6 +1901,11 @@ function filteredAlbums() {
   const rymNfVal = document.getElementById('filter-rym-note-val')?.value || '';
   const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
   const yearF = (document.getElementById('filter-year')?.value || '').trim();
+  const wf = document.getElementById('filter-wishlist')?.value || '';
+  // Correspondance EXACTE (même logique que pruneWishlistOwned/wishlistOwnedSet) — construite
+  // une seule fois ici plutôt que dans le .filter() ci-dessous pour éviter de reconstruire le
+  // Set à chaque album passé en revue.
+  const wishKeys = wf ? new Set(wishlist.map(w => normalizeKey(w.artist, w.album))) : null;
 
   return albums.filter(a => {
     // ── Filtre dossier ───────────────────────────────────────────────────
@@ -1926,6 +1944,13 @@ function filteredAlbums() {
 
     // ── Filtre écoutes min ───────────────────────────────────────────────
     if ((a.plays || 0) < minPlays) return false;
+
+    // ── Filtre wishlist ───────────────────────────────────────────────────
+    // Utile notamment pour repérer les albums encore listés en wishlist alors qu'ils sont
+    // déjà en collection numérique/Stock — cf. wishlistOwnedSet() : seul Discogs auto-retire
+    // de la wishlist, un album seulement en Stock peut donc légitimement rester en wishlist.
+    if (wf === 'yes' && !wishKeys.has(normalizeKey(a.artist, a.album))) return false;
+    if (wf === 'no'  &&  wishKeys.has(normalizeKey(a.artist, a.album))) return false;
 
     return true;
   });
@@ -4637,7 +4662,6 @@ async function importMusicBeeXML(input) {
         if (!ex.folders.includes('stock')) ex.folders.push('stock');
         if (meta.note && !ex.note) ex.note = meta.note;
         if (meta.notes && !ex.notes) ex.notes = meta.notes;
-        ex.primaryFolder = 'stock';
       } else {
         const newId = stableAlbumId(s.artist, s.album, null);
         // Vérifier qu'aucun album avec ce normalizeKey n'existe déjà sous un id différent
@@ -4646,7 +4670,6 @@ async function importMusicBeeXML(input) {
         if (dupCheck) {
           if (!dupCheck.folders) dupCheck.folders = [];
           if (!dupCheck.folders.includes('stock')) dupCheck.folders.push('stock');
-          dupCheck.primaryFolder = 'stock';
           if (meta.note && !dupCheck.note) dupCheck.note = meta.note;
           if (meta.notes && !dupCheck.notes) dupCheck.notes = meta.notes;
           return;
@@ -4666,6 +4689,19 @@ async function importMusicBeeXML(input) {
     });
     // Reconstruire stockItems pour compat UI
     stockItems = albums.filter(a => a.folders?.includes('stock'));
+
+    // ── Recalcul systématique de primaryFolder ──────────────────────────────────────────
+    // Bug signalé par Antoine : un album déplacé de Stock vers Ok dans MusicBee gardait le
+    // badge "📦 Stock" en plus de "✅ Ok" après réimport. Cause confirmée par diagnostic
+    // console : primaryFolder était mis à 'stock' plus haut (ex.primaryFolder = 'stock')
+    // dès qu'un album matchait un stockAlbums de CET export, mais n'était JAMAIS recalculé
+    // quand un album sortait du stock (folders[] se corrigeait bien, primaryFolder restait
+    // figé sur 'stock' — c'est justement ce que teste isStock à la ligne ~2127 en fallback
+    // `|| a.primaryFolder === 'stock'`, d'où le badge fantôme). primaryFolder est purement
+    // dérivé de folders[] (confirmé — aucune écriture manuelle ailleurs dans le code) donc on
+    // le recalcule pour TOUS les albums en une passe, après que folders[] a fini de bouger
+    // (boucle principale + nettoyage orphelins ok/discographie + réconciliation stock).
+    albums.forEach(a => { a.primaryFolder = derivePrimaryFolder(a.folders); });
 
     const stockDelta = stockAlbums.length;
     const trackDelta = isolatedTracks.length;
