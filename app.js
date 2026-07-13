@@ -14963,16 +14963,15 @@ async function openLinkIdModal(type, idSid, field) {
   document.getElementById('link-id-modal-title').textContent = field === 'discogsId' ? '🔗 Lier à Discogs' : '🆔 Lier à MusicBrainz';
   document.getElementById('link-id-title').textContent = `${artist} — ${title}`;
   document.getElementById('link-id-manual').value = '';
+  // Champs de recherche éditables — préremplis avec les valeurs de la fiche, mais modifiables
+  // avant de lancer la recherche (demandé par Antoine : la recherche automatique basée sur le
+  // texte exact stocké peut ne rien trouver — orthographe/ponctuation différente côté
+  // MusicBrainz/Discogs, article en tête ou pas, édition sous un titre légèrement différent…
+  // pas de 2e chance possible avec une requête figée).
+  document.getElementById('link-id-search-artist').value = artist;
+  document.getElementById('link-id-search-title').value = title;
 
-  const discogsLink = document.getElementById('link-id-discogs-link');
   const manualLabel = document.getElementById('link-id-manual-label');
-
-  // Le lien externe Discogs.com reste affiché même avec la recherche intégrée — utile en
-  // repli si la recherche ne trouve pas la bonne édition précise (variante/pressage).
-  discogsLink.style.display = field === 'discogsId' ? 'inline-block' : 'none';
-  if (field === 'discogsId') {
-    discogsLink.href = `https://www.discogs.com/search/?q=${encodeURIComponent(artist + ' ' + title)}&type=release`;
-  }
   manualLabel.textContent = field === 'discogsId'
     ? 'Ou coller l\'ID Discogs manuellement (numérique, trouvé dans l\'URL de la release)'
     : 'Ou coller un MBID MusicBrainz manuellement';
@@ -14989,9 +14988,23 @@ async function openLinkIdModal(type, idSid, field) {
 // Discographie manquante) et il n'existe pas encore de branche Edge Function pour ça.
 // Les résultats sont normalisés en {resultId, title, subtitle} quelle que soit la source, pour
 // un rendu et une application uniques (applyLinkIdResult).
+// Termes de recherche lus depuis les champs éditables du formulaire (v2026.07.12-19) plutôt
+// que directement depuis _linkIdTarget — permet de relancer avec des termes modifiés si la
+// recherche automatique initiale ne trouve rien. _linkIdTarget reste la seule source de vérité
+// pour savoir QUEL album/morceau recevra l'ID choisi (appliqué via applyLinkId), indépendamment
+// des termes de recherche utilisés pour le trouver.
 async function searchLinkIdResults() {
   const t = _linkIdTarget;
   if (!t) return;
+  const searchArtist = (document.getElementById('link-id-search-artist')?.value || t.artist).trim();
+  const searchTitle  = (document.getElementById('link-id-search-title')?.value  || t.title).trim();
+
+  const discogsLink = document.getElementById('link-id-discogs-link');
+  discogsLink.style.display = t.field === 'discogsId' ? 'inline-block' : 'none';
+  if (t.field === 'discogsId') {
+    discogsLink.href = `https://www.discogs.com/search/?q=${encodeURIComponent(searchArtist + ' ' + searchTitle)}&type=release`;
+  }
+
   const resEl = document.getElementById('link-id-mb-results');
   resEl.style.display = 'block';
   const sourceLabel = t.field === 'discogsId' ? 'Discogs' : 'MusicBrainz';
@@ -14999,21 +15012,21 @@ async function searchLinkIdResults() {
   try {
     let normalized = [];
     if (t.field === 'discogsId') {
-      const results = await searchDiscogs(t.artist, t.title);
+      const results = await searchDiscogs(searchArtist, searchTitle);
       normalized = results.map(r => ({
         resultId: r.id,
         title: r.title,
         subtitle: [r.year, r.format, r.label, r.country].filter(Boolean).join(' · '),
       }));
     } else if (t.field === 'mb_release_id') {
-      const results = await searchMusicBrainz(t.artist, t.title);
+      const results = await searchMusicBrainz(searchArtist, searchTitle);
       normalized = results.map(r => ({
         resultId: r.mb_release_id,
         title: r.title + (r.disambiguation ? ` — ${r.disambiguation}` : ''),
         subtitle: [r.artist, r.release_date, r.country, r.label].filter(Boolean).join(' · '),
       }));
     } else { // mb_recording_id — appel direct MusicBrainz public, pas de branche Edge Function
-      const q = `artist:"${t.artist}" AND recording:"${t.title}"`;
+      const q = `artist:"${searchArtist}" AND recording:"${searchTitle}"`;
       const res = await fetch(`https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(q)}&fmt=json&limit=10`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -15025,7 +15038,7 @@ async function searchLinkIdResults() {
     }
     _linkIdResults = normalized;
     if (!normalized.length) {
-      resEl.innerHTML = `<div style="padding:12px;color:var(--text3);font-size:12px">Aucun résultat ${sourceLabel} — essaie de coller un ID manuellement ci-dessous.</div>`;
+      resEl.innerHTML = `<div style="padding:12px;color:var(--text3);font-size:12px">Aucun résultat ${sourceLabel} pour "${esc(searchArtist)} — ${esc(searchTitle)}" — modifie les termes de recherche ci-dessus et relance, ou colle un ID manuellement ci-dessous.</div>`;
       return;
     }
     resEl.innerHTML = normalized.map((r, i) => `<div style="padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="applyLinkIdResult(${i})">
@@ -15092,9 +15105,13 @@ function artistLink(name) {
 
 let _artistViewData = null; // { mbArtist, rows, stats, notFound }
 let _artistViewLoading = false;
+let _artistViewTypeFilter = 'Album'; // 'Album' | 'EP' | 'Single' | '' (tous) — reset à chaque recherche
 
 // Agrégats côté données déjà en mémoire (albums possédés, écoutes, notes) pour cet artiste —
 // toutes variantes de nom confondues (artistVariants(), même mécanisme que le reste de l'app).
+// Volontairement large (compilations/live inclus) — contrairement au taux de complétion de la
+// discographie (calculé séparément dans loadArtistView, restreint aux albums/EP/singles
+// "officiels" retournés par MusicBrainz) qui, lui, doit rester borné pour ne pas dépasser 100%.
 function computeArtistAggregates(artist) {
   const variants = artistVariants(artist);
   const inVariants = (name) => [...artistVariants(name)].some(v => variants.has(v));
@@ -15103,12 +15120,22 @@ function computeArtistAggregates(artist) {
   const trackPlays = Object.values(_lastfmTrackCounts).filter(t => inVariants(t.artist)).reduce((s, t) => s + (t.plays || 0), 0);
   const rated = ownedAlbums.filter(a => a.note);
   return {
-    ownedCount: ownedAlbums.length,
     totalPlays: albumPlays + trackPlays,
     avgNote: rated.length ? rated.reduce((s, a) => s + a.note, 0) / rated.length : null,
     ratedCount: rated.length,
     genres: [...new Set(ownedAlbums.map(a => a.genre).filter(Boolean))],
   };
+}
+
+// Normalise le primary-type MusicBrainz — Broadcast/Other/absent regroupés sous "Autre"
+// plutôt que multiplié en catégories rares peu lisibles dans les filtres.
+function normalizeArtistViewType(t) {
+  return (t === 'Album' || t === 'EP' || t === 'Single') ? t : 'Autre';
+}
+
+function setArtistViewTypeFilter(type) {
+  _artistViewTypeFilter = type;
+  renderArtistView();
 }
 
 async function openArtistView(artistSid) {
@@ -15127,6 +15154,7 @@ async function searchArtistView() {
 
 async function loadArtistView(artist) {
   if (!artist || _artistViewLoading) return;
+  _artistViewTypeFilter = 'Album'; // repart toujours sur Albums pour rester lisible par défaut
   _artistViewLoading = true;
   _artistViewData = null;
   renderArtistView(); // affiche l'état "chargement"
@@ -15138,7 +15166,10 @@ async function loadArtistView(artist) {
     if (!best) { _artistViewData = { notFound: true, query: artist }; return; }
 
     await new Promise(r => setTimeout(r, 1100)); // limite MusicBrainz non-authentifiée ~1 req/s
-    const rRes = await fetch(`https://musicbrainz.org/ws/2/release-group?artist=${best.id}&type=album|ep&limit=100&fmt=json`);
+    // + singles (demandé par Antoine, pour distinguer albums/EP/singles) — limit=100 est le
+    // maximum MusicBrainz par requête ; au-delà (rare, gros artistes très prolifiques en
+    // singles), la liste est tronquée aux 100 premiers plutôt que paginée pour rester simple.
+    const rRes = await fetch(`https://musicbrainz.org/ws/2/release-group?artist=${best.id}&type=album|ep|single&limit=100&fmt=json`);
     if (!rRes.ok) throw new Error('MusicBrainz indisponible (HTTP ' + rRes.status + ')');
     const rData = await rRes.json();
     const groups = (rData['release-groups'] || []).filter(g => !((g['secondary-types'] || []).some(s => DISCOG_SCAN_EXCLUDED_SECONDARY.includes(s))));
@@ -15158,7 +15189,7 @@ async function loadArtistView(artist) {
       return {
         title: g.title,
         year: (g['first-release-date'] || '').slice(0, 4),
-        type: g['primary-type'] || '',
+        type: normalizeArtistViewType(g['primary-type']),
         owned: !!album,
         albumId: album?.id || null,
         note: album?.note || 0,
@@ -15199,47 +15230,73 @@ function renderArtistView() {
   }
 
   const { mbArtist, rows, stats, query } = _artistViewData;
-  const total = rows.length;
-  const pct = total ? Math.round(stats.ownedCount / total * 100) : 0;
+
+  // Compteurs par type — bornés par construction (jamais > 100%), contrairement à l'ancienne
+  // version qui comparait le nombre total d'albums possédés (toutes sources confondues,
+  // compilations/live incluses) au nombre d'albums/EP MusicBrainz seul → pouvait dépasser
+  // 100% dès qu'un album possédé n'apparaissait pas dans la liste MusicBrainz "officielle"
+  // (signalé par Antoine : "12/11 possédés (109%)").
+  const byType = { Album: [], EP: [], Single: [], Autre: [] };
+  rows.forEach(r => byType[r.type].push(r));
+  const countStr = (arr) => `${arr.filter(r => r.owned).length}/${arr.length}`;
+  const pctAlbums = byType.Album.length ? Math.round(byType.Album.filter(r => r.owned).length / byType.Album.length * 100) : 0;
 
   const header = `
     <div class="card" style="margin-bottom:16px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">
         <div>
           <h3 style="margin:0;font-size:18px">${esc(mbArtist.name)}</h3>
           <div style="font-size:12px;color:var(--text3)">${esc(mbArtist.disambiguation || mbArtist.type || '')}</div>
         </div>
         <button class="btn btn-sm" onclick="document.getElementById('artistlinks-search').value=${JSON.stringify(query)};nav('artistlinks');renderArtistLinks()" title="Voir les collaborations connues avec d'autres artistes de ta collection">🕸️ Artistes similaires</button>
       </div>
+      ${stats.genres.length ? `<div style="font-size:11px;color:var(--text3);margin-bottom:12px">${esc(stats.genres.slice(0, 4).join(' · '))}</div>` : '<div style="margin-bottom:12px"></div>'}
       <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center">
-        <div><div style="font-size:20px;font-weight:600;color:var(--accent)">${stats.ownedCount}/${total}</div><div style="font-size:11px;color:var(--text3)">possédés (${pct}%)</div></div>
-        <div><div style="font-size:20px;font-weight:600">${stats.totalPlays.toLocaleString('fr-FR')}</div><div style="font-size:11px;color:var(--text3)">écoutes last.fm</div></div>
+        <div><div style="font-size:20px;font-weight:600;color:var(--accent)">${countStr(byType.Album)}</div><div style="font-size:11px;color:var(--text3)">💿 albums (${pctAlbums}%)</div></div>
+        <div><div style="font-size:20px;font-weight:600">${countStr(byType.EP)}</div><div style="font-size:11px;color:var(--text3)">📀 EP</div></div>
+        <div><div style="font-size:20px;font-weight:600">${countStr(byType.Single)}</div><div style="font-size:11px;color:var(--text3)">🎵 singles</div></div>
+        <div><div style="font-size:20px;font-weight:600">${stats.totalPlays.toLocaleString('fr-FR')}</div><div style="font-size:11px;color:var(--text3)">écoutes last.fm (tout l'artiste)</div></div>
         <div><div style="font-size:20px;font-weight:600">${stats.avgNote != null ? stats.avgNote.toFixed(1) + '★' : '–'}</div><div style="font-size:11px;color:var(--text3)">note moy. (${stats.ratedCount})</div></div>
-        <div><div style="font-size:20px;font-weight:600">${stats.genres.length}</div><div style="font-size:11px;color:var(--text3)">${esc(stats.genres.slice(0,2).join(', ')) || 'genre(s)'}</div></div>
-        <div><div style="font-size:20px;font-weight:600">${total}</div><div style="font-size:11px;color:var(--text3)">albums/EP MusicBrainz</div></div>
       </div>
     </div>`;
 
-  const list = rows.map(r => {
-    const badges = [];
-    if (r.owned) badges.push('<span class="badge" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">✅ Possédé</span>');
-    else badges.push('<span class="badge">⬜ Manquant</span>');
-    if (r.wishlisted) badges.push('<span class="badge" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>');
-    if (r.type === 'EP') badges.push('<span class="badge">EP</span>');
-    const noteStr = r.note ? `${r.note.toFixed(1)}★ perso` : '';
-    const rymStr = r.rymRating ? `${r.rymRating.toFixed(2)}★ RYM` : '';
-    const playsStr = r.plays ? `${r.plays.toLocaleString('fr-FR')} écoutes` : '';
-    const metaParts = [noteStr, rymStr, playsStr].filter(Boolean).join(' · ');
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);${r.owned ? 'cursor:pointer' : ''}" ${r.owned ? `onclick="editAlbum('${sid(r.albumId)}')"` : ''}>
+  const filterBtn = (type, label, arr) => `<button class="covers-filter-btn ${_artistViewTypeFilter === type ? 'active' : ''}" onclick="setArtistViewTypeFilter('${type}')">${label} (${arr.length})</button>`;
+  const filters = `<div class="covers-toolbar" style="margin-bottom:12px">
+    ${filterBtn('Album', '💿 Albums', byType.Album)}
+    ${filterBtn('EP', '📀 EP', byType.EP)}
+    ${filterBtn('Single', '🎵 Singles', byType.Single)}
+    ${filterBtn('', 'Tout', rows)}
+  </div>`;
+
+  const filtered = _artistViewTypeFilter ? rows.filter(r => r.type === _artistViewTypeFilter) : rows;
+
+  const listHeader = filtered.length ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:0 0 8px">
+      <div style="flex:1"></div>
+      <div style="display:grid;grid-template-columns:56px 56px 84px;gap:14px;text-align:right;flex-shrink:0;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px">
+        <span>Perso</span><span>RYM</span><span>Écoutes</span>
+      </div>
+    </div>` : '';
+
+  const list = filtered.map(r => {
+    const statusBadge = r.owned
+      ? '<span class="badge" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">✅ Possédé</span>'
+      : '<span class="badge">⬜ Manquant</span>';
+    const wishBadge = r.wishlisted ? '<span class="badge" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>' : '';
+    const typeBadge = (!_artistViewTypeFilter && r.type !== 'Album') ? `<span class="badge">${esc(r.type)}</span>` : '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid var(--border);${r.owned ? 'cursor:pointer' : ''}" ${r.owned ? `onclick="editAlbum('${sid(r.albumId)}')"` : ''}>
       <div style="flex:1;min-width:0">
         <div style="font-weight:500">${esc(r.title)}${r.year ? ` <span style="color:var(--text3);font-weight:400">(${esc(r.year)})</span>` : ''}</div>
-        <div style="display:flex;gap:6px;margin-top:3px">${badges.join('')}</div>
+        <div style="display:flex;gap:6px;margin-top:4px">${statusBadge}${wishBadge}${typeBadge}</div>
       </div>
-      <div style="font-size:12px;color:var(--text2);text-align:right;white-space:nowrap">${metaParts}</div>
+      <div style="display:grid;grid-template-columns:56px 56px 84px;gap:14px;text-align:right;flex-shrink:0;font-size:12px;color:var(--text2)">
+        <span>${r.note ? r.note.toFixed(1) + '★' : '–'}</span>
+        <span style="color:var(--amber)">${r.rymRating ? r.rymRating.toFixed(2) + '★' : '–'}</span>
+        <span>${r.plays ? r.plays.toLocaleString('fr-FR') : '–'}</span>
+      </div>
     </div>`;
-  }).join('') || '<div class="empty" style="padding:24px">Aucun album/EP trouvé sur MusicBrainz pour cet artiste.</div>';
+  }).join('') || '<div class="empty" style="padding:24px">Aucun résultat pour ce filtre.</div>';
 
-  el.innerHTML = header + `<div class="card">${list}</div>`;
+  el.innerHTML = header + filters + `<div class="card">${listHeader}${list}</div>`;
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
