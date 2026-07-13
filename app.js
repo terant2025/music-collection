@@ -10315,12 +10315,30 @@ function exportAlbumTracksCSV() {
   toast(`${list.length} pistes exportées ✓`);
 }
 
+// v2026.07.12-23 (Antoine, "je voudrais tout") : l'export JSON ne couvrait qu'une partie de ce
+// qui est réellement persisté dans Supabase — wishlist, notes à reporter, verrous de notes,
+// cache YouTube par morceau, historiques Insights (évolution écoutes/genres, heatmap), valeur
+// collection et tracklists complètes en étaient absents, malgré le texte de l'app ("restaure
+// l'intégralité de la collection"). Tout ajouté ci-dessous.
+// Volontairement toujours PAS inclus, avec raison : musicbee_tracks brut (isolé/stock — plié
+// dans des Sets/Maps d'index au chargement, pas conservé sous forme de tableau réexportable, et
+// de toute façon entièrement régénéré à chaque réimport XML MusicBee, donc rien de perdu en
+// pratique) et le cache par-morceau last.fm (_lastfmTrackCounts / table lastfm_tracks, ~197k
+// lignes chez Antoine — régénérable via "🎵 Sync morceaux", et son volume ferait exploser la
+// taille du fichier JSON pour une donnée entièrement reconstructible).
 function exportJSON() {
   const data = JSON.stringify({
     albums, tracks, stockItems, lastfmData, rymData,
     associations, rymAssociations, nextId,
+    wishlist, trackWishlist,
+    notesToReport, trackNoteOverrides, trackYoutubeCache,
+    listeningEvolution, listeningEvolutionComputedAt: _listeningEvolutionComputedAt,
+    listeningHeatmap, listeningHeatmapComputedAt: _listeningHeatmapComputedAt,
+    genreEvolution, genreEvolutionComputedAt: _genreEvolutionComputedAt,
+    marketValueHistory,
+    albumTracksCache,
     exportedAt: new Date().toISOString(),
-    version: 2
+    version: 3
   }, null, 2);
   download('discothèque_backup.json', data, 'application/json');
   toast('Export JSON téléchargé ✓');
@@ -10342,8 +10360,10 @@ async function reimportJSON(input) {
     }
 
     const summary = [];
+    const extraCount = (data.wishlist?.length || 0) + (data.trackWishlist?.length || 0);
+    const isV3 = (data.version || 1) >= 3;
 
-    if (!confirm(`Restaurer depuis "${file.name}" ?\n\nCela remplacera :\n- ${(data.albums||[]).length} albums\n- ${(data.tracks||[]).length} morceaux isolés\n- ${(data.stockItems||[]).length} albums en stock\n- ${(data.rymData||[]).length} ratings RYM\n- ${(data.lastfmData||[]).length} entrées last.fm\n\nVotre collection actuelle sera écrasée.`)) {
+    if (!confirm(`Restaurer depuis "${file.name}" ?\n\nCela remplacera :\n- ${(data.albums||[]).length} albums\n- ${(data.tracks||[]).length} morceaux isolés\n- ${(data.stockItems||[]).length} albums en stock\n- ${(data.rymData||[]).length} ratings RYM\n- ${(data.lastfmData||[]).length} entrées last.fm${isV3 ? `\n- ${extraCount} entrées wishlist\n- Notes à reporter, notes verrouillées, cache YouTube, historiques Insights, valeur collection, tracklists` : '\n\n⚠️ Fichier v' + (data.version||1) + ' (ancien format) : wishlist/notes/Insights/tracklists ne seront PAS restaurés — seulement albums/morceaux/RYM/last.fm.'}\n\nVotre collection actuelle sera écrasée.`)) {
       input.value = '';
       return;
     }
@@ -10362,6 +10382,26 @@ async function reimportJSON(input) {
     if (data.lastfmData?.length) {
       lastfmData = data.lastfmData;
       summary.push(`${lastfmData.length} entrées last.fm`);
+    }
+
+    // Champs v3 (v2026.07.12-23) — absents des exports plus anciens, ne rien écraser dans ce
+    // cas plutôt que de vider silencieusement la wishlist/les notes actuelles avec un fichier
+    // qui ne les contenait simplement pas encore.
+    if (isV3) {
+      wishlist = data.wishlist || [];
+      trackWishlist = data.trackWishlist || [];
+      notesToReport = data.notesToReport || [];
+      trackNoteOverrides = data.trackNoteOverrides || {};
+      trackYoutubeCache = data.trackYoutubeCache || {};
+      listeningEvolution = data.listeningEvolution || [];
+      _listeningEvolutionComputedAt = data.listeningEvolutionComputedAt || null;
+      listeningHeatmap = data.listeningHeatmap || [];
+      _listeningHeatmapComputedAt = data.listeningHeatmapComputedAt || null;
+      genreEvolution = data.genreEvolution || [];
+      _genreEvolutionComputedAt = data.genreEvolutionComputedAt || null;
+      marketValueHistory = data.marketValueHistory || [];
+      albumTracksCache = data.albumTracksCache || {};
+      summary.push(`${wishlist.length + trackWishlist.length} entrées wishlist`, 'Insights/valeur collection/tracklists');
     }
 
     summary.unshift(
@@ -11517,21 +11557,21 @@ document.addEventListener('DOMContentLoaded', () => {
 //     au chargement (cleanupCorruptedWishlistEntries, appelée dans initApp)
 // Cet outil ne fait donc que : (1) pointer vers ces outils existants en un clic, et
 // (2) détecter les quelques incohérences qui n'ont sinon aucun autre point d'entrée.
-const INTEGRITY_LOG_KEY = 'discotheque_integrity_log';
-const INTEGRITY_LOG_MAX = 15; // limite le volume stocké en localStorage (snapshots complets)
+// 🐛 v2026.07.12-22 (Antoine, dizaines de "Historique intégrité : écriture localStorage
+// échouée (quota ?)" en boucle après des fusions en masse) : snapshotForUndo() stockait
+// jusqu'à INTEGRITY_LOG_MAX=15 copies COMPLÈTES du tableau albums (2595 albums chez Antoine,
+// ~1,2 Ko/album une fois sérialisé) — jusqu'à ~46 Mo, très largement au-dessus de tout quota
+// localStorage réaliste, même après les correctifs de cache d'egress (v2026.07.12-15) qui
+// portaient sur des caches bien plus petits. Contrairement à lastfm_tracks (une vraie donnée
+// qu'on veut garder d'une session à l'autre), l'historique "Annuler" d'un outil de diagnostic
+// ponctuel n'a pas vocation à survivre à un rechargement de page — mêmes principe que
+// _sourceCmpCache/_globalCmpResults (Audit collection) déjà session-only. Purement en mémoire
+// désormais, plus aucune écriture localStorage ici : élimine la source de l'échec plutôt que
+// d'essayer de la faire rentrer sous un quota qu'elle ne pourra de toute façon jamais respecter
+// à cette échelle (contrairement à lastfm_tracks, réduire encore le nombre de snapshots ne
+// suffirait pas — même 3 copies complètes de 2595 albums resteraient risquées).
+const INTEGRITY_LOG_MAX = 15; // limite purement mémoire désormais (RAM, pas de quota localStorage)
 let integrityLog = [];
-
-function loadIntegrityLog() {
-  try { integrityLog = JSON.parse(localStorage.getItem(INTEGRITY_LOG_KEY) || '[]'); }
-  catch(e) { integrityLog = []; }
-}
-loadIntegrityLog();
-
-function saveIntegrityLog() {
-  integrityLog = integrityLog.slice(-INTEGRITY_LOG_MAX);
-  try { localStorage.setItem(INTEGRITY_LOG_KEY, JSON.stringify(integrityLog)); }
-  catch(e) { console.warn('Historique intégrité : écriture localStorage échouée (quota ?)', e); }
-}
 
 // Snapshot pris AVANT chaque correction automatique, pour pouvoir l'annuler ensuite.
 // Ne couvre que les tableaux effectivement modifiés par les fixes de cet outil
@@ -11547,7 +11587,7 @@ function snapshotForUndo(label) {
       wishlist: JSON.parse(JSON.stringify(wishlist)),
     }
   });
-  saveIntegrityLog();
+  integrityLog = integrityLog.slice(-INTEGRITY_LOG_MAX);
 }
 
 function undoIntegrityFix(id) {
@@ -11560,7 +11600,6 @@ function undoIntegrityFix(id) {
   wishlist = entry.snapshot.wishlist;
   // L'historique après ce point n'a plus de sens (il partait d'un état qu'on vient d'écraser)
   integrityLog = integrityLog.slice(0, idx);
-  saveIntegrityLog();
   invalidateCache();
   renderAlbums(); renderTracks(); updateNavBadges(); saveToStorage();
   toast('Correction annulée, état restauré ✓');
@@ -11908,8 +11947,8 @@ function renderGenreCleanup() {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
         <span style="font-size:13px;font-weight:500">${c.variants.length} variantes · ${total} album(s) au total</span>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm btn-accent" onclick="mergeGenreCluster(${ci}, '${escAttr(key)}')">🔧 Fusionner vers le choix ci-dessous</button>
-          <button class="btn btn-sm" onclick="dismissGenreCluster('${escAttr(key)}')" title="Ignorer pour cette session — ce ne sont pas de vrais doublons">✕ Ignorer</button>
+          <button class="btn btn-sm btn-accent" onclick="mergeGenreCluster(${ci}, '${sid(key)}')">🔧 Fusionner vers le choix ci-dessous</button>
+          <button class="btn btn-sm" onclick="dismissGenreCluster('${sid(key)}')" title="Ignorer pour cette session — ce ne sont pas de vrais doublons">✕ Ignorer</button>
         </div>
       </div>
       <div style="display:flex;flex-direction:column">${radios}</div>
@@ -11917,12 +11956,13 @@ function renderGenreCleanup() {
   }).join('');
 }
 
-function dismissGenreCluster(key) {
-  _genreClustersDismissed.add(key);
+function dismissGenreCluster(keySid) {
+  _genreClustersDismissed.add(unsid(keySid));
   renderGenreCleanup();
 }
 
-function mergeGenreCluster(clusterIndex, key) {
+function mergeGenreCluster(clusterIndex, keySid) {
+  const key = unsid(keySid);
   const clusters = computeGenreClusters().filter(c => !_genreClustersDismissed.has(_clusterKey(c.variants)));
   const cluster = clusters.find(c => _clusterKey(c.variants) === key);
   if (!cluster) return;
@@ -12061,8 +12101,8 @@ function renderArtistCleanup() {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
         <span style="font-size:13px;font-weight:500">${c.variants.length} variantes · ${total} album(s) au total</span>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm btn-accent" onclick="mergeArtistCluster(${ci}, '${escAttr(key)}')">🔧 Fusionner vers le choix ci-dessous</button>
-          <button class="btn btn-sm" onclick="dismissArtistCluster('${escAttr(key)}')" title="Ignorer pour cette session — pas de vrais doublons (ex. collaboration distincte)">✕ Ignorer</button>
+          <button class="btn btn-sm btn-accent" onclick="mergeArtistCluster(${ci}, '${sid(key)}')">🔧 Fusionner vers le choix ci-dessous</button>
+          <button class="btn btn-sm" onclick="dismissArtistCluster('${sid(key)}')" title="Ignorer pour cette session — pas de vrais doublons (ex. collaboration distincte)">✕ Ignorer</button>
         </div>
       </div>
       <div style="display:flex;flex-direction:column">${radios}</div>
@@ -12070,12 +12110,13 @@ function renderArtistCleanup() {
   }).join('');
 }
 
-function dismissArtistCluster(key) {
-  _artistClustersDismissed.add(key);
+function dismissArtistCluster(keySid) {
+  _artistClustersDismissed.add(unsid(keySid));
   renderArtistCleanup();
 }
 
-function mergeArtistCluster(clusterIndex, key) {
+function mergeArtistCluster(clusterIndex, keySid) {
+  const key = unsid(keySid);
   const clusters = computeArtistClusters().filter(c => !_artistClustersDismissed.has(_artistClusterKey(c.variants)));
   const cluster = clusters.find(c => _artistClusterKey(c.variants) === key);
   if (!cluster) return;
