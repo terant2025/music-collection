@@ -3881,6 +3881,16 @@ async function scanCoverResolutions() {
         if (settled) return; // évite un double-appel si le timeout et onload/onerror se chevauchent
         settled = true;
         clearTimeout(timer);
+        // 🐛 v2026.07.12-24 (Antoine, "can't access property 'add', _cache.coverDimsChecked is
+        // undefined") : ce scan est long (des centaines d'images, jusqu'à 8s de timeout chacune,
+        // 8 en parallèle) — largement le temps qu'une action ailleurs dans l'app (une sauvegarde,
+        // un import en cours) appelle invalidateCache(), qui réinitialise _cache = {} EN ENTIER.
+        // Les Sets créés au début du scan (ligne ~3866) disparaissent alors sous les pieds des
+        // callbacks encore en vol. Réinitialisation défensive ici (au lieu de supposer qu'ils
+        // survivent tout le scan) : au pire, quelques marquages déjà faits sont perdus au moment
+        // du reset (pas grave, le prochain scan les rattrapera), mais ça ne plante plus.
+        if (!_cache.coverDimsChecked) _cache.coverDimsChecked = new Set();
+        if (!_cache.lowResCovers) _cache.lowResCovers = new Set();
         _cache.coverDimsChecked.add(a.id);
         if (lowres) _cache.lowResCovers.add(a.id);
         resolve();
@@ -3903,7 +3913,7 @@ async function scanCoverResolutions() {
       await loadOne(a);
       done++;
       if (done % 20 === 0 || done === targets.length) {
-        progress.textContent = `Scan en cours… ${done}/${targets.length} pochettes vérifiées (${_cache.lowResCovers.size} basse résolution détectée(s))`;
+        progress.textContent = `Scan en cours… ${done}/${targets.length} pochettes vérifiées (${_cache.lowResCovers?.size || 0} basse résolution détectée(s))`;
         if (coverFilter === 'lowres') renderCoversGallery();
       }
     }
@@ -3911,8 +3921,8 @@ async function scanCoverResolutions() {
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   _cache.lowResScanned = true;
-  progress.textContent = `Scan terminé : ${_cache.lowResCovers.size} pochette(s) basse résolution sur ${targets.length} vérifiée(s).`;
-  toast(`Scan terminé : ${_cache.lowResCovers.size} pochette(s) basse résolution`);
+  progress.textContent = `Scan terminé : ${_cache.lowResCovers?.size || 0} pochette(s) basse résolution sur ${targets.length} vérifiée(s).`;
+  toast(`Scan terminé : ${_cache.lowResCovers?.size || 0} pochette(s) basse résolution`);
   renderCoversGallery();
 }
 

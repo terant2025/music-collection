@@ -3,6 +3,28 @@
 Historique structuré des versions, en complément du badge affiché dans la topbar
 (`v2026.MM.JJ-NN`) et du commentaire `APP_VERSION` en tête de `index.html`.
 
+## v2026.07.12-24 — 🐛 Correctif crash : scan de résolution des pochettes
+
+Signalé par Antoine (dump console) : `Uncaught TypeError: can't access
+property "add", _cache.coverDimsChecked is undefined` pendant le scan
+"basse résolution" de l'onglet Pochettes, qui s'interrompait net.
+
+**Root cause.** Ce scan est long (centaines d'images, jusqu'à 8s de
+timeout chacune, 8 en parallèle) — largement le temps qu'une action
+ailleurs dans l'app déclenche `invalidateCache()`, qui fait `_cache = {}`
+**en entier** plutôt que de nettoyer des clés précises. Dans le log
+fourni, "Auto covers" tournait en même temps et a fini par provoquer ce
+reset. Les `Set` créés au début du scan (`coverDimsChecked`,
+`lowResCovers`) disparaissaient alors sous les callbacks encore en vol,
+faisant planter tout le worker.
+
+**Correctif.** Réinitialisation défensive des deux `Set` juste avant
+chaque usage (au lieu de supposer qu'ils survivent tout le scan), et accès
+optionnels (`?.size || 0`) dans les messages de progression/fin. Au pire,
+quelques marquages déjà faits sont perdus si un reset concurrent survient
+en plein scan (rattrapés automatiquement au scan suivant) — mais ça ne
+plante plus.
+
 ## v2026.07.12-23 — Export/réimport JSON étendu à tout ce qui est persisté
 
 Demandé par Antoine, suite à une question sur la fraîcheur de la
