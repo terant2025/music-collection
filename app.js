@@ -15138,6 +15138,89 @@ function setArtistViewTypeFilter(type) {
   renderArtistView();
 }
 
+// ===================== VUE ARTISTE — "À PROPOS" (last.fm + MusicBrainz + Wikipédia) =====================
+// Demandé par Antoine. 3 sources, toutes directement joignables depuis le navigateur (aucun
+// changement d'Edge Function) : last.fm (déjà appelé en direct ailleurs dans l'app pour
+// album.getinfo, même clé API), MusicBrainz (déjà utilisé partout, juste un 2e lookup par
+// artiste en plus de la recherche existante), Wikipédia (API REST publique, CORS ouvert).
+// Discogs (bio d'artiste) et Genius nécessiteraient un changement d'Edge Function — pas encore
+// fait, cf. discussion. Bandcamp n'a pas d'API publique exploitable — pas de tentative.
+
+// last.fm artist.getinfo — bio, tags, artistes similaires, stats globales (auditeurs/écoutes
+// last.fm toutes plateformes confondues, PAS les stats personnelles d'Antoine — celles-là sont
+// déjà dans stats.totalPlays via computeArtistAggregates).
+async function fetchLastfmArtistInfo(artist) {
+  const url = `${LASTFM_BASE}?method=artist.getinfo&artist=${encodeURIComponent(artist)}&api_key=${_lastfmApiKey}&format=json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('last.fm HTTP ' + res.status);
+  const data = await res.json();
+  if (data.error) throw new Error(data.message || 'last.fm : artiste introuvable');
+  const a = data.artist;
+  if (!a) return null;
+  // La bio last.fm inclut souvent un lien HTML "Read more on Last.fm" en fin de résumé — retiré
+  // avant affichage (esc() échapperait le tag mais laisserait le texte du lien, pas souhaité).
+  const rawBio = (a.bio?.summary || '').replace(/<a href="[^"]*">Read more on Last\.fm<\/a>\.?/i, '').trim();
+  return {
+    bio: rawBio.replace(/<[^>]*>/g, ''), // filet de sécurité, retire toute autre balise résiduelle
+    tags: (a.tags?.tag || []).map(t => t.name).slice(0, 8),
+    similar: (a.similar?.artist || []).map(s => s.name).slice(0, 8),
+    listeners: parseInt(a.stats?.listeners, 10) || 0,
+    playcount: parseInt(a.stats?.playcount, 10) || 0,
+  };
+}
+
+// MusicBrainz : lookup complémentaire par ID (la recherche initiale ne retourne pas les
+// relations/life-span) — période d'activité, pays, type, artistes liés (membres d'un groupe /
+// groupes dont il a fait partie). Respecte la même limite ~1 req/s que le reste de l'app (géré
+// par l'appelant, cf. loadArtistView, pas ici, pour ne pas dupliquer le délai si déjà écoulé).
+async function fetchMbArtistDetails(mbid) {
+  const res = await fetch(`https://musicbrainz.org/ws/2/artist/${mbid}?inc=artist-rels&fmt=json`);
+  if (!res.ok) throw new Error('MusicBrainz HTTP ' + res.status);
+  const data = await res.json();
+  const related = (data.relations || [])
+    .filter(r => r['target-type'] === 'artist' && r.artist?.name)
+    .map(r => ({ type: r.type, name: r.artist.name }))
+    .slice(0, 12);
+  return {
+    lifeSpanBegin: data['life-span']?.begin || '',
+    lifeSpanEnd: data['life-span']?.end || '',
+    ended: !!data['life-span']?.ended,
+    area: data.area?.name || '',
+    type: data.type || '',
+    related,
+  };
+}
+
+// Wikipédia : recherche (biaisée vers un résultat musical) puis résumé de la meilleure page —
+// FR d'abord, repli EN si rien trouvé. Pas de garantie à 100% de tomber sur le bon homonyme
+// (ex. "Air" le groupe vs un article sur l'air), mais le biais de recherche + le filtrage des
+// pages d'homonymie limite la casse ; en dernier recours on affiche quand même le résultat
+// (mieux qu'une case vide) avec le lien vers l'article pour vérification visuelle rapide.
+async function fetchWikipediaSummary(artist) {
+  for (const lang of ['fr', 'en']) {
+    try {
+      const bias = lang === 'fr' ? ' groupe OR musicien OR chanteur OR chanteuse' : ' band OR musician OR singer';
+      const searchUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(artist + bias)}&format=json&origin=*&srlimit=3`;
+      const sRes = await fetch(searchUrl);
+      if (!sRes.ok) continue;
+      const sData = await sRes.json();
+      const hits = sData.query?.search || [];
+      if (!hits.length) continue;
+      const pageTitle = hits[0].title;
+      const sumRes = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(pageTitle)}`);
+      if (!sumRes.ok) continue;
+      const data = await sumRes.json();
+      if (data.type === 'disambiguation' || !data.extract) continue;
+      return {
+        lang, title: data.title, extract: data.extract,
+        thumbnail: data.thumbnail?.source || '',
+        pageUrl: data.content_urls?.desktop?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(data.title)}`,
+      };
+    } catch (e) { /* essai langue suivante */ }
+  }
+  return null;
+}
+
 async function openArtistView(artistSid) {
   const artist = unsid(artistSid);
   nav('artistview');
@@ -15165,6 +15248,16 @@ async function loadArtistView(artist) {
     const best = (sData.artists || [])[0];
     if (!best) { _artistViewData = { notFound: true, query: artist }; return; }
 
+    // last.fm et Wikipédia sont des services indépendants (pas la limite ~1 req/s de
+    // MusicBrainz) — lancés en parallèle du reste plutôt qu'en série, pour ne pas allonger le
+    // temps de chargement déjà contraint par les 2 appels MusicBrainz séquentiels ci-dessous.
+    // allSettled : une source qui échoue (ex. last.fm sans clé configurée, artiste introuvable
+    // sur Wikipédia) n'empêche pas les autres de s'afficher.
+    const aboutPromise = Promise.allSettled([
+      fetchLastfmArtistInfo(artist),
+      fetchWikipediaSummary(artist),
+    ]);
+
     await new Promise(r => setTimeout(r, 1100)); // limite MusicBrainz non-authentifiée ~1 req/s
     // + singles (demandé par Antoine, pour distinguer albums/EP/singles) — limit=100 est le
     // maximum MusicBrainz par requête ; au-delà (rare, gros artistes très prolifiques en
@@ -15173,6 +15266,14 @@ async function loadArtistView(artist) {
     if (!rRes.ok) throw new Error('MusicBrainz indisponible (HTTP ' + rRes.status + ')');
     const rData = await rRes.json();
     const groups = (rData['release-groups'] || []).filter(g => !((g['secondary-types'] || []).some(s => DISCOG_SCAN_EXCLUDED_SECONDARY.includes(s))));
+
+    await new Promise(r => setTimeout(r, 1100)); // 2e appel MB — respecter 1 req/s
+    let mbDetails = null;
+    try { mbDetails = await fetchMbArtistDetails(best.id); } catch (e) { console.warn('fetchMbArtistDetails:', e.message || e); }
+
+    const [lastfmResult, wikiResult] = await aboutPromise;
+    const lastfmInfo = lastfmResult.status === 'fulfilled' ? lastfmResult.value : null;
+    const wiki = wikiResult.status === 'fulfilled' ? wikiResult.value : null;
 
     const variants = artistVariants(artist);
     const inVariants = (name) => [...artistVariants(name)].some(v => variants.has(v));
@@ -15199,7 +15300,7 @@ async function loadArtistView(artist) {
       };
     }).sort((a, b) => (a.year || '9999').localeCompare(b.year || '9999'));
 
-    _artistViewData = { mbArtist: best, rows, stats: computeArtistAggregates(artist), query: artist };
+    _artistViewData = { mbArtist: best, mbDetails, lastfmInfo, wiki, rows, stats: computeArtistAggregates(artist), query: artist };
   } catch (e) {
     console.error('loadArtistView:', e);
     _artistViewData = { error: e.message || String(e), query: artist };
@@ -15229,7 +15330,7 @@ function renderArtistView() {
     return;
   }
 
-  const { mbArtist, rows, stats, query } = _artistViewData;
+  const { mbArtist, mbDetails, lastfmInfo, wiki, rows, stats, query } = _artistViewData;
 
   // Compteurs par type — bornés par construction (jamais > 100%), contrairement à l'ancienne
   // version qui comparait le nombre total d'albums possédés (toutes sources confondues,
@@ -15268,6 +15369,38 @@ function renderArtistView() {
     ${filterBtn('', 'Tout', rows)}
   </div>`;
 
+  // ── "À propos" : last.fm + MusicBrainz + Wikipédia (v2026.07.12-21, demandé par Antoine) ──
+  // Chaque bloc s'affiche indépendamment si sa source a répondu — jamais de blocage global si
+  // une seule échoue (Promise.allSettled côté loadArtistView).
+  const aboutBlocks = [];
+  if (wiki) {
+    aboutBlocks.push(`<div style="display:flex;gap:12px;padding-bottom:12px;${lastfmInfo || mbDetails ? 'border-bottom:1px solid var(--border);margin-bottom:12px' : ''}">
+      ${wiki.thumbnail ? `<img src="${esc(wiki.thumbnail)}" style="width:64px;height:64px;object-fit:cover;border-radius:var(--radius);flex-shrink:0">` : ''}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:var(--text2);line-height:1.5">${esc(wiki.extract)}</div>
+        <a href="${esc(wiki.pageUrl)}" target="_blank" style="font-size:11px;color:var(--accent);text-decoration:none">📖 Lire sur Wikipédia (${wiki.lang.toUpperCase()}) ↗</a>
+      </div>
+    </div>`);
+  }
+  if (lastfmInfo) {
+    const statsLine = (lastfmInfo.listeners || lastfmInfo.playcount)
+      ? `<div style="font-size:11px;color:var(--text3);margin-bottom:8px">${lastfmInfo.listeners.toLocaleString('fr-FR')} auditeurs · ${lastfmInfo.playcount.toLocaleString('fr-FR')} écoutes sur last.fm (toutes plateformes)</div>` : '';
+    const bioLine = lastfmInfo.bio && !wiki ? `<div style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:8px">${esc(lastfmInfo.bio)}</div>` : '';
+    const tagsLine = lastfmInfo.tags.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${lastfmInfo.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('')}</div>` : '';
+    const similarLine = lastfmInfo.similar.length ? `<div style="font-size:11px;color:var(--text3)">Artistes similaires : ${lastfmInfo.similar.map(s => `<span onclick="openArtistView('${sid(s)}')" style="color:var(--accent);cursor:pointer">${esc(s)}</span>`).join(', ')}</div>` : '';
+    aboutBlocks.push(`<div style="${mbDetails ? 'border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:12px' : ''}">${bioLine}${statsLine}${tagsLine}${similarLine}</div>`);
+  }
+  if (mbDetails && (mbDetails.lifeSpanBegin || mbDetails.area || mbDetails.related.length)) {
+    const period = mbDetails.lifeSpanBegin
+      ? `${esc(mbDetails.lifeSpanBegin)} → ${mbDetails.ended ? esc(mbDetails.lifeSpanEnd || '?') : "aujourd'hui"}`
+      : '';
+    const metaParts = [period, mbDetails.area, mbDetails.type].filter(Boolean);
+    const relatedLine = mbDetails.related.length
+      ? `<div style="font-size:11px;color:var(--text3);margin-top:6px">${mbDetails.related.map(r => `${esc(r.name)} <span style="opacity:0.6">(${esc(r.type)})</span>`).join(' · ')}</div>` : '';
+    aboutBlocks.push(`<div>${metaParts.length ? `<div style="font-size:12px;color:var(--text2)">${esc(metaParts.join(' · '))}</div>` : ''}${relatedLine}</div>`);
+  }
+  const about = aboutBlocks.length ? `<div class="card" style="margin-bottom:16px">${aboutBlocks.join('')}</div>` : '';
+
   const filtered = _artistViewTypeFilter ? rows.filter(r => r.type === _artistViewTypeFilter) : rows;
 
   const listHeader = filtered.length ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:0 0 8px">
@@ -15296,7 +15429,7 @@ function renderArtistView() {
     </div>`;
   }).join('') || '<div class="empty" style="padding:24px">Aucun résultat pour ce filtre.</div>';
 
-  el.innerHTML = header + filters + `<div class="card">${listHeader}${list}</div>`;
+  el.innerHTML = header + about + filters + `<div class="card">${listHeader}${list}</div>`;
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
